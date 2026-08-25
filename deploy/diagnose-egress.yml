@@ -1,0 +1,67 @@
+---
+- name: Diagnose Direct node egress without changing it
+  hosts: direct_vpn
+  become: true
+  gather_facts: true
+  serial: 1
+
+  tasks:
+    - name: Check the node IPv4 internet route
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/ip
+          - -4
+          - -json
+          - route
+          - get
+          - 1.1.1.1
+      register: veilway_node_ipv4_route
+      changed_when: false
+      no_log: true
+
+    - name: Require IPv4 internet routing through the cloud interface
+      ansible.builtin.assert:
+        that:
+          - veilway_node_ipv4_route.stdout | from_json | length == 1
+          - (veilway_node_ipv4_route.stdout | from_json)[0].dev == ansible_facts['default_ipv4']['interface']
+        quiet: true
+
+    - name: Query the approved Cloudflare trace endpoint over IPv4
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/curl
+          - --ipv4
+          - --fail
+          - --silent
+          - --show-error
+          - --connect-timeout
+          - "10"
+          - --max-time
+          - "20"
+          - --noproxy
+          - "*"
+          - --proto
+          - =https
+          - --tlsv1.2
+          - --
+          - https://www.cloudflare.com/cdn-cgi/trace
+      register: veilway_node_ipv4_trace
+      changed_when: false
+      no_log: true
+
+    - name: Require the node IPv4 egress to match its protected endpoint
+      ansible.builtin.assert:
+        that:
+          - >-
+            (veilway_node_ipv4_trace.stdout_lines |
+            select('match', '^ip=') | list | length) == 1
+          - >-
+            (veilway_node_ipv4_trace.stdout_lines |
+            select('match', '^ip=') | first | regex_replace('^ip=', '')) ==
+            ansible_host
+        quiet: true
+      no_log: true
+
+    - name: Report the non-sensitive node egress result
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} node IPv4 route and egress: passed"

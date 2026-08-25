@@ -10,6 +10,8 @@ audit-*.zip
 # Logs and temporary files
 *.log
 /logs/
+__pycache__/
+*.py[cod]
 *.tmp
 *.temp
 *.swp
@@ -48,6 +50,26 @@ wg*.conf
 openvpn*.conf
 /client-profiles/
 /vpn-profiles/
+/operator-config/*
+!/operator-config/endpoints.conf.example
+
+# Terraform local state, plans, and credentials
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.*
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+.terraformrc
+terraform.rc
+
+# Local deployment inventory and generated configuration
+/deploy/inventory.yml
+/deploy/host_vars/
+/deploy/generated/
 
 # Safe documentation and configuration templates may be committed
 !*.example
@@ -58,4 +80,3 @@ openvpn*.conf
 .vscode/
 .DS_Store
 Thumbs.db
-

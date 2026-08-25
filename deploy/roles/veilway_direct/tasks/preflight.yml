@@ -1,0 +1,76 @@
+---
+- name: Confirm the target and Direct VPN network contract
+  ansible.builtin.assert:
+    that:
+      - veilway_dedicated_host_ack | default(false) | bool
+      - veilway_mode in ['yc-direct', 'aws-direct']
+      - ansible_facts['distribution'] == 'Ubuntu'
+      - ansible_facts['distribution_release'] == 'noble'
+      - ansible_facts['architecture'] == 'x86_64'
+      - ansible_facts['service_mgr'] == 'systemd'
+      - (veilway_operator_ipv4_cidrs | length) + (veilway_operator_ipv6_cidrs | length) > 0
+      - veilway_operator_ipv4_cidrs | veilway_networks_are_version(4)
+      - veilway_operator_ipv6_cidrs | veilway_networks_are_version(6)
+      - not (veilway_vpn_ipv4_cidr | veilway_network_overlaps(veilway_vpc_ipv4_cidr))
+      - not (veilway_vpn_ipv4_cidr | veilway_network_overlaps(veilway_future_multihop_ipv4_cidr))
+      - not (veilway_vpc_ipv4_cidr | veilway_network_overlaps(veilway_future_multihop_ipv4_cidr))
+      - not (veilway_vpn_ipv4_cidr | veilway_network_overlaps_any(veilway_operator_ipv4_cidrs))
+      - not (veilway_vpc_ipv4_cidr | veilway_network_overlaps_any(veilway_operator_ipv4_cidrs))
+      - not (veilway_future_multihop_ipv4_cidr | veilway_network_overlaps_any(veilway_operator_ipv4_cidrs))
+      - ansible_facts['default_ipv4']['interface'] | length > 0
+      - not veilway_enable_ipv6 or veilway_mode == 'aws-direct'
+      - not veilway_enable_ipv6 or veilway_vpn_ipv6_cidr is defined
+      - not veilway_enable_ipv6 or veilway_vpc_ipv6_cidr is defined
+      - not veilway_enable_ipv6 or not (veilway_vpn_ipv6_cidr | veilway_network_overlaps(veilway_vpc_ipv6_cidr))
+      - not veilway_enable_ipv6 or not (veilway_vpn_ipv6_cidr | veilway_network_overlaps_any(veilway_operator_ipv6_cidrs))
+      - not veilway_enable_ipv6 or not (veilway_vpc_ipv6_cidr | veilway_network_overlaps_any(veilway_operator_ipv6_cidrs))
+    fail_msg: >-
+      Refusing deployment: target must be a new, dedicated Ubuntu 24.04 amd64
+      VM with an explicit acknowledgement and complete Direct VPN variables.
+
+- name: Check the remote TUN device without changing it
+  ansible.builtin.stat:
+    path: /dev/net/tun
+    get_attributes: false
+    get_checksum: false
+    get_mime: false
+  register: veilway_tun_device
+
+- name: Require the remote TUN character device
+  ansible.builtin.assert:
+    that:
+      - veilway_tun_device.stat.exists
+      - veilway_tun_device.stat.ischr | default(false)
+    fail_msg: Refusing deployment because /dev/net/tun is unavailable.
+
+- name: Inspect required local endpoint PKI metadata
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+    get_attributes: false
+    get_checksum: false
+    get_mime: false
+  delegate_to: localhost
+  become: false
+  register: veilway_local_pki_files
+  no_log: true
+  loop:
+    - path: "{{ veilway_pki_root }}/ca/ca.crt"
+      mode: "0644"
+    - path: "{{ veilway_pki_root }}/crl.pem"
+      mode: "0644"
+    - path: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/server.crt"
+      mode: "0644"
+    - path: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/server.key"
+      mode: "0600"
+    - path: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/tls-crypt-v2-server.key"
+      mode: "0600"
+
+- name: Require complete protected local endpoint PKI
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg | default(false)
+      - not (item.stat.islnk | default(false))
+      - item.stat.mode == item.item.mode
+  loop: "{{ veilway_local_pki_files.results }}"
+  no_log: true

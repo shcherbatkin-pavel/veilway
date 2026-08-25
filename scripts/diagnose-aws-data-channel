@@ -1,0 +1,1233 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+umask 077
+
+readonly PROGRAM_NAME="${0##*/}"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
+readonly ENDPOINT_CONFIG="${REPOSITORY_ROOT}/operator-config/endpoints.conf"
+readonly KNOWN_HOSTS_FILE="${REPOSITORY_ROOT}/operator-config/known_hosts.aws-direct"
+readonly STATE_FILE="${REPOSITORY_ROOT}/operator-config/aws-data-channel-diagnostic.json"
+readonly CONNECTION_NAME='ubuntu-aws-direct'
+readonly VPN_CIDR='10.242.20.0/24'
+readonly VPN_GATEWAY='10.242.20.1'
+aws_activated=false
+capture_active=false
+capture_pid=''
+live_remote_sampled=false
+live_outbound_capture_performed=false
+live_outbound_burst=false
+live_server_rx_before=0
+live_server_tx_before=0
+live_server_rx_after=0
+live_server_tx_after=0
+live_ingress_before=0
+live_ingress_after=0
+live_raw_ingress_before=0
+live_raw_ingress_after=0
+live_nested_path_checked=false
+live_nested_path_used=false
+live_outer_route_compared=false
+live_outer_route_stable=false
+one_step_run=false
+
+usage() {
+    cat <<EOF
+Usage: ${PROGRAM_NAME} <run|prepare|probe|finish|reset> [diagnostic-flag]
+
+  run      From a trusted direct IP, complete the diagnosis in one command.
+  prepare  Over a trusted SSH path, save read-only AWS counters locally.
+  probe    With every other VPN disabled, run and disconnect aws-direct.
+  finish   Over a trusted SSH path, compare read-only AWS counters.
+  reset    Delete only the protected local diagnostic state.
+
+The explicit --sudo-tcpdump flag is accepted only with run. It counts a
+bounded burst of outbound OpenVPN P_DATA_V1/P_DATA_V2 packets with the expected
+endpoint and route source without storing packet data.
+The explicit --via-existing-vpn flag is accepted only with run. It requires
+exactly one existing tunnel, verifies that the AWS outer route uses it, leaves
+it active, and disconnects only aws-direct. Both flags may be combined.
+EOF
+}
+
+fail() {
+    printf '%s: %s\n' "${PROGRAM_NAME}" "$*" >&2
+    exit 1
+}
+
+require_command() {
+    command -v -- "$1" >/dev/null 2>&1 \
+        || fail "required command is unavailable: $1"
+}
+
+read_endpoint() {
+    local key value selected=""
+
+    while IFS='=' read -r key value; do
+        [[ "${key}" == 'aws_direct_endpoint' ]] || continue
+        [[ -z "${selected}" ]] || return 1
+        selected="${value}"
+    done < "${ENDPOINT_CONFIG}"
+    [[ -n "${selected}" ]] || return 1
+    printf '%s\n' "${selected}"
+}
+
+validate_ipv4() {
+    python3 -c '
+import ipaddress
+import sys
+
+try:
+    address = ipaddress.ip_address(sys.stdin.read().strip())
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if address.version == 4 else 1)
+'
+}
+
+active_tunnel_count() {
+    /usr/sbin/ip --json --details link show up |
+        python3 -c '
+import json
+import sys
+
+links = json.load(sys.stdin)
+count = 0
+for link in links:
+    name = link.get("ifname", "")
+    kind = link.get("linkinfo", {}).get("info_kind", "")
+    if kind in {"tun", "wireguard"} or name.startswith(("tun", "tap", "wg")):
+        count += 1
+print(count)
+'
+}
+
+active_tunnel_interface() {
+    /usr/sbin/ip --json --details link show up |
+        python3 -c '
+import json
+import sys
+
+links = json.load(sys.stdin)
+matches = []
+for link in links:
+    name = link.get("ifname", "")
+    kind = link.get("linkinfo", {}).get("info_kind", "")
+    if kind in {"tun", "wireguard"} or name.startswith(("tun", "tap", "wg")):
+        matches.append(name)
+if len(matches) != 1 or not matches[0]:
+    raise SystemExit(1)
+print(matches[0])
+'
+}
+
+vpn_interface_for_cidr() {
+    /usr/sbin/ip -4 --json address show up |
+        python3 -c '
+import ipaddress
+import json
+import sys
+
+network = ipaddress.ip_network(sys.argv[1])
+links = json.load(sys.stdin)
+matches = set()
+for link in links:
+    for address in link.get("addr_info", []):
+        if address.get("family") != "inet" or not address.get("local"):
+            continue
+        if ipaddress.ip_address(address["local"]) in network:
+            matches.add(link.get("ifname", ""))
+if len(matches) != 1 or "" in matches:
+    raise SystemExit(1)
+print(matches.pop())
+' "${VPN_CIDR}"
+}
+
+read_local_counters() {
+    local interface_name="$1"
+
+    /usr/bin/cat \
+        "/sys/class/net/${interface_name}/statistics/rx_packets" \
+        "/sys/class/net/${interface_name}/statistics/tx_packets"
+}
+
+client_data_path() {
+    local interface_name="$1"
+    local link_json
+
+    link_json="$(/usr/sbin/ip --json --details link show dev "${interface_name}")" \
+        || return 1
+    python3 -c '
+import json
+import sys
+
+try:
+    links = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+if len(links) != 1:
+    raise SystemExit(1)
+kind = links[0].get("linkinfo", {}).get("info_kind", "")
+if kind in {"ovpn", "ovpn-dco"}:
+    print("dco")
+elif kind == "tun" or sys.argv[1] == "classic":
+    print("classic-tun")
+else:
+    print("unknown")
+' "$(
+        if [[ -r "/sys/class/net/${interface_name}/tun_flags" ]]; then
+            printf '%s\n' 'classic'
+        else
+            printf '%s\n' 'not-classic'
+        fi
+    )" <<< "${link_json}"
+}
+
+route_interface_for_destination() {
+    local destination="$1"
+
+    /usr/sbin/ip -4 --json route get "${destination}" |
+        python3 -c '
+import json
+import sys
+
+try:
+    routes = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+if len(routes) != 1 or not routes[0].get("dev"):
+    raise SystemExit(1)
+print(routes[0]["dev"])
+'
+}
+
+route_source_for_destination() {
+    local destination="$1"
+
+    /usr/sbin/ip -4 --json route get "${destination}" |
+        python3 -c '
+import ipaddress
+import json
+import sys
+
+try:
+    routes = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+if len(routes) != 1 or not routes[0].get("prefsrc"):
+    raise SystemExit(1)
+try:
+    source = ipaddress.ip_address(routes[0]["prefsrc"])
+except ValueError:
+    raise SystemExit(1)
+if source.version != 4:
+    raise SystemExit(1)
+print(source)
+'
+}
+
+route_fingerprint_for_destination() {
+    local destination="$1"
+
+    /usr/sbin/ip -4 --json route get "${destination}" |
+        python3 -c '
+import ipaddress
+import json
+import sys
+
+try:
+    routes = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+if len(routes) != 1:
+    raise SystemExit(1)
+route = routes[0]
+device = route.get("dev", "")
+source_text = route.get("prefsrc", "")
+if not device or not source_text:
+    raise SystemExit(1)
+try:
+    source = ipaddress.ip_address(source_text)
+except ValueError:
+    raise SystemExit(1)
+if source.version != 4:
+    raise SystemExit(1)
+gateway_text = route.get("gateway", "")
+if gateway_text:
+    try:
+        gateway = ipaddress.ip_address(gateway_text)
+    except ValueError:
+        raise SystemExit(1)
+    if gateway.version != 4:
+        raise SystemExit(1)
+table = route.get("table", "main")
+print(json.dumps({
+    "dev": device,
+    "gateway": gateway_text,
+    "prefsrc": source_text,
+    "table": table,
+}, sort_keys=True, separators=(",", ":")))
+'
+}
+
+route_source_belongs_to_interface() {
+    local route_source="$1"
+    local interface_name="$2"
+
+    /usr/sbin/ip -4 --json address show dev "${interface_name}" |
+        python3 -c '
+import ipaddress
+import json
+import sys
+
+source = ipaddress.ip_address(sys.argv[1])
+vpn_network = ipaddress.ip_network(sys.argv[2])
+try:
+    links = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+local_addresses = {
+    ipaddress.ip_address(address["local"])
+    for link in links
+    for address in link.get("addr_info", [])
+    if address.get("family") == "inet" and address.get("local")
+}
+raise SystemExit(0 if source in local_addresses and source not in vpn_network else 1)
+' "${route_source}" "${VPN_CIDR}"
+}
+
+openvpn_socket_source_status() {
+    local endpoint="$1"
+    local expected_source="$2"
+
+    /usr/bin/ss -H -u -n state connected |
+        python3 -c '
+import ipaddress
+import sys
+
+endpoint = ipaddress.ip_address(sys.argv[1])
+expected_source = ipaddress.ip_address(sys.argv[2])
+
+def split_socket(value):
+    host, separator, port = value.rpartition(":")
+    if not separator or not port.isdigit():
+        return None
+    try:
+        return ipaddress.ip_address(host.strip("[]")), int(port)
+    except ValueError:
+        return None
+
+sources = []
+for line in sys.stdin:
+    fields = line.split()
+    if len(fields) < 5:
+        continue
+    local_socket = split_socket(fields[-2])
+    peer_socket = split_socket(fields[-1])
+    if local_socket is None or peer_socket != (endpoint, 1194):
+        continue
+    sources.append(local_socket[0])
+if not sources:
+    print("unavailable")
+elif all(source == expected_source for source in sources):
+    print("passed")
+else:
+    print("mismatch")
+' "${endpoint}" "${expected_source}"
+}
+
+udp_out_datagrams() {
+    python3 -c '
+from pathlib import Path
+
+lines = Path("/proc/net/snmp").read_text(encoding="ascii").splitlines()
+for index in range(len(lines) - 1):
+    if not lines[index].startswith("Udp:") or not lines[index + 1].startswith("Udp:"):
+        continue
+    names = lines[index].split()[1:]
+    values = lines[index + 1].split()[1:]
+    fields = dict(zip(names, values, strict=True))
+    value = fields.get("OutDatagrams", "")
+    if not value.isdigit():
+        raise SystemExit(1)
+    print(value)
+    raise SystemExit(0)
+raise SystemExit(1)
+'
+}
+
+read_server_counters() {
+    local endpoint="$1"
+    local output
+    local attempt
+
+    for attempt in 1 2; do
+        if output="$(
+            /usr/bin/timeout --signal=TERM --kill-after=2s 15s \
+                ssh \
+                -o BatchMode=yes \
+                -o ConnectTimeout=10 \
+                -o ConnectionAttempts=1 \
+                -o StrictHostKeyChecking=yes \
+                -o "UserKnownHostsFile=${KNOWN_HOSTS_FILE}" \
+                -- "ubuntu@${endpoint}" \
+                /usr/bin/cat \
+                /sys/class/net/tun0/statistics/rx_packets \
+                /sys/class/net/tun0/statistics/tx_packets 2>/dev/null
+        )"; then
+            printf '%s\n' "${output}"
+            return
+        fi
+    done
+    return 1
+}
+
+read_server_openvpn_ingress_counters() {
+    local endpoint="$1"
+    local output
+    local attempt
+
+    for attempt in 1 2; do
+        if output="$(
+            /usr/bin/timeout --signal=TERM --kill-after=2s 15s \
+                ssh \
+                -o BatchMode=yes \
+                -o ConnectTimeout=10 \
+                -o ConnectionAttempts=1 \
+                -o StrictHostKeyChecking=yes \
+                -o "UserKnownHostsFile=${KNOWN_HOSTS_FILE}" \
+                -- "ubuntu@${endpoint}" \
+                sudo --non-interactive \
+                /usr/sbin/nft --json list counters inet 2>/dev/null
+        )"; then
+            printf '%s\n' "${output}"
+            return
+        fi
+    done
+    return 1
+}
+
+parse_server_openvpn_ingress_counter() {
+    local counter_name="$1"
+
+    case "${counter_name}" in
+        openvpn_ingress|openvpn_ingress_raw) ;;
+        *) return 1 ;;
+    esac
+    python3 -c '
+import json
+import sys
+
+try:
+    document = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+matches = []
+for item in document.get("nftables", []):
+    counter = item.get("counter")
+    if not isinstance(counter, dict):
+        continue
+    if (
+        counter.get("family") == "inet"
+        and counter.get("table") == "veilway_filter"
+        and counter.get("name") == sys.argv[1]
+        and isinstance(counter.get("packets"), int)
+    ):
+        matches.append(counter["packets"])
+if len(matches) != 1:
+    raise SystemExit(1)
+print(matches[0])
+' "${counter_name}"
+}
+
+parse_counters() {
+    local counters="$1"
+    local -n rx_reference="$2"
+    local -n tx_reference="$3"
+    local -a values=()
+
+    mapfile -t values <<< "${counters}"
+    [[ "${#values[@]}" -eq 2 \
+        && "${values[0]}" =~ ^[0-9]+$ \
+        && "${values[1]}" =~ ^[0-9]+$ ]] || return 1
+    rx_reference="${values[0]}"
+    tx_reference="${values[1]}"
+}
+
+state_is_protected() {
+    [[ -f "${STATE_FILE}" && ! -L "${STATE_FILE}" \
+        && "$(stat -c '%a' -- "${STATE_FILE}")" == '600' ]]
+}
+
+require_state_is_ignored() {
+    git check-ignore --quiet --no-index -- "${STATE_FILE}"
+}
+
+write_state() {
+    local phase="$1"
+    local server_rx_before="$2"
+    local server_tx_before="$3"
+    local ingress_before="$4"
+    local raw_ingress_before="$5"
+    local client_tx_delta="$6"
+    local udp_delta="$7"
+    local client_rx_delta="$8"
+    local ping_succeeded="$9"
+    local outer_route_bypassed="${10}"
+    local data_path="${11}"
+    local temporary_state
+
+    temporary_state="$(mktemp -- "${STATE_FILE}.tmp.XXXXXX")" || return 1
+    if ! python3 -c '
+import json
+from pathlib import Path
+import sys
+
+output = Path(sys.argv[1])
+document = {
+    "phase": sys.argv[2],
+    "server_rx_before": int(sys.argv[3]),
+    "server_tx_before": int(sys.argv[4]),
+    "ingress_before": int(sys.argv[5]),
+    "raw_ingress_before": int(sys.argv[6]),
+    "client_tx_delta": int(sys.argv[7]),
+    "udp_delta": int(sys.argv[8]),
+    "client_rx_delta": int(sys.argv[9]),
+    "ping_succeeded": sys.argv[10] == "true",
+    "outer_route_bypassed": sys.argv[11] == "true",
+    "data_path": sys.argv[12],
+}
+output.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
+' "${temporary_state}" "${phase}" "${server_rx_before}" \
+        "${server_tx_before}" "${ingress_before}" "${raw_ingress_before}" \
+        "${client_tx_delta}" "${udp_delta}" "${client_rx_delta}" \
+        "${ping_succeeded}" "${outer_route_bypassed}" "${data_path}"; then
+        rm -f -- "${temporary_state}"
+        return 1
+    fi
+    chmod 0600 -- "${temporary_state}" || {
+        rm -f -- "${temporary_state}"
+        return 1
+    }
+    mv -f -- "${temporary_state}" "${STATE_FILE}"
+}
+
+read_state() {
+    python3 -c '
+import json
+from pathlib import Path
+import sys
+
+expected = {
+    "phase",
+    "server_rx_before",
+    "server_tx_before",
+    "ingress_before",
+    "raw_ingress_before",
+    "client_tx_delta",
+    "udp_delta",
+    "client_rx_delta",
+    "ping_succeeded",
+    "outer_route_bypassed",
+    "data_path",
+}
+try:
+    document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+if not isinstance(document, dict) or set(document) != expected:
+    raise SystemExit(1)
+if document["phase"] not in {"prepared", "probed"}:
+    raise SystemExit(1)
+for name in (
+    "server_rx_before",
+    "server_tx_before",
+    "ingress_before",
+    "raw_ingress_before",
+    "client_tx_delta",
+    "udp_delta",
+    "client_rx_delta",
+):
+    if not isinstance(document[name], int) or document[name] < 0:
+        raise SystemExit(1)
+for name in ("ping_succeeded", "outer_route_bypassed"):
+    if not isinstance(document[name], bool):
+        raise SystemExit(1)
+if document["data_path"] not in {"pending", "dco", "classic-tun", "unknown"}:
+    raise SystemExit(1)
+print(document["phase"])
+print(document["server_rx_before"])
+print(document["server_tx_before"])
+print(document["ingress_before"])
+print(document["raw_ingress_before"])
+print(document["client_tx_delta"])
+print(document["udp_delta"])
+print(document["client_rx_delta"])
+print(str(document["ping_succeeded"]).lower())
+print(str(document["outer_route_bypassed"]).lower())
+print(document["data_path"])
+' "${STATE_FILE}"
+}
+
+load_state_values() {
+    local -n destination="$1"
+    local state_output
+
+    state_is_protected || fail 'protected local diagnostic state is invalid'
+    state_output="$(read_state)" || fail 'local diagnostic state is invalid'
+    mapfile -t destination <<< "${state_output}"
+    [[ "${#destination[@]}" -eq 11 ]] \
+        || fail 'local diagnostic state is incomplete'
+}
+
+prepare_phase() {
+    local endpoint="$1"
+    local show_next="${2:-true}"
+    local server_before ingress_json ingress_before raw_ingress_before
+    local server_rx_before server_tx_before
+
+    [[ ! -e "${STATE_FILE}" && ! -L "${STATE_FILE}" ]] \
+        || fail 'diagnostic state already exists; finish or reset it first'
+    require_state_is_ignored \
+        || fail 'local diagnostic state is not ignored by Git'
+    if vpn_interface_for_cidr >/dev/null 2>&1; then
+        fail 'AWS Veilway is already active; disconnect it first'
+    fi
+
+    server_before="$(read_server_counters "${endpoint}")" \
+        || fail 'read-only SSH access to AWS tunnel counters failed'
+    parse_counters "${server_before}" server_rx_before server_tx_before \
+        || fail 'AWS tunnel counters are invalid'
+    ingress_json="$(
+        read_server_openvpn_ingress_counters "${endpoint}"
+    )" \
+        || fail 'cannot read the AWS OpenVPN ingress counters'
+    ingress_before="$(
+        printf '%s\n' "${ingress_json}" |
+            parse_server_openvpn_ingress_counter openvpn_ingress
+    )" || fail 'AWS OpenVPN ingress counter is invalid'
+    raw_ingress_before="$(
+        printf '%s\n' "${ingress_json}" |
+            parse_server_openvpn_ingress_counter openvpn_ingress_raw
+    )" || fail 'raw AWS OpenVPN ingress counter is invalid'
+    write_state prepared "${server_rx_before}" "${server_tx_before}" \
+        "${ingress_before}" "${raw_ingress_before}" 0 0 0 false false pending \
+        || fail 'cannot write protected local diagnostic state'
+    printf '%s\n' 'prepare: read-only AWS counter snapshot saved'
+    if [[ "${show_next}" == true ]]; then
+        printf '%s\n' 'next: ensure every other VPN is disabled, then run probe'
+    fi
+}
+
+probe_phase() {
+    local endpoint="$1"
+    local show_next="${2:-true}"
+    local sample_remote="${3:-false}"
+    local capture_outbound="${4:-false}"
+    local expected_existing_tunnels="${5:-0}"
+    local expected_outer_interface="${6:-}"
+    local outer_route_before="${7:-}"
+    local tunnel_count vpn_interface data_path outer_route_interface
+    local outer_route_source outer_route_after socket_source_status
+    local client_before client_after client_rx_before client_tx_before
+    local client_rx_after client_tx_after udp_before udp_after
+    local client_tx_delta udp_delta client_rx_delta
+    local server_probe ingress_json
+    local capture_status
+    local ping_succeeded=false outer_route_bypassed=false
+    local -a state_values=()
+
+    load_state_values state_values
+    [[ "${state_values[0]}" == 'prepared' ]] \
+        || fail 'diagnostic state is not ready for probe'
+    tunnel_count="$(active_tunnel_count)" \
+        || fail 'cannot inspect active tunnel interfaces'
+    [[ "${tunnel_count}" == "${expected_existing_tunnels}" ]] \
+        || fail 'the number of existing tunnel interfaces is unexpected'
+    if [[ "${expected_existing_tunnels}" == '1' ]]; then
+        printf '%s\n' 'existing VPN preserved for nested AWS probe: passed'
+    fi
+    if [[ "${capture_outbound}" == true ]]; then
+        printf '%s\n' 'Privileged read-only operations (protected values redacted):'
+        printf '%s\n' '  sudo --validate'
+        printf '%s\n' \
+            '  sudo --non-interactive -- /usr/bin/timeout --signal=INT --kill-after=2s 8s /usr/bin/tcpdump --immediate-mode -p -n -Q out -i <detected-outer-interface> -c 10 -s 1 -w /dev/null "udp and src host <protected-route-source> and dst host <protected-aws-endpoint> and dst port 1194 and ((udp[8] & 0xf8 = 0x30) or (udp[8] & 0xf8 = 0x48))"'
+        printf '%s\n' \
+            'Packet records are discarded; only the bounded command status is classified.'
+        sudo --validate \
+            || fail 'sudo validation for local packet counting failed'
+    fi
+
+    aws_activated=true
+    /usr/bin/timeout --signal=TERM --kill-after=5s 40s \
+        nmcli --wait 30 connection up id "${CONNECTION_NAME}" \
+        >/dev/null 2>&1 \
+        || fail 'AWS Veilway activation failed'
+    vpn_interface="$(vpn_interface_for_cidr)" \
+        || fail 'cannot identify the AWS Veilway interface'
+    [[ "${vpn_interface}" =~ ^[A-Za-z0-9_.:-]+$ ]] \
+        || fail 'the AWS Veilway interface is ambiguous'
+    data_path="$(client_data_path "${vpn_interface}")" \
+        || fail 'cannot classify the local OpenVPN data path'
+    outer_route_interface="$(route_interface_for_destination "${endpoint}")" \
+        || fail 'cannot inspect the AWS outer endpoint route'
+    outer_route_source="$(route_source_for_destination "${endpoint}")" \
+        || fail 'cannot inspect the AWS outer endpoint source'
+    outer_route_after="$(route_fingerprint_for_destination "${endpoint}")" \
+        || fail 'cannot fingerprint the AWS outer endpoint route'
+    if [[ -n "${outer_route_before}" ]]; then
+        live_outer_route_compared=true
+        if [[ "${outer_route_after}" == "${outer_route_before}" ]]; then
+            live_outer_route_stable=true
+        fi
+    fi
+    if [[ "${outer_route_interface}" != "${vpn_interface}" ]] \
+        && route_source_belongs_to_interface \
+            "${outer_route_source}" "${outer_route_interface}"; then
+        outer_route_bypassed=true
+    fi
+    if [[ -n "${expected_outer_interface}" ]]; then
+        live_nested_path_checked=true
+        if [[ "${outer_route_interface}" == "${expected_outer_interface}" ]]; then
+            live_nested_path_used=true
+        fi
+    fi
+    socket_source_status="$(
+        openvpn_socket_source_status "${endpoint}" "${outer_route_source}"
+    )" || fail 'cannot inspect the connected OpenVPN UDP socket'
+    case "${socket_source_status}" in
+        passed|mismatch|unavailable) ;;
+        *) fail 'the connected OpenVPN UDP socket classification is invalid' ;;
+    esac
+    if [[ "${socket_source_status}" == 'mismatch' ]]; then
+        outer_route_bypassed=false
+    fi
+    client_before="$(read_local_counters "${vpn_interface}")" \
+        || fail 'cannot read local tunnel counters'
+    parse_counters "${client_before}" client_rx_before client_tx_before \
+        || fail 'local tunnel counters are invalid'
+    udp_before="$(udp_out_datagrams)" \
+        || fail 'cannot read the local UDP transmit counter'
+    if [[ "${sample_remote}" == true ]]; then
+        server_probe="$(read_server_counters "${endpoint}")" \
+            || fail 'cannot read live AWS tunnel counters before probe'
+        parse_counters "${server_probe}" \
+            live_server_rx_before live_server_tx_before \
+            || fail 'live AWS tunnel counters before probe are invalid'
+        ingress_json="$(
+            read_server_openvpn_ingress_counters "${endpoint}"
+        )" \
+            || fail 'cannot read the live AWS ingress counters before probe'
+        live_ingress_before="$(
+            printf '%s\n' "${ingress_json}" |
+                parse_server_openvpn_ingress_counter openvpn_ingress
+        )" || fail 'live AWS ingress counter before probe is invalid'
+        live_raw_ingress_before="$(
+            printf '%s\n' "${ingress_json}" |
+                parse_server_openvpn_ingress_counter openvpn_ingress_raw
+        )" || fail 'live raw AWS ingress counter before probe is invalid'
+    fi
+    if [[ "${capture_outbound}" == true ]]; then
+        sudo --non-interactive -- \
+            /usr/bin/timeout --signal=INT --kill-after=2s 8s \
+            /usr/bin/tcpdump --immediate-mode -p -n -Q out \
+            -i "${outer_route_interface}" -c 10 -s 1 -w /dev/null \
+            "udp and src host ${outer_route_source} and dst host ${endpoint} and dst port 1194 and ((udp[8] & 0xf8 = 0x30) or (udp[8] & 0xf8 = 0x48))" \
+            >/dev/null 2>&1 &
+        capture_pid=$!
+        capture_active=true
+        sleep 1
+        if ! kill -0 "${capture_pid}" 2>/dev/null; then
+            capture_status=0
+            if wait "${capture_pid}"; then
+                capture_status=0
+            else
+                capture_status=$?
+            fi
+            capture_active=false
+            capture_pid=''
+            case "${capture_status}" in
+                0)
+                    live_outbound_burst=true
+                    ;;
+                124)
+                    live_outbound_burst=false
+                    ;;
+                *)
+                    fail 'the bounded local packet counter failed to start'
+                    ;;
+            esac
+            live_outbound_capture_performed=true
+        fi
+    fi
+
+    if ping -4 -n -c 20 -i 0.2 -W 1 -w 6 -s 32 -- \
+        "${VPN_GATEWAY}" >/dev/null 2>&1; then
+        ping_succeeded=true
+    fi
+    udp_after="$(udp_out_datagrams)" \
+        || fail 'cannot reread the local UDP transmit counter'
+    client_after="$(read_local_counters "${vpn_interface}")" \
+        || fail 'cannot reread local tunnel counters'
+    parse_counters "${client_after}" client_rx_after client_tx_after \
+        || fail 'updated local tunnel counters are invalid'
+    if [[ "${capture_outbound}" == true \
+        && "${capture_active}" == true ]]; then
+        capture_status=0
+        if wait "${capture_pid}"; then
+            capture_status=0
+        else
+            capture_status=$?
+        fi
+        capture_active=false
+        capture_pid=''
+        case "${capture_status}" in
+            0)
+                live_outbound_burst=true
+                ;;
+            124)
+                live_outbound_burst=false
+                ;;
+            *)
+                fail 'the bounded local packet counter failed'
+                ;;
+        esac
+        live_outbound_capture_performed=true
+    fi
+    if [[ "${sample_remote}" == true ]]; then
+        server_probe="$(read_server_counters "${endpoint}")" \
+            || fail 'cannot read live AWS tunnel counters after probe'
+        parse_counters "${server_probe}" \
+            live_server_rx_after live_server_tx_after \
+            || fail 'live AWS tunnel counters after probe are invalid'
+        ingress_json="$(
+            read_server_openvpn_ingress_counters "${endpoint}"
+        )" \
+            || fail 'cannot read the live AWS ingress counters after probe'
+        live_ingress_after="$(
+            printf '%s\n' "${ingress_json}" |
+                parse_server_openvpn_ingress_counter openvpn_ingress
+        )" || fail 'live AWS ingress counter after probe is invalid'
+        live_raw_ingress_after="$(
+            printf '%s\n' "${ingress_json}" |
+                parse_server_openvpn_ingress_counter openvpn_ingress_raw
+        )" || fail 'live raw AWS ingress counter after probe is invalid'
+        live_remote_sampled=true
+    fi
+    ((client_tx_after >= client_tx_before \
+        && client_rx_after >= client_rx_before \
+        && udp_after >= udp_before)) \
+        || fail 'a local packet counter was reset during probe'
+    client_tx_delta=$((client_tx_after - client_tx_before))
+    client_rx_delta=$((client_rx_after - client_rx_before))
+    udp_delta=$((udp_after - udp_before))
+
+    /usr/bin/timeout --signal=TERM --kill-after=5s 20s \
+        nmcli --wait 15 connection down id "${CONNECTION_NAME}" \
+        >/dev/null 2>&1 \
+        || fail 'automatic AWS Veilway disconnect failed'
+    aws_activated=false
+    write_state probed "${state_values[1]}" "${state_values[2]}" \
+        "${state_values[3]}" "${state_values[4]}" "${client_tx_delta}" \
+        "${udp_delta}" "${client_rx_delta}" "${ping_succeeded}" \
+        "${outer_route_bypassed}" "${data_path}" \
+        || fail 'cannot update protected local diagnostic state'
+
+    case "${data_path}" in
+        dco) printf '%s\n' 'client OpenVPN data path: DCO' ;;
+        classic-tun) printf '%s\n' 'client OpenVPN data path: classic TUN' ;;
+        *) printf '%s\n' 'client OpenVPN data path: unknown' ;;
+    esac
+    if [[ "${outer_route_bypassed}" == true ]]; then
+        printf '%s\n' 'AWS outer endpoint route and source: passed'
+    else
+        printf '%s\n' 'AWS outer endpoint route or source: FAILED'
+    fi
+    if [[ -n "${expected_outer_interface}" ]]; then
+        if [[ "${live_nested_path_used}" == true ]]; then
+            printf '%s\n' \
+                'AWS outer transport uses the existing VPN tunnel: passed'
+        else
+            printf '%s\n' \
+                'AWS outer transport uses the existing VPN tunnel: FAILED'
+        fi
+    fi
+    if [[ "${live_outer_route_compared}" == true ]]; then
+        if [[ "${live_outer_route_stable}" == true ]]; then
+            printf '%s\n' \
+                'AWS outer route selection remained stable after activation: passed'
+        else
+            printf '%s\n' \
+                'AWS outer route selection changed after activation: FAILED'
+        fi
+    fi
+    case "${socket_source_status}" in
+        passed)
+            printf '%s\n' 'OpenVPN UDP socket uses the outer route source: passed'
+            ;;
+        mismatch)
+            printf '%s\n' 'OpenVPN UDP socket uses the outer route source: FAILED'
+            ;;
+        unavailable)
+            printf '%s\n' \
+                'OpenVPN UDP socket source classification: unavailable'
+            ;;
+    esac
+    if ((client_tx_delta >= 10)); then
+        printf '%s\n' 'client sent packets into TUN: passed'
+    else
+        printf '%s\n' 'client sent packets into TUN: FAILED'
+    fi
+    if ((udp_delta >= 10)); then
+        printf '%s\n' 'client emitted UDP datagrams after tunnel traffic: passed'
+    else
+        printf '%s\n' 'client emitted UDP datagrams after tunnel traffic: FAILED'
+    fi
+    if ((client_rx_delta > 0)); then
+        printf '%s\n' 'client TUN received reply packets: passed'
+    else
+        printf '%s\n' 'client TUN received reply packets: FAILED'
+    fi
+    if [[ "${ping_succeeded}" == true ]]; then
+        printf '%s\n' 'AWS tunnel gateway ping: passed'
+    else
+        printf '%s\n' 'AWS tunnel gateway ping: FAILED'
+    fi
+    printf '%s\n' 'automatic AWS cleanup: passed'
+    printf '%s\n' 'probe: local results saved'
+    if [[ "${show_next}" == true ]]; then
+        printf '%s\n' 'next: restore a trusted SSH path, then run finish'
+    fi
+}
+
+finish_phase() {
+    local endpoint="$1"
+    local server_after ingress_json ingress_after
+    local server_rx_after server_tx_after
+    local server_rx_before server_tx_before ingress_before
+    local raw_ingress_before raw_ingress_after
+    local diagnostic_failed=false
+    local -a state_values=()
+
+    load_state_values state_values
+    [[ "${state_values[0]}" == 'probed' ]] \
+        || fail 'diagnostic state is not ready for finish'
+    if vpn_interface_for_cidr >/dev/null 2>&1; then
+        fail 'AWS Veilway is still active; disconnect it before finish'
+    fi
+    if [[ "${live_remote_sampled}" == true ]]; then
+        server_rx_before="${live_server_rx_before}"
+        server_tx_before="${live_server_tx_before}"
+        ingress_before="${live_ingress_before}"
+        raw_ingress_before="${live_raw_ingress_before}"
+        server_rx_after="${live_server_rx_after}"
+        server_tx_after="${live_server_tx_after}"
+        ingress_after="${live_ingress_after}"
+        raw_ingress_after="${live_raw_ingress_after}"
+    else
+        server_rx_before="${state_values[1]}"
+        server_tx_before="${state_values[2]}"
+        ingress_before="${state_values[3]}"
+        raw_ingress_before="${state_values[4]}"
+        server_after="$(read_server_counters "${endpoint}")" \
+            || fail 'read-only SSH access failed; restore a trusted SSH path'
+        parse_counters "${server_after}" server_rx_after server_tx_after \
+            || fail 'updated AWS tunnel counters are invalid'
+        ingress_json="$(
+            read_server_openvpn_ingress_counters "${endpoint}"
+        )" \
+            || fail 'cannot reread the AWS OpenVPN ingress counters'
+        ingress_after="$(
+            printf '%s\n' "${ingress_json}" |
+                parse_server_openvpn_ingress_counter openvpn_ingress
+        )" || fail 'updated AWS OpenVPN ingress counter is invalid'
+        raw_ingress_after="$(
+            printf '%s\n' "${ingress_json}" |
+                parse_server_openvpn_ingress_counter openvpn_ingress_raw
+        )" || fail 'updated raw AWS OpenVPN ingress counter is invalid'
+    fi
+    ((server_rx_after >= server_rx_before \
+        && server_tx_after >= server_tx_before \
+        && ingress_after >= ingress_before \
+        && raw_ingress_after >= raw_ingress_before)) \
+        || fail 'a server counter was reset; run reset and repeat diagnosis'
+
+    if [[ "${state_values[9]}" == true ]]; then
+        printf '%s\n' 'AWS outer endpoint route and source: passed'
+    else
+        printf '%s\n' 'AWS outer endpoint route or source: FAILED'
+        diagnostic_failed=true
+    fi
+    if [[ "${live_nested_path_checked}" == true ]]; then
+        if [[ "${live_nested_path_used}" == true ]]; then
+            printf '%s\n' \
+                'AWS outer transport used the existing VPN tunnel: passed'
+        else
+            printf '%s\n' \
+                'AWS outer transport used the existing VPN tunnel: FAILED'
+            diagnostic_failed=true
+        fi
+    fi
+    if [[ "${live_outer_route_compared}" == true ]]; then
+        if [[ "${live_outer_route_stable}" == true ]]; then
+            printf '%s\n' \
+                'AWS outer route selection remained stable after activation: passed'
+        else
+            printf '%s\n' \
+                'AWS outer route selection changed after activation: FAILED'
+            diagnostic_failed=true
+        fi
+    fi
+    if ((state_values[5] >= 10)); then
+        printf '%s\n' 'client sent packets into TUN: passed'
+    else
+        printf '%s\n' 'client sent packets into TUN: FAILED'
+        diagnostic_failed=true
+    fi
+    if ((state_values[6] >= 10)); then
+        printf '%s\n' 'client emitted UDP datagrams after tunnel traffic: passed'
+    else
+        printf '%s\n' 'client emitted UDP datagrams after tunnel traffic: FAILED'
+        diagnostic_failed=true
+    fi
+    if [[ "${live_outbound_capture_performed}" == true ]]; then
+        if [[ "${live_outbound_burst}" == true ]]; then
+            printf '%s\n' \
+                'client emitted an OpenVPN data-channel burst with the expected source: passed'
+        else
+            printf '%s\n' \
+                'client emitted an OpenVPN data-channel burst with the expected source: FAILED'
+            diagnostic_failed=true
+        fi
+    fi
+    if [[ "${live_remote_sampled}" == true ]]; then
+        if ((live_raw_ingress_before > state_values[4])); then
+            printf '%s\n' \
+                'AWS pre-conntrack counter counted activation UDP: passed'
+        else
+            printf '%s\n' \
+                'AWS pre-conntrack counter counted activation UDP: FAILED'
+            diagnostic_failed=true
+        fi
+        if ((live_ingress_before > state_values[3])); then
+            printf '%s\n' \
+                'AWS firewall counted OpenVPN activation UDP: passed'
+        else
+            printf '%s\n' \
+                'AWS firewall counted OpenVPN activation UDP: FAILED'
+            diagnostic_failed=true
+        fi
+    fi
+    if ((raw_ingress_after - raw_ingress_before >= 10)); then
+        printf '%s\n' \
+            'AWS pre-conntrack counter received the OpenVPN UDP burst: passed'
+    elif ((raw_ingress_after > raw_ingress_before)); then
+        printf '%s\n' \
+            'AWS pre-conntrack counter received only sparse OpenVPN UDP: FAILED'
+        diagnostic_failed=true
+    else
+        printf '%s\n' \
+            'AWS pre-conntrack counter received no OpenVPN UDP: FAILED'
+        diagnostic_failed=true
+    fi
+    if ((ingress_after - ingress_before >= 10)); then
+        printf '%s\n' 'AWS firewall received the OpenVPN UDP burst: passed'
+    elif ((ingress_after > ingress_before)); then
+        printf '%s\n' 'AWS firewall received only sparse OpenVPN UDP: FAILED'
+        diagnostic_failed=true
+    else
+        printf '%s\n' 'AWS firewall received no OpenVPN UDP during probe: FAILED'
+        diagnostic_failed=true
+    fi
+    if ((server_rx_after > server_rx_before)); then
+        printf '%s\n' 'AWS TUN received client packets: passed'
+    else
+        printf '%s\n' 'AWS TUN received client packets: FAILED'
+        diagnostic_failed=true
+    fi
+    if ((server_tx_after > server_tx_before)); then
+        printf '%s\n' 'AWS TUN sent reply packets: passed'
+    else
+        printf '%s\n' 'AWS TUN sent reply packets: FAILED'
+        diagnostic_failed=true
+    fi
+    if ((state_values[7] > 0)); then
+        printf '%s\n' 'client TUN received reply packets: passed'
+    else
+        printf '%s\n' 'client TUN received reply packets: FAILED'
+        diagnostic_failed=true
+    fi
+    if [[ "${state_values[8]}" == true ]]; then
+        printf '%s\n' 'AWS tunnel gateway ping: passed'
+    else
+        printf '%s\n' 'AWS tunnel gateway ping: FAILED'
+        diagnostic_failed=true
+    fi
+
+    rm -- "${STATE_FILE}"
+    printf '%s\n' 'protected local diagnostic state cleanup: passed'
+    [[ "${diagnostic_failed}" == false ]] \
+        || fail 'data-channel counter diagnosis found a failed direction'
+    printf '%s\n' "${PROGRAM_NAME}: all data-channel checks passed"
+}
+
+reset_phase() {
+    if [[ ! -e "${STATE_FILE}" && ! -L "${STATE_FILE}" ]]; then
+        printf '%s\n' 'reset: no local diagnostic state exists'
+        return
+    fi
+    state_is_protected || fail 'refusing to remove invalid diagnostic state'
+    require_state_is_ignored \
+        || fail 'refusing to remove diagnostic state outside the ignore policy'
+    rm -- "${STATE_FILE}"
+    printf '%s\n' 'reset: protected local diagnostic state removed'
+}
+
+run_phase() {
+    local endpoint="$1"
+    local capture_outbound="${2:-false}"
+    local via_existing_vpn="${3:-false}"
+    local tunnel_count existing_tunnel_interface=''
+    local expected_existing_tunnels=0
+    local outer_route_before
+
+    one_step_run=true
+    tunnel_count="$(active_tunnel_count)" \
+        || fail 'cannot inspect active tunnel interfaces'
+    if [[ "${via_existing_vpn}" == true ]]; then
+        [[ "${tunnel_count}" == '1' ]] \
+            || fail 'nested diagnosis requires exactly one existing tunnel'
+        existing_tunnel_interface="$(active_tunnel_interface)" \
+            || fail 'cannot identify the existing tunnel interface'
+        [[ "${existing_tunnel_interface}" =~ ^[A-Za-z0-9_.:-]+$ ]] \
+            || fail 'the existing tunnel interface is ambiguous'
+        expected_existing_tunnels=1
+        printf '%s\n' 'nested diagnosis precondition: one existing tunnel'
+    else
+        [[ "${tunnel_count}" == '0' ]] \
+            || fail 'disable every VPN before the one-step diagnosis'
+    fi
+    outer_route_before="$(route_fingerprint_for_destination "${endpoint}")" \
+        || fail 'cannot fingerprint the initial AWS endpoint route'
+    prepare_phase "${endpoint}" false
+    probe_phase "${endpoint}" false false "${capture_outbound}" \
+        "${expected_existing_tunnels}" "${existing_tunnel_interface}" \
+        "${outer_route_before}"
+    finish_phase "${endpoint}"
+    one_step_run=false
+}
+
+cleanup() {
+    local original_status=$?
+
+    if [[ "${capture_active}" == true ]]; then
+        kill -TERM "${capture_pid}" 2>/dev/null || true
+        wait "${capture_pid}" 2>/dev/null || true
+        capture_active=false
+        capture_pid=''
+        printf '%s\n' 'automatic local packet-counter cleanup: passed'
+    fi
+    if [[ "${aws_activated}" == true ]]; then
+        if /usr/bin/timeout --signal=TERM --kill-after=5s 20s \
+            nmcli --wait 15 connection down id "${CONNECTION_NAME}" \
+            >/dev/null 2>&1; then
+            aws_activated=false
+            printf '%s\n' 'automatic AWS cleanup: passed'
+        else
+            printf '%s\n' \
+                'cleanup: FAILED; disconnect ubuntu-aws-direct manually' >&2
+            return 1
+        fi
+    fi
+    if [[ "${one_step_run}" == true \
+        && ( -e "${STATE_FILE}" || -L "${STATE_FILE}" ) ]]; then
+        if state_is_protected && require_state_is_ignored; then
+            rm -- "${STATE_FILE}"
+            printf '%s\n' \
+                'automatic protected diagnostic state cleanup: passed'
+        else
+            printf '%s\n' \
+                'cleanup: protected diagnostic state requires manual review' >&2
+            return 1
+        fi
+    fi
+    return "${original_status}"
+}
+
+main() {
+    local phase endpoint capture_outbound=false via_existing_vpn=false
+    local diagnostic_flag
+
+    [[ $# -ge 1 && $# -le 3 ]] || {
+        usage >&2
+        fail 'one phase and at most two explicit flags are required'
+    }
+    phase="$1"
+    shift
+    if [[ $# -gt 0 ]]; then
+        [[ "${phase}" == 'run' ]] \
+            || fail 'diagnostic flags are accepted only with run'
+        for diagnostic_flag in "$@"; do
+            case "${diagnostic_flag}" in
+                --sudo-tcpdump)
+                    [[ "${capture_outbound}" == false ]] \
+                        || fail 'duplicate --sudo-tcpdump flag'
+                    capture_outbound=true
+                    ;;
+                --via-existing-vpn)
+                    [[ "${via_existing_vpn}" == false ]] \
+                        || fail 'duplicate --via-existing-vpn flag'
+                    via_existing_vpn=true
+                    ;;
+                *) fail 'unknown diagnostic flag' ;;
+            esac
+        done
+    fi
+    case "${phase}" in
+        run|prepare|probe|finish|reset) ;;
+        -h|--help)
+            usage
+            return
+            ;;
+        *)
+            usage >&2
+            fail 'unknown diagnostic phase'
+            ;;
+    esac
+    for command_name in cat chmod git ip kill mktemp mv nmcli ping python3 rm ss ssh stat timeout; do
+        require_command "${command_name}"
+    done
+    if [[ "${capture_outbound}" == true ]]; then
+        for command_name in sleep sudo tcpdump; do
+            require_command "${command_name}"
+        done
+    fi
+    if [[ "${phase}" == 'reset' ]]; then
+        reset_phase
+        return
+    fi
+    [[ -f "${ENDPOINT_CONFIG}" && ! -L "${ENDPOINT_CONFIG}" \
+        && "$(stat -c '%a' -- "${ENDPOINT_CONFIG}")" == '600' ]] \
+        || fail 'protected endpoint configuration is invalid'
+    [[ -f "${KNOWN_HOSTS_FILE}" && ! -L "${KNOWN_HOSTS_FILE}" \
+        && "$(stat -c '%a' -- "${KNOWN_HOSTS_FILE}")" == '600' ]] \
+        || fail 'verified AWS known_hosts file is invalid'
+    endpoint="$(read_endpoint)" || fail 'AWS endpoint configuration is invalid'
+    printf '%s\n' "${endpoint}" | validate_ipv4 \
+        || fail 'AWS endpoint is not IPv4'
+
+    case "${phase}" in
+        run)
+            run_phase "${endpoint}" "${capture_outbound}" \
+                "${via_existing_vpn}"
+            ;;
+        prepare) prepare_phase "${endpoint}" ;;
+        probe) probe_phase "${endpoint}" ;;
+        finish) finish_phase "${endpoint}" ;;
+    esac
+}
+
+trap cleanup EXIT
+main "$@"

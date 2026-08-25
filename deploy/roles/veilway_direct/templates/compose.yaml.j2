@@ -1,0 +1,97 @@
+name: veilway
+
+services:
+  openvpn:
+    image: {{ veilway_image_name }}
+    build:
+      context: ./image
+      network: host
+    container_name: veilway-openvpn
+    command:
+      - /usr/sbin/openvpn
+      - --config
+      - /etc/openvpn/server.conf
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - KILL
+      - NET_ADMIN
+      - SETGID
+      - SETUID
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          ip -4 address show dev {{ veilway_tunnel_interface }} 2>/dev/null |
+          grep -Fq -- ' {{ veilway_vpn_ipv4_cidr | veilway_network_first_host }}/'
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    tmpfs:
+      - /run/openvpn:mode=0750,uid=900,gid=900
+      - /tmp:mode=1777
+    volumes:
+      - {{ veilway_config_root }}/openvpn/server.conf:/etc/openvpn/server.conf:ro
+      - {{ veilway_config_root }}/pki:/etc/veilway/pki:ro
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  unbound:
+    image: {{ veilway_image_name }}
+    build:
+      context: ./image
+      network: host
+    container_name: veilway-unbound
+    command:
+      - /usr/local/bin/wait-for-interface
+      - {{ veilway_tunnel_interface }}
+      - {{ veilway_vpn_ipv4_cidr | veilway_network_first_host }}
+      - /usr/sbin/unbound
+      - -d
+      - -c
+      - /etc/unbound/unbound.conf
+    network_mode: host
+    depends_on:
+      openvpn:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          ss -H -lntu 2>/dev/null |
+          grep -Fq -- '{{ veilway_vpn_ipv4_cidr | veilway_network_first_host }}:53'
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    tmpfs:
+      - /run/unbound
+      - /tmp:mode=1777
+    volumes:
+      - {{ veilway_config_root }}/unbound/unbound.conf:/etc/unbound/unbound.conf:ro
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"

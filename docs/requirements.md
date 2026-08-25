@@ -3,8 +3,8 @@
 ## Purpose
 
 Veilway will provide self-hosted, internet-only VPN connectivity through two
-Ubuntu virtual machines: one in Yandex Cloud and one in AWS. The prototype is
-for a single operator and is not a multi-tenant service.
+new, dedicated Ubuntu 24.04 LTS virtual machines: one in Yandex Cloud and one in
+AWS. The prototype is for a single operator and is not a multi-tenant service.
 
 ## Users and clients
 
@@ -21,14 +21,49 @@ for a single operator and is not a multi-tenant service.
 All modes provide internet access only. They must not grant access to private
 AWS or Yandex Cloud networks.
 
+The Direct VPN MVP implements `yc-direct` and `aws-direct`. It reserves but does
+not open or implement the multi-hop ports. `yc-direct` is IPv4-only and must
+block IPv6 rather than let it bypass the tunnel. `aws-direct` provides IPv4 and
+IPv6 egress.
+
 ## Management and coexistence
 
 - The future web panel will bind to a non-public interface and be accessed
   through an operator-created SSH tunnel.
-- The existing OpenVPN Access Server must not be modified, stopped, restarted,
-  removed, or disrupted while Veilway is being designed and developed.
-- New networking behavior must be designed to avoid route, port, address-pool,
-  DNS, and firewall conflicts with the existing service.
+- Veilway deployment targets only newly created, dedicated VMs. Inventory and
+  Terraform state must not reference the old VMs.
+- The existing OpenVPN Access Server is outside the target architecture and
+  must not be modified, stopped, restarted, removed, or disrupted.
+
+## Deployment requirements
+
+- Terraform creates isolated networks, security groups, static public IPv4
+  addresses, and dedicated Ubuntu VMs in independently managed AWS and Yandex
+  stacks.
+- Ansible installs Docker and Docker Compose, manages host sysctl and nftables,
+  and deploys the application after an explicit operator invocation.
+- OpenVPN 2.6 and Unbound run in Compose-managed containers using host
+  networking. OpenVPN is not installed as a host package or systemd service.
+- The OpenVPN container receives `/dev/net/tun`, `NET_ADMIN`, the temporary
+  `SETUID`/`SETGID` capabilities required to drop to its fixed unprivileged
+  account, and `KILL` so PID 1 can forward stop signals after that UID change.
+  It drops all other capabilities and uses a read-only root filesystem.
+- The host nftables ruleset is the single owner of forwarding and NAT. Docker
+  bridge networking and Docker-managed port publishing are not used.
+- SSH ingress is limited to operator-provided CIDRs. UDP port 1194 is the only
+  public VPN port in the Direct MVP.
+
+## VPN and PKI requirements
+
+- Each device and mode uses a unique client certificate and `tls-crypt-v2` key.
+- TLS 1.3, AEAD data ciphers, certificate revocation, and disabled compression
+  are mandatory. Password-only authentication is not supported.
+- The root CA private key and generated client profiles remain on the trusted
+  operator workstation. The root CA private key must never be copied to a VM.
+- Servers receive only their own key and certificate, the public CA,
+  certificate revocation list, and endpoint-specific `tls-crypt-v2` server key.
+- DNS is served locally by Unbound, is reachable only from the VPN tunnel, and
+  must not log individual queries.
 
 ## Security requirements
 
@@ -45,16 +80,16 @@ AWS or Yandex Cloud networks.
 
 ## First-iteration deliverables
 
-- Contributor safety rules and public prototype documentation.
-- A development roadmap.
-- A manually invoked, read-only Ubuntu VM audit script.
-- Instructions for collecting, reviewing, and handling audit results safely.
+- Reviewed architecture decision record and sanitized audit conclusions.
+- Independent Terraform stacks for AWS and Yandex Cloud.
+- Explicit Ansible deployment for the two new VMs.
+- Compose-managed OpenVPN and Unbound services for both direct modes.
+- Local client-profile creation and revocation tooling.
+- Static validation and operator acceptance-test instructions.
 
 ## First-iteration non-goals
 
-- Deploying, configuring, migrating, or removing OpenVPN or WireGuard.
-- Adding Ansible, Terraform, or other infrastructure automation.
 - Implementing the web panel or its API.
-- Implementing direct or multi-hop packet forwarding.
-- Generating client profiles or changing client devices.
-- Changing VM services, routes, firewall rules, packages, or cloud resources.
+- Implementing multi-hop packet forwarding.
+- Migrating or modifying the old VMs or existing OpenVPN Access Server.
+- Automatically applying Terraform or connecting to any VM.

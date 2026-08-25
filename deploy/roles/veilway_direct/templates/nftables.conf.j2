@@ -1,0 +1,118 @@
+#!/usr/sbin/nft -f
+
+# Managed by Veilway. Docker firewall management is disabled on this dedicated
+# host, so this is the sole forwarding and NAT ruleset.
+flush ruleset
+
+define wan_if = "{{ ansible_facts['default_ipv4']['interface'] }}"
+define vpn_if = "{{ veilway_tunnel_interface }}"
+define vpn_v4 = {{ veilway_vpn_ipv4_cidr }}
+
+table inet veilway_filter {
+    # This counter observes UDP/1194 before conntrack validity is enforced. It
+    # has no verdict and therefore does not change the firewall policy.
+    counter openvpn_ingress_raw {
+        comment "Veilway OpenVPN UDP before conntrack validation";
+    }
+
+    # This local-only named counter records packet and byte totals, never
+    # addresses or payloads. It counts UDP/1194 accepted after validation.
+    counter openvpn_ingress {
+        comment "Veilway accepted OpenVPN UDP ingress";
+    }
+
+    set blocked_v4 {
+        type ipv4_addr
+        flags interval
+        elements = {
+            0.0.0.0/8,
+            10.0.0.0/8,
+            100.64.0.0/10,
+            127.0.0.0/8,
+            169.254.0.0/16,
+            172.16.0.0/12,
+            192.0.0.0/24,
+            192.0.2.0/24,
+            192.168.0.0/16,
+            198.18.0.0/15,
+            198.51.100.0/24,
+            203.0.113.0/24,
+            224.0.0.0/4,
+            240.0.0.0/4
+        }
+    }
+
+{% if veilway_enable_ipv6 %}
+    set blocked_v6 {
+        type ipv6_addr
+        flags interval
+        elements = {
+            ::/128,
+            ::1/128,
+            ::ffff:0:0/96,
+            64:ff9b::/96,
+            100::/64,
+            2001:db8::/32,
+            fc00::/7,
+            fe80::/10,
+            ff00::/8
+        }
+    }
+{% endif %}
+
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        iifname "lo" accept
+        iifname $wan_if udp dport {{ veilway_openvpn_port }} counter name openvpn_ingress_raw
+        ct state invalid drop
+        iifname $wan_if udp dport {{ veilway_openvpn_port }} counter name openvpn_ingress accept
+        ct state established,related accept
+        ip protocol icmp accept
+        meta l4proto ipv6-icmp accept
+        udp sport 67 udp dport 68 accept
+{% for cidr in veilway_operator_ipv4_cidrs %}
+        ip saddr {{ cidr }} tcp dport 22 accept
+{% endfor %}
+{% for cidr in veilway_operator_ipv6_cidrs %}
+        ip6 saddr {{ cidr }} tcp dport 22 accept
+{% endfor %}
+        iifname $vpn_if ip saddr $vpn_v4 udp dport 53 accept
+        iifname $vpn_if ip saddr $vpn_v4 tcp dport 53 accept
+{% if veilway_enable_ipv6 %}
+        iifname $vpn_if ip6 saddr {{ veilway_vpn_ipv6_cidr }} udp dport 53 accept
+        iifname $vpn_if ip6 saddr {{ veilway_vpn_ipv6_cidr }} tcp dport 53 accept
+{% endif %}
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+
+        ct state invalid drop
+        ct state established,related accept
+        iifname $vpn_if ip daddr {{ veilway_vpc_ipv4_cidr }} drop
+        iifname $vpn_if ip daddr @blocked_v4 drop
+        iifname $vpn_if oifname $wan_if ip saddr $vpn_v4 accept
+{% if veilway_enable_ipv6 %}
+        iifname $vpn_if ip6 daddr {{ veilway_vpc_ipv6_cidr }} drop
+        iifname $vpn_if ip6 daddr @blocked_v6 drop
+        iifname $vpn_if oifname $wan_if ip6 saddr {{ veilway_vpn_ipv6_cidr }} accept
+{% endif %}
+    }
+}
+
+table ip veilway_nat4 {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname $wan_if ip saddr $vpn_v4 masquerade
+    }
+}
+
+{% if veilway_enable_ipv6 %}
+table ip6 veilway_nat6 {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname $wan_if ip6 saddr {{ veilway_vpn_ipv6_cidr }} masquerade
+    }
+}
+{% endif %}

@@ -1,0 +1,206 @@
+---
+- name: Run the read-only deployment preflight
+  ansible.builtin.import_tasks: preflight.yml
+
+- name: Finish the role after preflight in Ansible check mode
+  ansible.builtin.meta: end_role
+  when: ansible_check_mode
+
+- name: Install the explicitly required host packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - docker.io
+      - docker-compose-v2
+      - nftables
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the fixed host group matching the OpenVPN container
+  ansible.builtin.group:
+    name: veilway
+    gid: "{{ veilway_openvpn_server_gid }}"
+    system: true
+    state: present
+
+- name: Create application and configuration directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ veilway_install_root }}"
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_install_root }}/image"
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_config_root }}"
+      group: veilway
+      mode: "0750"
+    - path: "{{ veilway_config_root }}/openvpn"
+      group: veilway
+      mode: "0750"
+    - path: "{{ veilway_config_root }}/pki"
+      group: veilway
+      mode: "0750"
+    - path: "{{ veilway_config_root }}/unbound"
+      group: root
+      mode: "0755"
+
+- name: Disable Docker firewall management on the dedicated host
+  ansible.builtin.template:
+    src: docker-daemon.json.j2
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Docker
+
+- name: Install explicit Veilway sysctl settings
+  ansible.builtin.template:
+    src: 90-veilway.conf.j2
+    dest: /etc/sysctl.d/90-veilway.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Apply Veilway sysctl
+
+- name: Copy public PKI material
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ veilway_config_root }}/pki/{{ item.dest }}"
+    owner: root
+    group: veilway
+    mode: "0644"
+  no_log: true
+  register: veilway_public_pki_copy
+  loop:
+    - src: "{{ veilway_pki_root }}/ca/ca.crt"
+      dest: ca.crt
+    - src: "{{ veilway_pki_root }}/crl.pem"
+      dest: crl.pem
+    - src: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/server.crt"
+      dest: server.crt
+
+- name: Copy endpoint private key material
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ veilway_config_root }}/pki/{{ item.dest }}"
+    owner: root
+    group: veilway
+    mode: "0640"
+  no_log: true
+  register: veilway_private_pki_copy
+  loop:
+    - src: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/server.key"
+      dest: server.key
+    - src: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/tls-crypt-v2-server.key"
+      dest: tls-crypt-v2-server.key
+
+- name: Install the OpenVPN server configuration
+  ansible.builtin.template:
+    src: openvpn-server.conf.j2
+    dest: "{{ veilway_config_root }}/openvpn/server.conf"
+    owner: root
+    group: veilway
+    mode: "0640"
+  register: veilway_openvpn_config
+
+- name: Install the Unbound configuration
+  ansible.builtin.template:
+    src: unbound.conf.j2
+    dest: "{{ veilway_config_root }}/unbound/unbound.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  register: veilway_unbound_config
+
+- name: Copy the minimal container build context
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/image/"
+    dest: "{{ veilway_install_root }}/image/"
+    owner: root
+    group: root
+    mode: preserve
+  register: veilway_image_context
+
+- name: Install the Docker Compose definition
+  ansible.builtin.template:
+    src: compose.yaml.j2
+    dest: "{{ veilway_install_root }}/compose.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+  register: veilway_compose_config
+
+- name: Install the complete nftables ruleset
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload Veilway firewall
+
+- name: Apply prerequisite service changes before Compose
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable Docker and nftables at boot
+  ansible.builtin.service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - docker
+    - nftables
+
+- name: Build and start the Veilway Compose stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ veilway_install_root }}"
+    project_name: veilway
+    state: present
+    build: "{{ 'always' if veilway_image_context.changed else 'policy' }}"
+    recreate: >-
+      {{ 'always' if (
+        veilway_public_pki_copy.changed or
+        veilway_private_pki_copy.changed or
+        veilway_openvpn_config.changed or
+        veilway_unbound_config.changed or
+        veilway_image_context.changed or
+        veilway_compose_config.changed
+      ) else 'auto' }}
+    remove_orphans: true
+  register: veilway_compose_result
+
+- name: Wait for the Direct VPN containers to become healthy
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - inspect
+      - --type
+      - container
+      - "{{ item }}"
+  loop:
+    - veilway-openvpn
+    - veilway-unbound
+  register: veilway_container_health
+  changed_when: false
+  retries: 12
+  delay: 5
+  until: >-
+    veilway_container_health.rc == 0 and
+    (veilway_container_health.stdout | from_json | first).State.Health.Status == 'healthy'
+
+- name: Record the dedicated-host deployment marker
+  ansible.builtin.copy:
+    content: |
+      This dedicated VM is managed by the Veilway {{ veilway_mode }} deployment.
+      Do not reuse it for unrelated services.
+    dest: "{{ veilway_config_root }}/managed-by-veilway"
+    owner: root
+    group: root
+    mode: "0644"

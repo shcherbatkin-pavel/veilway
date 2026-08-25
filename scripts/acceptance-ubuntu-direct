@@ -1,0 +1,438 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+umask 077
+
+readonly PROGRAM_NAME="${0##*/}"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
+readonly ENDPOINT_CONFIG="${REPOSITORY_ROOT}/operator-config/endpoints.conf"
+readonly TRACE_HOST='www.cloudflare.com'
+readonly TRACE_URL='https://www.cloudflare.com/cdn-cgi/trace'
+activated_connection=""
+
+usage() {
+    cat <<EOF
+Usage: ${PROGRAM_NAME} --mode <yc-direct|aws-direct>
+
+Runs the Ubuntu Direct acceptance test with operator-approved Cloudflare trace
+and example.com DNS diagnostics. The selected NetworkManager connection is
+activated for the test and disconnected before the script exits.
+EOF
+}
+
+fail() {
+    printf '%s: %s\n' "${PROGRAM_NAME}" "$*" >&2
+    exit 1
+}
+
+require_command() {
+    command -v -- "$1" >/dev/null 2>&1 \
+        || fail "required command is unavailable: $1"
+}
+
+read_endpoint() {
+    local wanted_key="$1"
+    local key value selected=""
+
+    while IFS='=' read -r key value; do
+        [[ "${key}" == "${wanted_key}" ]] || continue
+        [[ -z "${selected}" ]] || return 1
+        selected="${value}"
+    done < "${ENDPOINT_CONFIG}"
+    [[ -n "${selected}" ]] || return 1
+    printf '%s\n' "${selected}"
+}
+
+validate_ip_version() {
+    local expected_version="$1"
+
+    python3 -c '
+import ipaddress
+import sys
+
+expected = int(sys.argv[1])
+try:
+    address = ipaddress.ip_address(sys.stdin.read().strip())
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if address.version == expected else 1)
+' "${expected_version}"
+}
+
+addresses_equal() {
+    python3 -c '
+import ipaddress
+import sys
+
+lines = [line.strip() for line in sys.stdin if line.strip()]
+if len(lines) != 2:
+    raise SystemExit(1)
+try:
+    first, second = map(ipaddress.ip_address, lines)
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if first == second else 1)
+'
+}
+
+trace_ip_from_body() {
+    local family="$1"
+    local observed
+
+    observed="$(awk -F= '$1 == "ip" { print $2 }')"
+    [[ "$(printf '%s\n' "${observed}" | wc -l)" -eq 1 ]] || return 1
+    printf '%s\n' "${observed}" | validate_ip_version "${family}" \
+        || return 1
+    printf '%s\n' "${observed}"
+}
+
+fetch_public_ip() {
+    local family="$1"
+    local family_flag trace
+
+    case "${family}" in
+        4) family_flag='--ipv4' ;;
+        6) family_flag='--ipv6' ;;
+        *) return 1 ;;
+    esac
+
+    trace="$(
+        curl "${family_flag}" \
+            --fail \
+            --silent \
+            --show-error \
+            --connect-timeout 10 \
+            --max-time 20 \
+            --noproxy '*' \
+            --proto '=https' \
+            --tlsv1.2 \
+            -- "${TRACE_URL}" 2>/dev/null
+    )" || return 1
+    printf '%s\n' "${trace}" | trace_ip_from_body "${family}"
+}
+
+fetch_public_ipv4_pinned() {
+    local pinned_ipv4="$1"
+    local trace
+
+    trace="$(
+        curl --ipv4 \
+            --fail \
+            --silent \
+            --show-error \
+            --connect-timeout 10 \
+            --max-time 20 \
+            --noproxy '*' \
+            --proto '=https' \
+            --tlsv1.2 \
+            --resolve "${TRACE_HOST}:443:${pinned_ipv4}" \
+            -- "${TRACE_URL}" 2>/dev/null
+    )" || return 1
+    printf '%s\n' "${trace}" | trace_ip_from_body 4
+}
+
+active_tunnel_count() {
+    /usr/sbin/ip --json --details link show up |
+        python3 -c '
+import json
+import sys
+
+links = json.load(sys.stdin)
+count = 0
+for link in links:
+    name = link.get("ifname", "")
+    kind = link.get("linkinfo", {}).get("info_kind", "")
+    if kind in {"tun", "wireguard"} or name.startswith(("tun", "tap", "wg")):
+        count += 1
+print(count)
+'
+}
+
+route_outcome() {
+    local family="$1"
+    local destination="$2"
+    local route_json
+
+    if ! route_json="$(
+        /usr/sbin/ip "-${family}" --json route get "${destination}" 2>/dev/null
+    )"; then
+        printf '%s\n' 'blocked'
+        return 0
+    fi
+    printf '%s\n' "${route_json}" | python3 -c '
+import json
+import sys
+
+try:
+    routes = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+if len(routes) != 1:
+    raise SystemExit(1)
+route = routes[0]
+if route.get("type") in {"blackhole", "prohibit", "throw", "unreachable"}:
+    print("blocked")
+elif route.get("dev"):
+    print(route["dev"])
+else:
+    raise SystemExit(1)
+'
+}
+
+vpn_interface_for_cidr() {
+    local vpn_cidr="$1"
+
+    /usr/sbin/ip -4 --json address show up |
+        python3 -c '
+import ipaddress
+import json
+import sys
+
+network = ipaddress.ip_network(sys.argv[1])
+try:
+    links = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+matches = set()
+for link in links:
+    for address in link.get("addr_info", []):
+        if address.get("family") != "inet" or not address.get("local"):
+            continue
+        try:
+            candidate = ipaddress.ip_address(address["local"])
+        except ValueError:
+            continue
+        if candidate in network:
+            matches.add(link.get("ifname", ""))
+if len(matches) != 1 or "" in matches:
+    raise SystemExit(1)
+print(matches.pop())
+' "${vpn_cidr}"
+}
+
+cleanup() {
+    local original_status=$?
+
+    if [[ -n "${activated_connection}" ]]; then
+        if nmcli connection down id "${activated_connection}" >/dev/null 2>&1; then
+            if [[ "${original_status}" -ne 0 ]]; then
+                printf '%s\n' 'automatic cleanup after failure: passed'
+            fi
+        else
+            printf '%s\n' \
+                'cleanup: FAILED; disconnect the Veilway profile manually' >&2
+        fi
+    fi
+    return "${original_status}"
+}
+
+main() {
+    local mode="" connection_name endpoint_key expected_ipv4 expected_ipv6=""
+    local expected_dns expected_vpn_cidr baseline_ipv6_available=false
+    local observed_ipv4 observed_ipv6 trace_ipv4
+    local vpn_interface tunnel_count dns_servers dns_domains query_result
+    local destination routed_device
+    local -a nm_values=()
+    local -a blocked_ipv4_destinations=(
+        10.255.255.254
+        172.31.255.254
+        192.168.255.254
+        169.254.169.254
+    )
+
+    if [[ $# -eq 1 && ("$1" == '--help' || "$1" == '-h') ]]; then
+        usage
+        return 0
+    fi
+    [[ $# -eq 2 && "$1" == "--mode" ]] || {
+        usage >&2
+        exit 2
+    }
+    mode="$2"
+    case "${mode}" in
+        yc-direct)
+            connection_name='ubuntu-yc-direct'
+            endpoint_key='yc_direct_endpoint'
+            expected_dns='10.242.10.1'
+            expected_vpn_cidr='10.242.10.0/24'
+            ;;
+        aws-direct)
+            connection_name='ubuntu-aws-direct'
+            endpoint_key='aws_direct_endpoint'
+            expected_dns='10.242.20.1'
+            expected_vpn_cidr='10.242.20.0/24'
+            ;;
+        *)
+            usage >&2
+            exit 2
+            ;;
+    esac
+
+    for command_name in awk curl getent grep ip nmcli ping python3 resolvectl sleep stat wc; do
+        require_command "${command_name}"
+    done
+    [[ -f "${ENDPOINT_CONFIG}" && ! -L "${ENDPOINT_CONFIG}" ]] \
+        || fail 'protected endpoint configuration is missing or symlinked'
+    [[ "$(stat -c '%a' -- "${ENDPOINT_CONFIG}")" == '600' ]] \
+        || fail 'protected endpoint configuration must have mode 0600'
+
+    expected_ipv4="$(read_endpoint "${endpoint_key}")" \
+        || fail 'endpoint configuration is invalid'
+    printf '%s\n' "${expected_ipv4}" | validate_ip_version 4 \
+        || fail 'configured endpoint is not IPv4'
+
+    if [[ "${mode}" == 'aws-direct' ]]; then
+        expected_ipv6="$(
+            python3 -c '
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as state_file:
+    print(json.load(state_file)["outputs"]["public_ipv6"]["value"])
+' "${REPOSITORY_ROOT}/infra/aws/terraform.tfstate"
+        )" || fail 'cannot read the protected AWS IPv6 output'
+        printf '%s\n' "${expected_ipv6}" | validate_ip_version 6 \
+            || fail 'protected AWS output is not IPv6'
+    fi
+
+    nmcli connection show id "${connection_name}" >/dev/null 2>&1 \
+        || fail 'the expected NetworkManager profile is not imported'
+    if nmcli --terse --fields NAME connection show --active |
+        grep -Fxq -- "${connection_name}"; then
+        fail 'the selected Veilway profile must be inactive before the test'
+    fi
+    if nmcli --terse --fields TYPE connection show --active |
+        grep -Eq '^(vpn|wireguard)$'; then
+        fail 'another NetworkManager VPN is active'
+    fi
+    tunnel_count="$(active_tunnel_count)" \
+        || fail 'cannot inspect active tunnel interfaces'
+    [[ "${tunnel_count}" == '0' ]] \
+        || fail 'another tunnel interface is active; disable the old VPN first'
+
+    mapfile -t nm_values < <(
+        nmcli --get-values \
+            vpn.persistent,ipv4.dns-priority,ipv6.dns-priority \
+            connection show id "${connection_name}"
+    )
+    [[ "${#nm_values[@]}" -eq 3 \
+        && "${nm_values[0]}" == 'yes' \
+        && "${nm_values[1]}" == '-50' \
+        && "${nm_values[2]}" == '-50' ]] \
+        || fail 'NetworkManager persistence or DNS hardening is missing'
+
+    fetch_public_ip 4 >/dev/null \
+        || fail 'direct-network IPv4 baseline is unavailable'
+    trace_ipv4="$(
+        getent ahostsv4 "${TRACE_HOST}" |
+            awk 'NR == 1 { print $1 }'
+    )" || fail 'cannot pin the approved Cloudflare IPv4 endpoint'
+    printf '%s\n' "${trace_ipv4}" | validate_ip_version 4 \
+        || fail 'the approved Cloudflare endpoint did not resolve to IPv4'
+    if fetch_public_ip 6 >/dev/null; then
+        baseline_ipv6_available=true
+    fi
+    printf '%s\n' 'direct-network baseline: passed'
+
+    nmcli connection up id "${connection_name}" >/dev/null 2>&1 \
+        || fail 'Veilway profile activation failed'
+    activated_connection="${connection_name}"
+    printf '%s\n' "${mode} activation: passed"
+
+    vpn_interface="$(vpn_interface_for_cidr "${expected_vpn_cidr}")" \
+        || fail 'cannot identify the Veilway tunnel interface'
+    [[ "${vpn_interface}" =~ ^[A-Za-z0-9_.:-]+$ ]] \
+        || fail 'the Veilway tunnel interface is ambiguous'
+
+    ping -4 -n -c 2 -W 3 -s 32 -- "${expected_dns}" >/dev/null 2>&1 \
+        || fail 'the OpenVPN IPv4 data channel cannot reach its tunnel gateway'
+    printf '%s\n' "${mode} OpenVPN IPv4 data channel: passed"
+
+    routed_device="$(route_outcome 4 "${trace_ipv4}")" \
+        || fail 'IPv4 internet route through Veilway cannot be inspected'
+    [[ "${routed_device}" == "${vpn_interface}" ]] \
+        || fail 'IPv4 internet traffic can bypass the Veilway tunnel'
+    printf '%s\n' "${mode} IPv4 tunnel route: passed"
+
+    ping -4 -n -c 2 -W 3 -s 32 -- "${trace_ipv4}" >/dev/null 2>&1 \
+        || fail 'small IPv4 packets do not traverse Veilway forwarding/NAT'
+    printf '%s\n' "${mode} small IPv4 forwarding: passed"
+    ping -4 -n -c 2 -W 3 -M do -s 1360 -- "${trace_ipv4}" >/dev/null 2>&1 \
+        || fail 'Veilway path MTU is below the safe IPv4 diagnostic size'
+    printf '%s\n' "${mode} IPv4 path MTU: passed"
+
+    observed_ipv4="$(fetch_public_ipv4_pinned "${trace_ipv4}")" \
+        || fail 'raw IPv4 HTTPS forwarding through Veilway failed'
+    printf '%s\n%s\n' "${observed_ipv4}" "${expected_ipv4}" |
+        addresses_equal \
+        || fail 'public IPv4 does not match the selected Veilway endpoint'
+    printf '%s\n' "${mode} IPv4 egress: passed"
+
+    dns_servers="$(resolvectl dns "${vpn_interface}")" \
+        || fail 'cannot inspect tunnel DNS servers'
+    grep -Fq -- "${expected_dns}" <<< "${dns_servers}" \
+        || fail 'the tunnel resolver is not installed on the Veilway link'
+    dns_domains="$(resolvectl domain "${vpn_interface}")" \
+        || fail 'cannot inspect tunnel DNS routing domains'
+    grep -Eq -- '(^|[[:space:]])~\.([[:space:]]|$)' <<< "${dns_domains}" \
+        || fail 'the Veilway resolver does not own the default DNS route'
+    query_result="$(resolvectl query example.com 2>/dev/null)" \
+        || fail 'DNS lookup through the system resolver failed'
+    grep -Fq -- "-- link: ${vpn_interface}" <<< "${query_result}" \
+        || fail 'the system resolver did not use the Veilway tunnel'
+    fetch_public_ip 4 >/dev/null \
+        || fail 'DNS-resolved IPv4 HTTPS through Veilway failed'
+    printf '%s\n' "${mode} tunnel-only DNS: passed"
+
+    if [[ "${mode}" == 'yc-direct' ]]; then
+        routed_device="$(route_outcome 6 '2606:4700:4700::1111')" \
+            || fail 'yc-direct IPv6 route policy cannot be inspected'
+        [[ "${routed_device}" == 'blocked' \
+            || "${routed_device}" == "${vpn_interface}" ]] \
+            || fail 'yc-direct IPv6 traffic can bypass the tunnel'
+        if fetch_public_ip 6 >/dev/null; then
+            fail 'yc-direct unexpectedly provides external IPv6'
+        fi
+        printf '%s\n' 'yc-direct IPv6 blocking: passed'
+        if [[ "${baseline_ipv6_available}" == true ]]; then
+            printf '%s\n' 'yc-direct IPv6 external leak test: passed'
+        else
+            printf '%s\n' 'yc-direct IPv6 external leak test: inconclusive (no direct IPv6 baseline)'
+        fi
+    else
+        observed_ipv6="$(fetch_public_ip 6)" \
+            || fail 'AWS IPv6 internet access through Veilway failed'
+        printf '%s\n%s\n' "${observed_ipv6}" "${expected_ipv6}" |
+            addresses_equal \
+            || fail 'public IPv6 does not match the AWS Veilway endpoint'
+        printf '%s\n' 'aws-direct IPv6 egress: passed'
+    fi
+
+    for destination in "${blocked_ipv4_destinations[@]}"; do
+        routed_device="$(route_outcome 4 "${destination}")" \
+            || fail 'a protected IPv4 destination has no inspectable route'
+        [[ "${routed_device}" == "${vpn_interface}" ]] \
+            || fail 'a private or metadata destination can bypass the tunnel'
+    done
+    if curl --ipv4 --silent --connect-timeout 3 --max-time 4 \
+        --noproxy '*' -- 'http://169.254.169.254/' >/dev/null 2>&1; then
+        fail 'the metadata endpoint is unexpectedly reachable'
+    fi
+    printf '%s\n' "${mode} private and metadata route policy: passed"
+
+    nmcli connection down id "${connection_name}" >/dev/null 2>&1 \
+        || fail 'automatic Veilway disconnect failed'
+    activated_connection=""
+    sleep 1
+    if nmcli --terse --fields NAME connection show --active |
+        grep -Fxq -- "${connection_name}"; then
+        fail 'the Veilway connection remained active after cleanup'
+    fi
+    printf '%s\n' "${mode} cleanup: passed"
+    printf '%s\n' "${PROGRAM_NAME}: acceptance checks completed"
+}
+
+trap cleanup EXIT
+main "$@"

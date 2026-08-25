@@ -1,0 +1,12 @@
+---
+- name: Preflight Veilway on explicitly approved dedicated hosts
+  hosts: direct_vpn
+  become: true
+  gather_facts: true
+  serial: 1
+
+  tasks:
+    - name: Run only the read-only role preflight
+      ansible.builtin.include_role:
+        name: veilway_direct
+        tasks_from: preflight

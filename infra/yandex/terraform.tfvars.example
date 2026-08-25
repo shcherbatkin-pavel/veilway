@@ -1,0 +1,12 @@
+cloud_id  = "REPLACE_WITH_CLOUD_ID"
+folder_id = "REPLACE_WITH_FOLDER_ID"
+zone      = "ru-central1-d"
+
+operator_cidrs = ["198.51.100.10/32"]
+ssh_public_key = "ssh-ed25519 REPLACE_WITH_OPERATOR_PUBLIC_KEY"
+
+# Defaults are intentionally non-overlapping. Change them only after reviewing
+# the overlap validations and the matching deployment inventory values.
+vpc_cidr             = "10.241.1.0/24"
+vpn_ipv4_cidr        = "10.242.10.0/24"
+future_multihop_cidr = "10.242.30.0/24"

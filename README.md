@@ -1,24 +1,40 @@
 # Veilway
 
-Veilway is an experimental self-hosted VPN service with a web interface and
-optional multi-hop routing.
+Veilway is a self-hosted VPN service with a planned web interface and optional
+multi-hop routing.
 
-The prototype targets one user with an Ubuntu laptop and an iPhone. Its planned
-connection modes are direct internet access through Yandex Cloud or AWS and a
-multi-hop path through both providers. Access to provider-private networks is
-out of scope, and the future web panel will be reachable only through an SSH
-tunnel.
+The prototype targets one user with an Ubuntu laptop and an iPhone. It deploys
+OpenVPN 2.6 containers to new, dedicated Ubuntu 24.04 LTS virtual machines in
+Yandex Cloud and AWS. The first MVP provides direct internet access through
+either provider. A multi-hop path and private web panel are later phases.
 
 ## Current iteration
 
-This repository currently provides the project requirements, roadmap, and a
-read-only Ubuntu VM audit script. It does **not** deploy or configure OpenVPN,
-WireGuard, Ansible, a web panel, or multi-hop routing. An existing OpenVPN
-Access Server must remain unchanged.
+This repository contains the greenfield architecture, independent Terraform
+stacks for both clouds, an Ansible deployment, Docker Compose configuration,
+and local PKI/profile tooling. Applying infrastructure or connecting to a host
+is always a separate, explicit operator action. The existing OpenVPN Access
+Server runs on old infrastructure outside the Veilway target and must remain
+unchanged.
 
 - [Prototype requirements](docs/requirements.md)
 - [Development roadmap](docs/roadmap.md)
+- [Greenfield architecture ADR](docs/adr/0001-greenfield-direct-vpn.md)
+- [Deployment guide](docs/deployment.md)
 - [Safe VM audit guide](docs/audit.md)
+
+Run `./scripts/check.sh` for local static checks and
+`./scripts/container-smoke.sh` after building the pinned application image.
+`./scripts/pki-smoke.py` exercises all four profile identities and revocation
+using temporary test-only key material.
+
+## Safety status
+
+The repository does not contain cloud credentials, Terraform state, PKI private
+keys, client profiles, host inventory, or audit reports. The checked-in
+configuration is inert until an operator supplies local inputs and explicitly
+runs Terraform and Ansible. Do not point the deployment inventory at the old
+VMs.
 
 ## Sensitive audit data
 

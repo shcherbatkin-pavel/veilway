@@ -1,0 +1,9 @@
+---
+- name: Deploy Veilway to explicitly approved dedicated hosts
+  hosts: direct_vpn
+  become: true
+  gather_facts: true
+  serial: 1
+
+  roles:
+    - role: veilway_direct

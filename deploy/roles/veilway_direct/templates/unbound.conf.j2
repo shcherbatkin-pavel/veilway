@@ -1,0 +1,41 @@
+server:
+    interface: {{ veilway_vpn_ipv4_cidr | veilway_network_first_host }}
+{% if veilway_enable_ipv6 %}
+    interface: {{ veilway_vpn_ipv6_cidr | veilway_network_first_host }}
+{% endif %}
+    port: 53
+    access-control: 0.0.0.0/0 refuse
+    access-control: {{ veilway_vpn_ipv4_cidr }} allow
+{% if veilway_enable_ipv6 %}
+    access-control: ::0/0 refuse
+    access-control: {{ veilway_vpn_ipv6_cidr }} allow
+{% endif %}
+    username: "unbound"
+    chroot: ""
+    directory: "/etc/unbound"
+    pidfile: ""
+    use-syslog: no
+    logfile: ""
+    verbosity: 1
+    log-queries: no
+    log-replies: no
+    hide-identity: yes
+    hide-version: yes
+    qname-minimisation: yes
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    harden-below-nxdomain: yes
+    unwanted-reply-threshold: 100000
+    prefetch: yes
+    do-ip4: yes
+    do-ip6: {{ 'yes' if veilway_enable_ipv6 else 'no' }}
+    do-udp: yes
+    do-tcp: yes
+    trust-anchor-file: "/usr/share/dns/root.key"
+    private-address: 10.0.0.0/8
+    private-address: 100.64.0.0/10
+    private-address: 169.254.0.0/16
+    private-address: 172.16.0.0/12
+    private-address: 192.168.0.0/16
+    private-address: fc00::/7
+    private-address: fe80::/10
