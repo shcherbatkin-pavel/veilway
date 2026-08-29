@@ -3,6 +3,9 @@
 This Terraform root creates a new dual-stack VPC, public subnet, internet
 gateway, restricted security group, encrypted Ubuntu 24.04 EC2 instance, and
 Elastic IPv4. It does not connect to the VM or deploy the VPN application.
+The security group exposes the Direct VPN on public UDP/1194 and the inter-cloud
+OpenVPN transit on UDP/1196 only from the operator-supplied Yandex static IPv4
+`/32`. AWS does not expose the Yandex client-ingress port UDP/1195.
 
 State is local by design for the MVP and contains sensitive infrastructure
 data. Run with `umask 077`, keep state and `terraform.tfvars` on an encrypted
@@ -11,6 +14,8 @@ standard AWS provider credential chain.
 
 The generated ULA is persisted in this root's state. Replacing or losing the
 state changes the IPv6 client subnet and requires new profiles.
+The same persistent `/48` also supplies separate `/64` networks for multi-hop
+clients and the Yandex-to-AWS transit.
 
 The instance explicitly disables automatic public IPv4 assignment at creation,
 and the subnet also has `map_public_ip_on_launch` disabled. The Elastic IP is a

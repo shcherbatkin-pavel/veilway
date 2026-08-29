@@ -13,6 +13,7 @@ readonly STATE_FILE="${REPOSITORY_ROOT}/operator-config/aws-data-channel-diagnos
 readonly CONNECTION_NAME='ubuntu-aws-direct'
 readonly VPN_CIDR='10.242.20.0/24'
 readonly VPN_GATEWAY='10.242.20.1'
+readonly AWS_OPENVPN_PORT='1194'
 aws_activated=false
 capture_active=false
 capture_pid=''
@@ -309,6 +310,7 @@ import sys
 
 endpoint = ipaddress.ip_address(sys.argv[1])
 expected_source = ipaddress.ip_address(sys.argv[2])
+expected_port = int(sys.argv[3])
 
 def split_socket(value):
     host, separator, port = value.rpartition(":")
@@ -326,7 +328,7 @@ for line in sys.stdin:
         continue
     local_socket = split_socket(fields[-2])
     peer_socket = split_socket(fields[-1])
-    if local_socket is None or peer_socket != (endpoint, 1194):
+    if local_socket is None or peer_socket != (endpoint, expected_port):
         continue
     sources.append(local_socket[0])
 if not sources:
@@ -335,7 +337,7 @@ elif all(source == expected_source for source in sources):
     print("passed")
 else:
     print("mismatch")
-' "${endpoint}" "${expected_source}"
+' "${endpoint}" "${expected_source}" "${AWS_OPENVPN_PORT}"
 }
 
 udp_out_datagrams() {
@@ -734,7 +736,7 @@ probe_phase() {
             /usr/bin/timeout --signal=INT --kill-after=2s 8s \
             /usr/bin/tcpdump --immediate-mode -p -n -Q out \
             -i "${outer_route_interface}" -c 10 -s 1 -w /dev/null \
-            "udp and src host ${outer_route_source} and dst host ${endpoint} and dst port 1194 and ((udp[8] & 0xf8 = 0x30) or (udp[8] & 0xf8 = 0x48))" \
+            "udp and src host ${outer_route_source} and dst host ${endpoint} and dst port ${AWS_OPENVPN_PORT} and ((udp[8] & 0xf8 = 0x30) or (udp[8] & 0xf8 = 0x48))" \
             >/dev/null 2>&1 &
         capture_pid=$!
         capture_active=true

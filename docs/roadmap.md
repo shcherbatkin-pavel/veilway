@@ -27,12 +27,22 @@ IPv4 egress through both providers, IPv6 egress through AWS, IPv6 leak blocking
 through Yandex, tunnel-only DNS, private-network isolation, working profile
 revocation, no credential material in Git or logs, and no contact with old VMs.
 
+`yc-direct` passed acceptance. `aws-direct` passed server, nested-transport,
+PKI, DNS, and forwarding checks, but its data channel is filtered on the
+operator's direct network path on both UDP/1194 and UDP/443. ADR 0002 records
+the rejected port trial. This path-specific result prevents full Direct
+acceptance but does not require changing or deleting the dedicated AWS node.
+
 ## 4. Multi-Hop
 
-Implement `yc-aws-multihop` only after both direct modes are stable. Completion
-requires verified Yandex Cloud ingress, AWS internet egress, failure-safe
-routing and DNS behavior, and continued isolation from both private cloud
-networks.
+ADR 0003 is accepted and `yc-aws-multihop` is implemented. The original
+requirement for client-path acceptance of both Direct modes is waived only for
+the documented AWS path-filtering condition: the same AWS endpoint passes when
+reached through an existing tunnel. Automated Ubuntu acceptance passed IPv4,
+IPv6, DNS, path MTU, private/metadata isolation, and cleanup through Yandex
+ingress and AWS egress. Manual iPhone acceptance passed IPv4 and IPv6 on both
+Wi-Fi and mobile networks, including recovery after disconnect. Both deployed
+roles are idempotent and their read-only verifiers pass.
 
 ## 5. Web UI
 

@@ -32,11 +32,24 @@ def one(value: Any) -> dict[str, Any]:
 
 
 def main() -> int:
-    if sys.argv[1:] not in ([], ["--recovery"]):
-        print("usage: review-aws-direct-plan.py [--recovery]", file=sys.stderr)
+    if sys.argv[1:] not in (
+        [],
+        ["--recovery"],
+        ["--port-rollback"],
+        ["--enable-multihop"],
+        ["--disable-multihop"],
+    ):
+        print(
+            "usage: review-aws-direct-plan.py "
+            "[--recovery|--port-rollback|--enable-multihop|--disable-multihop]",
+            file=sys.stderr,
+        )
         return 2
 
     recovery = sys.argv[1:] == ["--recovery"]
+    port_rollback = sys.argv[1:] == ["--port-rollback"]
+    enable_multihop = sys.argv[1:] == ["--enable-multihop"]
+    disable_multihop = sys.argv[1:] == ["--disable-multihop"]
 
     try:
         plan = json.load(sys.stdin)
@@ -63,11 +76,13 @@ def main() -> int:
     subnet = after("aws_subnet.vpn")
     routes = after("aws_route_table.vpn").get("route") or []
     instance = after("aws_instance.vpn")
+    instance_before = before("aws_instance.vpn")
     metadata = one(instance.get("metadata_options"))
     root = one(instance.get("root_block_device"))
     security_group = after("aws_security_group.vpn")
     ingress = security_group.get("ingress") or []
     egress = security_group.get("egress") or []
+    ingress_before = before("aws_security_group.vpn").get("ingress") or []
 
     ssh_rules = [
         rule
@@ -82,6 +97,13 @@ def main() -> int:
         if rule.get("protocol") == "udp"
         and rule.get("from_port") == 1194
         and rule.get("to_port") == 1194
+    ]
+    transit_rules = [
+        rule
+        for rule in ingress
+        if rule.get("protocol") == "udp"
+        and rule.get("from_port") == 1196
+        and rule.get("to_port") == 1196
     ]
 
     ssh_cidrs = ssh_rules[0].get("cidr_blocks") or [] if len(ssh_rules) == 1 else []
@@ -104,6 +126,34 @@ def main() -> int:
         and vpn_rules[0].get("cidr_blocks") == ["0.0.0.0/0"]
         and not (vpn_rules[0].get("ipv6_cidr_blocks") or [])
     )
+    transit_cidrs = (
+        transit_rules[0].get("cidr_blocks") or []
+        if len(transit_rules) == 1
+        else []
+    )
+    try:
+        transit_safe = len(transit_cidrs) == 1 and (
+            ipaddress.ip_network(transit_cidrs[0], strict=True).version == 4
+            and ipaddress.ip_network(transit_cidrs[0], strict=True).prefixlen == 32
+        )
+    except ValueError:
+        transit_safe = False
+    transit_expected = enable_multihop or (recovery and bool(transit_rules))
+
+    public_ipv4_check_name = "no automatic public IPv4"
+    public_ipv4_safe = instance.get("associate_public_ip_address") is False
+    if port_rollback or enable_multihop or disable_multihop:
+        public_ipv4_check_name = "EC2 public IPv4 attachment observation unchanged"
+        observed_before = instance_before.get("associate_public_ip_address")
+        observed_after = instance.get("associate_public_ip_address")
+        public_ipv4_safe = (
+            isinstance(observed_before, bool)
+            and isinstance(observed_after, bool)
+            and observed_after == observed_before
+            and bool(instance_before.get("id"))
+            and instance.get("id") == instance_before.get("id")
+            and actions("aws_instance.vpn") == ["no-op"]
+        )
 
     if recovery:
         unchanged_resources = EXPECTED_RESOURCES - {
@@ -115,6 +165,54 @@ def main() -> int:
             actions("aws_instance.vpn") == ["delete", "create"]
             and actions("aws_eip.vpn") == ["update"]
             and all(actions(address) == ["no-op"] for address in unchanged_resources)
+        )
+    elif port_rollback:
+        unchanged_resources = EXPECTED_RESOURCES - {"aws_security_group.vpn"}
+        action_check_name = "actions limited to the security group port rollback"
+        legacy_vpn_rules = [
+            rule
+            for rule in ingress_before
+            if rule.get("protocol") == "udp"
+            and rule.get("from_port") == 443
+            and rule.get("to_port") == 443
+            and rule.get("cidr_blocks") == ["0.0.0.0/0"]
+            and not (rule.get("ipv6_cidr_blocks") or [])
+        ]
+        actions_are_safe = (
+            actions("aws_security_group.vpn") == ["update"]
+            and all(actions(address) == ["no-op"] for address in unchanged_resources)
+            and len(legacy_vpn_rules) == 1
+        )
+    elif enable_multihop:
+        unchanged_resources = EXPECTED_RESOURCES - {"aws_security_group.vpn"}
+        action_check_name = "actions limited to the transit security group rule"
+        previous_transit_rules = [
+            rule
+            for rule in ingress_before
+            if rule.get("protocol") == "udp"
+            and rule.get("from_port") == 1196
+            and rule.get("to_port") == 1196
+        ]
+        actions_are_safe = (
+            actions("aws_security_group.vpn") == ["update"]
+            and all(actions(address) == ["no-op"] for address in unchanged_resources)
+            and not previous_transit_rules
+        )
+    elif disable_multihop:
+        unchanged_resources = EXPECTED_RESOURCES - {"aws_security_group.vpn"}
+        action_check_name = "actions limited to removing the transit security group rule"
+        previous_transit_rules = [
+            rule
+            for rule in ingress_before
+            if rule.get("protocol") == "udp"
+            and rule.get("from_port") == 1196
+            and rule.get("to_port") == 1196
+            and len(rule.get("cidr_blocks") or []) == 1
+        ]
+        actions_are_safe = (
+            actions("aws_security_group.vpn") == ["update"]
+            and all(actions(address) == ["no-op"] for address in unchanged_resources)
+            and len(previous_transit_rules) == 1
         )
     else:
         action_check_name = "create-only actions"
@@ -137,12 +235,14 @@ def main() -> int:
         ),
         "SSH restricted to two IPv4 /32": ssh_safe,
         "OpenVPN only on UDP/1194 IPv4": vpn_safe,
-        "future ports 1195/1196 closed": all(
-            rule.get("from_port") not in (1195, 1196)
-            and rule.get("to_port") not in (1195, 1196)
+        "multi-hop client ingress UDP/1195 closed": all(
+            rule.get("from_port") != 1195 and rule.get("to_port") != 1195
             for rule in ingress
         ),
-        "expected four ingress rules": len(ingress) == 4,
+        "OpenVPN transit only from one IPv4 /32": (
+            transit_safe if transit_expected else not transit_rules
+        ),
+        "expected ingress rule count": len(ingress) == (5 if transit_expected else 4),
         "dual-stack egress": (
             len(egress) == 1
             and egress[0].get("protocol") == "-1"
@@ -150,9 +250,7 @@ def main() -> int:
             and egress[0].get("ipv6_cidr_blocks") == ["::/0"]
         ),
         "VPN forwarding enabled": instance.get("source_dest_check") is False,
-        "no automatic public IPv4": (
-            instance.get("associate_public_ip_address") is False
-        ),
+        public_ipv4_check_name: public_ipv4_safe,
         "one public IPv6": instance.get("ipv6_address_count") == 1,
         "no cloud IAM identity": not instance.get("iam_instance_profile"),
         "no cloud-init secrets": not instance.get("user_data"),
@@ -172,7 +270,7 @@ def main() -> int:
         "Elastic IP is VPC-scoped": after("aws_eip.vpn").get("domain") == "vpc",
     }
 
-    if recovery:
+    if recovery or port_rollback or enable_multihop or disable_multihop:
         eip_before = before("aws_eip.vpn")
         eip_after = after("aws_eip.vpn")
         checks["existing Elastic IP allocation retained"] = (

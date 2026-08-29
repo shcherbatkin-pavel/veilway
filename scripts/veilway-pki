@@ -22,8 +22,10 @@ usage() {
     cat <<EOF
 Usage:
   ${PROGRAM_NAME} init
-  ${PROGRAM_NAME} server create --mode <yc-direct|aws-direct>
-  ${PROGRAM_NAME} profile create --device <ubuntu|iphone> --mode <yc-direct|aws-direct>
+  ${PROGRAM_NAME} server create --mode <yc-direct|aws-direct|yc-multihop-ingress|aws-transit>
+  ${PROGRAM_NAME} transit create
+  ${PROGRAM_NAME} profile create --device <ubuntu|iphone> --mode <yc-direct|aws-direct|yc-aws-multihop>
+  ${PROGRAM_NAME} profile update-remote --mode <yc-direct|aws-direct|yc-aws-multihop>
   ${PROGRAM_NAME} profile revoke --name <profile-name>
 
 All private material is written under the Git-ignored secrets/ and
@@ -65,10 +67,20 @@ validate_private_roots() {
 
 validate_mode() {
     case "$1" in
-        yc-direct|aws-direct)
+        yc-direct|aws-direct|yc-aws-multihop)
             ;;
         *)
-            fail "mode must be yc-direct or aws-direct"
+            fail "mode must be yc-direct, aws-direct, or yc-aws-multihop"
+            ;;
+    esac
+}
+
+validate_server_mode() {
+    case "$1" in
+        yc-direct|aws-direct|yc-multihop-ingress|aws-transit)
+            ;;
+        *)
+            fail "server mode must be yc-direct, aws-direct, yc-multihop-ingress, or aws-transit"
             ;;
     esac
 }
@@ -83,12 +95,43 @@ validate_device() {
     esac
 }
 
+port_for_mode() {
+    validate_mode "$1"
+    case "$1" in
+        yc-direct)
+            printf '%s\n' '1194'
+            ;;
+        aws-direct)
+            printf '%s\n' '1194'
+            ;;
+        yc-aws-multihop)
+            printf '%s\n' '1195'
+            ;;
+    esac
+}
+
+server_directory_for_mode() {
+    validate_mode "$1"
+    case "$1" in
+        yc-direct|aws-direct)
+            printf '%s\n' "$1"
+            ;;
+        yc-aws-multihop)
+            printf '%s\n' 'yc-multihop-ingress'
+            ;;
+    esac
+}
+
+server_identity_for_mode() {
+    server_directory_for_mode "$1"
+}
+
 validate_profile_name() {
     case "$1" in
-        ubuntu-yc-direct|iphone-yc-direct|ubuntu-aws-direct|iphone-aws-direct)
+        ubuntu-yc-direct|iphone-yc-direct|ubuntu-aws-direct|iphone-aws-direct|ubuntu-yc-aws-multihop|iphone-yc-aws-multihop)
             ;;
         *)
-            fail "unknown Direct MVP profile name: $1"
+            fail "unknown Veilway profile name: $1"
             ;;
     esac
 }
@@ -112,7 +155,7 @@ read_endpoint() {
 
     require_regular_file "${ENDPOINT_CONFIG}"
     case "${mode}" in
-        yc-direct)
+        yc-direct|yc-aws-multihop)
             wanted_key="yc_direct_endpoint"
             ;;
         aws-direct)
@@ -223,7 +266,7 @@ create_server() {
     local endpoint_dir="${ENDPOINTS_DIR}/${mode}"
     local request_file
 
-    validate_mode "${mode}"
+    validate_server_mode "${mode}"
     require_initialized_ca
     require_vpn_image
     [[ ! -e "${endpoint_dir}" ]] || fail "endpoint already exists: ${endpoint_dir}"
@@ -262,25 +305,72 @@ create_server() {
     printf 'Created server identity for %s under: %s\n' "${mode}" "${endpoint_dir}"
 }
 
+create_transit_client() {
+    local client_dir="${ENDPOINTS_DIR}/yc-transit"
+    local server_dir="${ENDPOINTS_DIR}/aws-transit"
+    local request_file
+
+    require_initialized_ca
+    require_vpn_image
+    require_regular_file "${server_dir}/server.crt"
+    require_regular_file "${server_dir}/tls-crypt-v2-server.key"
+    [[ ! -e "${client_dir}" ]] || fail "transit client already exists: ${client_dir}"
+    ensure_directory "${client_dir}" 0700
+    request_file="${client_dir}/client.csr"
+
+    openssl genpkey \
+        -algorithm EC \
+        -pkeyopt ec_paramgen_curve:P-256 \
+        -out "${client_dir}/client.key"
+    chmod 0600 -- "${client_dir}/client.key"
+    openssl req \
+        -new \
+        -sha256 \
+        -key "${client_dir}/client.key" \
+        -subj '/CN=yc-transit' \
+        -out "${request_file}"
+    (
+        cd -- "${CA_DIR}"
+        openssl ca \
+            -batch \
+            -config "${OPENSSL_CONFIG}" \
+            -extensions client_cert \
+            -days 365 \
+            -notext \
+            -in "${request_file}" \
+            -out "${client_dir}/client.crt"
+    )
+    chmod 0644 -- "${client_dir}/client.crt"
+
+    run_openvpn_container "${client_dir}" "${server_dir}" \
+        --tls-crypt-v2 /endpoint/tls-crypt-v2-server.key \
+        --genkey tls-crypt-v2-client /work/tls-crypt-v2-client.key
+    chmod 0600 -- "${client_dir}/tls-crypt-v2-client.key"
+    rm -- "${request_file}"
+    printf 'Created Yandex-to-AWS transit client identity under: %s\n' "${client_dir}"
+}
+
 write_profile() {
     local profile_path="$1"
     local profile_name="$2"
     local mode="$3"
-    local endpoint="$4"
-    local client_certificate="$5"
-    local client_key="$6"
-    local tls_crypt_key="$7"
+    local server_identity="$4"
+    local endpoint="$5"
+    local port="$6"
+    local client_certificate="$7"
+    local client_key="$8"
+    local tls_crypt_key="$9"
 
     {
         printf '%s\n' 'client'
         printf '%s\n' 'dev tun'
         printf '%s\n' 'proto udp4'
-        printf 'remote %s 1194\n' "${endpoint}"
+        printf 'remote %s %s\n' "${endpoint}" "${port}"
         printf '%s\n' 'nobind'
         printf '%s\n' 'persist-key'
         printf '%s\n' 'persist-tun'
         printf '%s\n' 'remote-cert-tls server'
-        printf 'verify-x509-name %s name\n' "${mode}"
+        printf 'verify-x509-name %s name\n' "${server_identity}"
         printf '%s\n' 'tls-version-min 1.3'
         printf '%s\n' 'tls-cert-profile preferred'
         printf '%s\n' 'data-ciphers CHACHA20-POLY1305:AES-256-GCM:AES-128-GCM'
@@ -310,14 +400,18 @@ write_profile() {
 create_profile() (
     local device="$1"
     local mode="$2"
-    local profile_name endpoint endpoint_dir client_dir profile_path profile_temp temp_dir request_file
+    local profile_name endpoint port endpoint_name server_identity endpoint_dir
+    local client_dir profile_path profile_temp temp_dir request_file
 
     validate_device "${device}"
     validate_mode "${mode}"
     require_initialized_ca
     require_vpn_image
     endpoint="$(read_endpoint "${mode}")"
-    endpoint_dir="${ENDPOINTS_DIR}/${mode}"
+    port="$(port_for_mode "${mode}")"
+    endpoint_name="$(server_directory_for_mode "${mode}")"
+    server_identity="$(server_identity_for_mode "${mode}")"
+    endpoint_dir="${ENDPOINTS_DIR}/${endpoint_name}"
     require_regular_file "${endpoint_dir}/server.crt"
     require_regular_file "${endpoint_dir}/tls-crypt-v2-server.key"
 
@@ -366,7 +460,9 @@ create_profile() (
         "${profile_temp}" \
         "${profile_name}" \
         "${mode}" \
+        "${server_identity}" \
         "${endpoint}" \
+        "${port}" \
         "${temp_dir}/client.crt" \
         "${temp_dir}/client.key" \
         "${temp_dir}/tls-crypt-v2-client.key"
@@ -382,6 +478,90 @@ create_profile() (
 
     printf 'Created sensitive client profile: %s\n' "${profile_path}"
     printf '%s\n' 'Review it locally, import it through a trusted channel, and do not commit or publish it.'
+)
+
+update_profile_remotes() (
+    local mode="$1"
+    local endpoint port server_identity device profile_name profile_path temporary_directory
+    local temporary_profile desired_remote legacy_remote remote_count updated=0
+    local -a profile_names=()
+
+    validate_mode "${mode}"
+    endpoint="$(read_endpoint "${mode}")"
+    port="$(port_for_mode "${mode}")"
+    server_identity="$(server_identity_for_mode "${mode}")"
+    desired_remote="remote ${endpoint} ${port}"
+    legacy_remote="remote ${endpoint} 443"
+
+    for command_name in awk chmod cmp git grep mktemp mv rm stat; do
+        require_command "${command_name}"
+    done
+    [[ -d "${PROFILES_DIR}" && ! -L "${PROFILES_DIR}" ]] \
+        || fail "client-profiles must be a regular directory"
+    [[ "$(stat -c '%a' -- "${PROFILES_DIR}")" == '700' ]] \
+        || fail "client-profiles directory mode must be 0700"
+
+    temporary_directory="$(mktemp -d -- "${PROFILES_DIR}/.remote-update.XXXXXXXXXX")"
+    chmod 0700 -- "${temporary_directory}"
+    cleanup_remote_update() {
+        case "${temporary_directory}" in
+            "${PROFILES_DIR}"/.remote-update.*)
+                rm -rf -- "${temporary_directory}"
+                ;;
+            *)
+                fail 'refusing unexpected profile update cleanup path'
+                ;;
+        esac
+    }
+    trap cleanup_remote_update EXIT
+
+    for device in ubuntu iphone; do
+        profile_name="${device}-${mode}"
+        profile_path="${PROFILES_DIR}/${profile_name}.ovpn"
+        temporary_profile="${temporary_directory}/${profile_name}.ovpn"
+        profile_names+=("${profile_name}")
+
+        require_regular_file "${profile_path}"
+        [[ "$(stat -c '%a' -- "${profile_path}")" == '600' ]] \
+            || fail "profile mode must be 0600: ${profile_name}"
+        git -C "${REPOSITORY_ROOT}" check-ignore --quiet --no-index -- "${profile_path}" \
+            || fail "profile is not ignored by Git: ${profile_name}"
+        [[ "$(grep -Fxc -- "# Profile identity: ${profile_name}" "${profile_path}")" -eq 1 ]] \
+            || fail "profile identity marker is invalid: ${profile_name}"
+        [[ "$(grep -Fxc -- "verify-x509-name ${server_identity} name" "${profile_path}")" -eq 1 ]] \
+            || fail "profile server identity constraint is invalid: ${profile_name}"
+        remote_count="$(awk '$1 == "remote" { count++ } END { print count + 0 }' "${profile_path}")"
+        [[ "${remote_count}" -eq 1 ]] \
+            || fail "profile must contain exactly one remote directive: ${profile_name}"
+        if ! grep -Fxq -- "${desired_remote}" "${profile_path}"; then
+            [[ "${mode}" == 'aws-direct' ]] \
+                && grep -Fxq -- "${legacy_remote}" "${profile_path}" \
+                || fail "profile remote is neither the expected nor migratable value: ${profile_name}"
+        fi
+
+        awk -v replacement="${desired_remote}" '
+            $1 == "remote" { print replacement; next }
+            { print }
+        ' "${profile_path}" > "${temporary_profile}"
+        chmod 0600 -- "${temporary_profile}"
+        [[ "$(grep -Fxc -- "${desired_remote}" "${temporary_profile}")" -eq 1 ]] \
+            || fail "updated profile remote validation failed: ${profile_name}"
+    done
+
+    for profile_name in "${profile_names[@]}"; do
+        profile_path="${PROFILES_DIR}/${profile_name}.ovpn"
+        temporary_profile="${temporary_directory}/${profile_name}.ovpn"
+        if ! cmp -s -- "${profile_path}" "${temporary_profile}"; then
+            mv -- "${temporary_profile}" "${profile_path}"
+            updated=$((updated + 1))
+        fi
+    done
+
+    if ((updated > 0)); then
+        printf 'Updated %s protected %s profile remote directives.\n' "${updated}" "${mode}"
+    else
+        printf 'Protected %s profile remote directives are already current.\n' "${mode}"
+    fi
 )
 
 revoke_profile() {
@@ -403,7 +583,7 @@ revoke_profile() {
 }
 
 parse_mode_option() {
-    [[ $# -eq 2 && "$1" == "--mode" ]] || fail "expected --mode <yc-direct|aws-direct>"
+    [[ $# -eq 2 && "$1" == "--mode" ]] || fail "expected --mode <mode>"
     printf '%s\n' "$2"
 }
 
@@ -427,8 +607,12 @@ main() {
             mode="$(parse_mode_option "$3" "$4")"
             create_server "${mode}"
             ;;
+        transit)
+            [[ $# -eq 2 && "$2" == "create" ]] || fail "expected: transit create"
+            create_transit_client
+            ;;
         profile)
-            [[ $# -ge 2 ]] || fail "profile requires create or revoke"
+            [[ $# -ge 2 ]] || fail "profile requires create, update-remote, or revoke"
             case "$2" in
                 create)
                     [[ $# -eq 6 && "$3" == "--device" && "$5" == "--mode" ]] || \
@@ -437,13 +621,19 @@ main() {
                     mode="$6"
                     create_profile "${device}" "${mode}"
                     ;;
+                update-remote)
+                    [[ $# -eq 4 && "$3" == "--mode" ]] || \
+                        fail "expected: profile update-remote --mode <mode>"
+                    mode="$4"
+                    update_profile_remotes "${mode}"
+                    ;;
                 revoke)
                     [[ $# -eq 4 && "$3" == "--name" ]] || fail "expected: profile revoke --name <profile-name>"
                     profile_name="$4"
                     revoke_profile "${profile_name}"
                     ;;
                 *)
-                    fail "profile requires create or revoke"
+                    fail "profile requires create, update-remote, or revoke"
                     ;;
             esac
             ;;

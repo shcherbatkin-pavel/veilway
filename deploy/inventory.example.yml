@@ -8,23 +8,28 @@ all:
           ansible_user: ubuntu
           veilway_dedicated_host_ack: true
           veilway_mode: yc-direct
+          veilway_openvpn_port: 1194
           veilway_vpc_ipv4_cidr: 10.241.1.0/24
           veilway_vpn_ipv4_cidr: 10.242.10.0/24
           veilway_operator_ipv4_cidrs:
             - 198.51.100.10/32
           veilway_operator_ipv6_cidrs: []
           veilway_enable_ipv6: false
+          veilway_multihop_enabled: false
 
         aws-direct:
           ansible_host: 192.0.2.20
           ansible_user: ubuntu
           veilway_dedicated_host_ack: true
           veilway_mode: aws-direct
+          veilway_openvpn_port: 1194
           veilway_vpc_ipv4_cidr: 10.241.2.0/24
           veilway_vpc_ipv6_cidr: "2001:db8:100::/56"
+          veilway_public_ipv6: "2001:db8:100::10"
           veilway_vpn_ipv4_cidr: 10.242.20.0/24
           veilway_vpn_ipv6_cidr: "fd12:3456:789a:20::/64"
           veilway_operator_ipv4_cidrs:
             - 198.51.100.10/32
           veilway_operator_ipv6_cidrs: []
           veilway_enable_ipv6: true
+          veilway_multihop_enabled: false

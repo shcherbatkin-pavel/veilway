@@ -4,6 +4,22 @@
     name: docker
     state: restarted
 
+- name: Validate Veilway netplan
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/netplan
+      - generate
+  changed_when: false
+  listen: Apply Veilway netplan
+
+- name: Apply Veilway netplan
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/netplan
+      - apply
+  changed_when: true
+  listen: Apply Veilway netplan
+
 - name: Apply Veilway sysctl
   ansible.builtin.command:
     argv:

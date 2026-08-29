@@ -14,9 +14,9 @@ activated_connection=""
 
 usage() {
     cat <<EOF
-Usage: ${PROGRAM_NAME} --mode <yc-direct|aws-direct>
+Usage: ${PROGRAM_NAME} --mode <yc-direct|aws-direct|yc-aws-multihop>
 
-Runs the Ubuntu Direct acceptance test with operator-approved Cloudflare trace
+Runs the Ubuntu Veilway acceptance test with operator-approved Cloudflare trace
 and example.com DNS diagnostics. The selected NetworkManager connection is
 activated for the test and disconnected before the script exits.
 EOF
@@ -230,7 +230,7 @@ cleanup() {
 
 main() {
     local mode="" connection_name endpoint_key expected_ipv4 expected_ipv6=""
-    local expected_dns expected_vpn_cidr baseline_ipv6_available=false
+    local expected_gateway expected_dns expected_vpn_cidr baseline_ipv6_available=false
     local observed_ipv4 observed_ipv6 trace_ipv4
     local vpn_interface tunnel_count dns_servers dns_domains query_result
     local destination routed_device
@@ -255,14 +255,23 @@ main() {
         yc-direct)
             connection_name='ubuntu-yc-direct'
             endpoint_key='yc_direct_endpoint'
+            expected_gateway='10.242.10.1'
             expected_dns='10.242.10.1'
             expected_vpn_cidr='10.242.10.0/24'
             ;;
         aws-direct)
             connection_name='ubuntu-aws-direct'
             endpoint_key='aws_direct_endpoint'
+            expected_gateway='10.242.20.1'
             expected_dns='10.242.20.1'
             expected_vpn_cidr='10.242.20.0/24'
+            ;;
+        yc-aws-multihop)
+            connection_name='ubuntu-yc-aws-multihop'
+            endpoint_key='aws_direct_endpoint'
+            expected_gateway='10.242.30.1'
+            expected_dns='10.242.40.1'
+            expected_vpn_cidr='10.242.30.0/24'
             ;;
         *)
             usage >&2
@@ -283,7 +292,7 @@ main() {
     printf '%s\n' "${expected_ipv4}" | validate_ip_version 4 \
         || fail 'configured endpoint is not IPv4'
 
-    if [[ "${mode}" == 'aws-direct' ]]; then
+    if [[ "${mode}" != 'yc-direct' ]]; then
         expected_ipv6="$(
             python3 -c '
 import json
@@ -346,9 +355,16 @@ with open(sys.argv[1], encoding="utf-8") as state_file:
     [[ "${vpn_interface}" =~ ^[A-Za-z0-9_.:-]+$ ]] \
         || fail 'the Veilway tunnel interface is ambiguous'
 
-    ping -4 -n -c 2 -W 3 -s 32 -- "${expected_dns}" >/dev/null 2>&1 \
-        || fail 'the OpenVPN IPv4 data channel cannot reach its tunnel gateway'
-    printf '%s\n' "${mode} OpenVPN IPv4 data channel: passed"
+    if [[ "${mode}" == 'yc-aws-multihop' ]]; then
+        # The multi-hop virtual gateway is not a service endpoint and need not
+        # answer ICMP. End-to-end data flow is verified below with routed
+        # packets, pinned HTTPS, and tunnel-only DNS through AWS.
+        printf '%s\n' "${mode} OpenVPN IPv4 tunnel lease: passed"
+    else
+        ping -4 -n -c 2 -W 3 -s 32 -- "${expected_gateway}" >/dev/null 2>&1 \
+            || fail 'the OpenVPN IPv4 data channel cannot reach its tunnel gateway'
+        printf '%s\n' "${mode} OpenVPN IPv4 data channel: passed"
+    fi
 
     routed_device="$(route_outcome 4 "${trace_ipv4}")" \
         || fail 'IPv4 internet route through Veilway cannot be inspected'
@@ -407,7 +423,7 @@ with open(sys.argv[1], encoding="utf-8") as state_file:
         printf '%s\n%s\n' "${observed_ipv6}" "${expected_ipv6}" |
             addresses_equal \
             || fail 'public IPv6 does not match the AWS Veilway endpoint'
-        printf '%s\n' 'aws-direct IPv6 egress: passed'
+        printf '%s\n' "${mode} IPv6 egress: passed"
     fi
 
     for destination in "${blocked_ipv4_destinations[@]}"; do

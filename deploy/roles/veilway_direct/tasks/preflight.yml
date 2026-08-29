@@ -4,6 +4,7 @@
     that:
       - veilway_dedicated_host_ack | default(false) | bool
       - veilway_mode in ['yc-direct', 'aws-direct']
+      - veilway_openvpn_port | int == 1194
       - ansible_facts['distribution'] == 'Ubuntu'
       - ansible_facts['distribution_release'] == 'noble'
       - ansible_facts['architecture'] == 'x86_64'
@@ -12,21 +13,76 @@
       - veilway_operator_ipv4_cidrs | veilway_networks_are_version(4)
       - veilway_operator_ipv6_cidrs | veilway_networks_are_version(6)
       - not (veilway_vpn_ipv4_cidr | veilway_network_overlaps(veilway_vpc_ipv4_cidr))
-      - not (veilway_vpn_ipv4_cidr | veilway_network_overlaps(veilway_future_multihop_ipv4_cidr))
-      - not (veilway_vpc_ipv4_cidr | veilway_network_overlaps(veilway_future_multihop_ipv4_cidr))
+      - not (veilway_vpn_ipv4_cidr | veilway_network_overlaps(veilway_multihop_ipv4_cidr))
+      - not (veilway_vpn_ipv4_cidr | veilway_network_overlaps(veilway_transit_ipv4_cidr))
+      - not (veilway_vpc_ipv4_cidr | veilway_network_overlaps(veilway_multihop_ipv4_cidr))
+      - not (veilway_vpc_ipv4_cidr | veilway_network_overlaps(veilway_transit_ipv4_cidr))
+      - not (veilway_multihop_ipv4_cidr | veilway_network_overlaps(veilway_transit_ipv4_cidr))
       - not (veilway_vpn_ipv4_cidr | veilway_network_overlaps_any(veilway_operator_ipv4_cidrs))
       - not (veilway_vpc_ipv4_cidr | veilway_network_overlaps_any(veilway_operator_ipv4_cidrs))
-      - not (veilway_future_multihop_ipv4_cidr | veilway_network_overlaps_any(veilway_operator_ipv4_cidrs))
+      - not (veilway_multihop_ipv4_cidr | veilway_network_overlaps_any(veilway_operator_ipv4_cidrs))
+      - not (veilway_transit_ipv4_cidr | veilway_network_overlaps_any(veilway_operator_ipv4_cidrs))
       - ansible_facts['default_ipv4']['interface'] | length > 0
       - not veilway_enable_ipv6 or veilway_mode == 'aws-direct'
       - not veilway_enable_ipv6 or veilway_vpn_ipv6_cidr is defined
       - not veilway_enable_ipv6 or veilway_vpc_ipv6_cidr is defined
+      - not veilway_enable_ipv6 or [veilway_public_ipv6 ~ '/128'] | veilway_networks_are_version(6)
+      - not veilway_enable_ipv6 or ((veilway_public_ipv6 ~ '/128') | veilway_network_overlaps(veilway_vpc_ipv6_cidr))
       - not veilway_enable_ipv6 or not (veilway_vpn_ipv6_cidr | veilway_network_overlaps(veilway_vpc_ipv6_cidr))
       - not veilway_enable_ipv6 or not (veilway_vpn_ipv6_cidr | veilway_network_overlaps_any(veilway_operator_ipv6_cidrs))
       - not veilway_enable_ipv6 or not (veilway_vpc_ipv6_cidr | veilway_network_overlaps_any(veilway_operator_ipv6_cidrs))
+      - not veilway_multihop_enabled or veilway_multihop_ingress_port | int == 1195
+      - not veilway_multihop_enabled or veilway_transit_port | int == 1196
+      - not veilway_multihop_enabled or veilway_multihop_ipv6_cidr is defined
+      - not veilway_multihop_enabled or veilway_transit_ipv6_cidr is defined
+      - not veilway_multihop_enabled or veilway_yc_public_ipv4 is defined
+      - not veilway_multihop_enabled or veilway_aws_public_ipv4 is defined
+      - not veilway_multihop_enabled or [veilway_yc_public_ipv4 ~ '/32', veilway_aws_public_ipv4 ~ '/32'] | veilway_networks_are_version(4)
+      - not veilway_multihop_enabled or not (veilway_multihop_ipv6_cidr | veilway_network_overlaps(veilway_transit_ipv6_cidr))
+      - not veilway_multihop_enabled or not (veilway_multihop_ipv6_cidr | veilway_network_overlaps_any(veilway_operator_ipv6_cidrs))
+      - not veilway_multihop_enabled or not (veilway_transit_ipv6_cidr | veilway_network_overlaps_any(veilway_operator_ipv6_cidrs))
+      - not veilway_multihop_enabled or not veilway_enable_ipv6 or not (veilway_multihop_ipv6_cidr | veilway_network_overlaps(veilway_vpn_ipv6_cidr))
+      - not veilway_multihop_enabled or not veilway_enable_ipv6 or not (veilway_transit_ipv6_cidr | veilway_network_overlaps(veilway_vpn_ipv6_cidr))
+      - not veilway_multihop_enabled or not veilway_enable_ipv6 or not (veilway_multihop_ipv6_cidr | veilway_network_overlaps(veilway_vpc_ipv6_cidr))
+      - not veilway_multihop_enabled or not veilway_enable_ipv6 or not (veilway_transit_ipv6_cidr | veilway_network_overlaps(veilway_vpc_ipv6_cidr))
     fail_msg: >-
       Refusing deployment: target must be a new, dedicated Ubuntu 24.04 amd64
-      VM with an explicit acknowledgement and complete Direct VPN variables.
+      VM with an explicit acknowledgement and complete Direct or multi-hop variables.
+
+- name: Build the protected local PKI requirement list
+  ansible.builtin.set_fact:
+    veilway_required_local_pki_files: >-
+      {{
+        [
+          {'path': veilway_pki_root ~ '/ca/ca.crt', 'mode': '0644'},
+          {'path': veilway_pki_root ~ '/crl.pem', 'mode': '0644'},
+          {'path': veilway_pki_root ~ '/endpoints/' ~ veilway_mode ~ '/server.crt', 'mode': '0644'},
+          {'path': veilway_pki_root ~ '/endpoints/' ~ veilway_mode ~ '/server.key', 'mode': '0600'},
+          {'path': veilway_pki_root ~ '/endpoints/' ~ veilway_mode ~ '/tls-crypt-v2-server.key', 'mode': '0600'}
+        ]
+        + (
+          [
+            {'path': veilway_pki_root ~ '/endpoints/yc-multihop-ingress/server.crt', 'mode': '0644'},
+            {'path': veilway_pki_root ~ '/endpoints/yc-multihop-ingress/server.key', 'mode': '0600'},
+            {'path': veilway_pki_root ~ '/endpoints/yc-multihop-ingress/tls-crypt-v2-server.key', 'mode': '0600'},
+            {'path': veilway_pki_root ~ '/endpoints/yc-transit/client.crt', 'mode': '0644'},
+            {'path': veilway_pki_root ~ '/endpoints/yc-transit/client.key', 'mode': '0600'},
+            {'path': veilway_pki_root ~ '/endpoints/yc-transit/tls-crypt-v2-client.key', 'mode': '0600'}
+          ]
+          if veilway_multihop_enabled and veilway_mode == 'yc-direct'
+          else []
+        )
+        + (
+          [
+            {'path': veilway_pki_root ~ '/endpoints/aws-transit/server.crt', 'mode': '0644'},
+            {'path': veilway_pki_root ~ '/endpoints/aws-transit/server.key', 'mode': '0600'},
+            {'path': veilway_pki_root ~ '/endpoints/aws-transit/tls-crypt-v2-server.key', 'mode': '0600'}
+          ]
+          if veilway_multihop_enabled and veilway_mode == 'aws-direct'
+          else []
+        )
+      }}
+  no_log: true
 
 - name: Check the remote TUN device without changing it
   ansible.builtin.stat:
@@ -53,17 +109,7 @@
   become: false
   register: veilway_local_pki_files
   no_log: true
-  loop:
-    - path: "{{ veilway_pki_root }}/ca/ca.crt"
-      mode: "0644"
-    - path: "{{ veilway_pki_root }}/crl.pem"
-      mode: "0644"
-    - path: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/server.crt"
-      mode: "0644"
-    - path: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/server.key"
-      mode: "0600"
-    - path: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/tls-crypt-v2-server.key"
-      mode: "0600"
+  loop: "{{ veilway_required_local_pki_files }}"
 
 - name: Require complete protected local endpoint PKI
   ansible.builtin.assert:

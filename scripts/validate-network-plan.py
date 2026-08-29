@@ -20,8 +20,12 @@ def main():
         if query.get("vpc_cidr"):
             networks["VPC"] = ipaddress.ip_network(query["vpc_cidr"], strict=True)
         if query.get("future_multihop_cidr"):
-            networks["future multi-hop"] = ipaddress.ip_network(
+            networks["Multi-hop VPN"] = ipaddress.ip_network(
                 query["future_multihop_cidr"], strict=True
+            )
+        if query.get("transit_cidr"):
+            networks["Transit VPN"] = ipaddress.ip_network(
+                query["transit_cidr"], strict=True
             )
         operator_values = json.loads(query["operator_cidrs_json"])
         operator_networks = [

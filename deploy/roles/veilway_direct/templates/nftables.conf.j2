@@ -7,19 +7,37 @@ flush ruleset
 define wan_if = "{{ ansible_facts['default_ipv4']['interface'] }}"
 define vpn_if = "{{ veilway_tunnel_interface }}"
 define vpn_v4 = {{ veilway_vpn_ipv4_cidr }}
+{% if veilway_multihop_enabled %}
+define multihop_if = "{{ veilway_multihop_tunnel_interface }}"
+define transit_if = "{{ veilway_transit_tunnel_interface }}"
+define multihop_v4 = {{ veilway_multihop_ipv4_cidr }}
+define transit_dns_v4 = {{ veilway_transit_ipv4_cidr | veilway_network_first_host }}
+define transit_dns_v6 = {{ veilway_transit_ipv6_cidr | veilway_network_first_host }}
+{% endif %}
 
 table inet veilway_filter {
-    # This counter observes UDP/1194 before conntrack validity is enforced. It
+    # This counter observes OpenVPN UDP before conntrack validity is enforced. It
     # has no verdict and therefore does not change the firewall policy.
     counter openvpn_ingress_raw {
         comment "Veilway OpenVPN UDP before conntrack validation";
     }
 
     # This local-only named counter records packet and byte totals, never
-    # addresses or payloads. It counts UDP/1194 accepted after validation.
+    # addresses or payloads. It counts OpenVPN UDP accepted after validation.
     counter openvpn_ingress {
         comment "Veilway accepted OpenVPN UDP ingress";
     }
+
+{% if veilway_multihop_enabled and veilway_mode == 'yc-direct' %}
+    counter multihop_ingress {
+        comment "Veilway accepted multi-hop client ingress";
+    }
+{% endif %}
+{% if veilway_multihop_enabled and veilway_mode == 'aws-direct' %}
+    counter transit_ingress {
+        comment "Veilway accepted Yandex transit ingress";
+    }
+{% endif %}
 
     set blocked_v4 {
         type ipv4_addr
@@ -42,7 +60,7 @@ table inet veilway_filter {
         }
     }
 
-{% if veilway_enable_ipv6 %}
+{% if veilway_enable_ipv6 or veilway_multihop_enabled %}
     set blocked_v6 {
         type ipv6_addr
         flags interval
@@ -67,6 +85,12 @@ table inet veilway_filter {
         iifname $wan_if udp dport {{ veilway_openvpn_port }} counter name openvpn_ingress_raw
         ct state invalid drop
         iifname $wan_if udp dport {{ veilway_openvpn_port }} counter name openvpn_ingress accept
+{% if veilway_multihop_enabled and veilway_mode == 'yc-direct' %}
+        iifname $wan_if udp dport {{ veilway_multihop_ingress_port }} counter name multihop_ingress accept
+{% endif %}
+{% if veilway_multihop_enabled and veilway_mode == 'aws-direct' %}
+        iifname $wan_if ip saddr {{ veilway_yc_public_ipv4 }} udp dport {{ veilway_transit_port }} counter name transit_ingress accept
+{% endif %}
         ct state established,related accept
         ip protocol icmp accept
         meta l4proto ipv6-icmp accept
@@ -83,6 +107,12 @@ table inet veilway_filter {
         iifname $vpn_if ip6 saddr {{ veilway_vpn_ipv6_cidr }} udp dport 53 accept
         iifname $vpn_if ip6 saddr {{ veilway_vpn_ipv6_cidr }} tcp dport 53 accept
 {% endif %}
+{% if veilway_multihop_enabled and veilway_mode == 'aws-direct' %}
+        iifname $transit_if ip saddr $multihop_v4 udp dport 53 accept
+        iifname $transit_if ip saddr $multihop_v4 tcp dport 53 accept
+        iifname $transit_if ip6 saddr {{ veilway_multihop_ipv6_cidr }} udp dport 53 accept
+        iifname $transit_if ip6 saddr {{ veilway_multihop_ipv6_cidr }} tcp dport 53 accept
+{% endif %}
     }
 
     chain forward {
@@ -98,6 +128,25 @@ table inet veilway_filter {
         iifname $vpn_if ip6 daddr @blocked_v6 drop
         iifname $vpn_if oifname $wan_if ip6 saddr {{ veilway_vpn_ipv6_cidr }} accept
 {% endif %}
+{% if veilway_multihop_enabled and veilway_mode == 'yc-direct' %}
+        iifname $multihop_if oifname $transit_if ip saddr $multihop_v4 ip daddr $transit_dns_v4 udp dport 53 accept
+        iifname $multihop_if oifname $transit_if ip saddr $multihop_v4 ip daddr $transit_dns_v4 tcp dport 53 accept
+        iifname $multihop_if ip daddr {{ veilway_vpc_ipv4_cidr }} drop
+        iifname $multihop_if ip daddr @blocked_v4 drop
+        iifname $multihop_if oifname $transit_if ip saddr $multihop_v4 accept
+        iifname $multihop_if oifname $transit_if ip6 saddr {{ veilway_multihop_ipv6_cidr }} ip6 daddr $transit_dns_v6 udp dport 53 accept
+        iifname $multihop_if oifname $transit_if ip6 saddr {{ veilway_multihop_ipv6_cidr }} ip6 daddr $transit_dns_v6 tcp dport 53 accept
+        iifname $multihop_if ip6 daddr @blocked_v6 drop
+        iifname $multihop_if oifname $transit_if ip6 saddr {{ veilway_multihop_ipv6_cidr }} accept
+{% endif %}
+{% if veilway_multihop_enabled and veilway_mode == 'aws-direct' %}
+        iifname $transit_if ip daddr {{ veilway_vpc_ipv4_cidr }} drop
+        iifname $transit_if ip daddr @blocked_v4 drop
+        iifname $transit_if oifname $wan_if ip saddr $multihop_v4 accept
+        iifname $transit_if ip6 daddr {{ veilway_vpc_ipv6_cidr }} drop
+        iifname $transit_if ip6 daddr @blocked_v6 drop
+        iifname $transit_if oifname $wan_if ip6 saddr {{ veilway_multihop_ipv6_cidr }} accept
+{% endif %}
     }
 }
 
@@ -105,6 +154,9 @@ table ip veilway_nat4 {
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
         oifname $wan_if ip saddr $vpn_v4 masquerade
+{% if veilway_multihop_enabled and veilway_mode == 'aws-direct' %}
+        oifname $wan_if ip saddr $multihop_v4 masquerade
+{% endif %}
     }
 }
 
@@ -113,6 +165,9 @@ table ip6 veilway_nat6 {
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
         oifname $wan_if ip6 saddr {{ veilway_vpn_ipv6_cidr }} masquerade
+{% if veilway_multihop_enabled %}
+        oifname $wan_if ip6 saddr {{ veilway_multihop_ipv6_cidr }} masquerade
+{% endif %}
     }
 }
 {% endif %}

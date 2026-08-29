@@ -23,24 +23,25 @@ python3 -m py_compile \
     scripts/pki-smoke.py \
     scripts/render-inventory.py \
     scripts/review-aws-direct-plan.py \
+    scripts/review-yandex-multihop-plan.py \
     scripts/validate-network-plan.py \
     deploy/filter_plugins/veilway_network.py
-valid_result="$(printf '%s\n' '{"vpc_cidr":"10.241.1.0/24","vpn_cidr":"10.242.10.0/24","future_multihop_cidr":"10.242.30.0/24","operator_cidrs_json":"[\"198.51.100.10/32\"]"}' | scripts/validate-network-plan.py)"
+valid_result="$(printf '%s\n' '{"vpc_cidr":"10.241.1.0/24","vpn_cidr":"10.242.10.0/24","future_multihop_cidr":"10.242.30.0/24","transit_cidr":"10.242.40.0/29","operator_cidrs_json":"[\"198.51.100.10/32\"]"}' | scripts/validate-network-plan.py)"
 [[ "${valid_result}" == *'"valid": "true"'* ]] || {
     printf '%s\n' 'CIDR validator rejected the known-good fixture.' >&2
     exit 1
 }
-invalid_result="$(printf '%s\n' '{"vpc_cidr":"10.242.10.0/25","vpn_cidr":"10.242.10.0/24","future_multihop_cidr":"10.242.30.0/24","operator_cidrs_json":"[]"}' | scripts/validate-network-plan.py)"
+invalid_result="$(printf '%s\n' '{"vpc_cidr":"10.242.10.0/25","vpn_cidr":"10.242.10.0/24","future_multihop_cidr":"10.242.30.0/24","transit_cidr":"10.242.40.0/29","operator_cidrs_json":"[]"}' | scripts/validate-network-plan.py)"
 [[ "${invalid_result}" == *'"valid": "false"'* ]] || {
     printf '%s\n' 'CIDR validator accepted an overlapping fixture.' >&2
     exit 1
 }
-ipv6_result="$(printf '%s\n' '{"vpc_cidr":"2001:db8:100::/56","vpn_cidr":"fd12:3456:789a:20::/64","future_multihop_cidr":"","operator_cidrs_json":"[\"2001:db8:ffff::/64\"]"}' | scripts/validate-network-plan.py)"
+ipv6_result="$(printf '%s\n' '{"vpc_cidr":"2001:db8:100::/56","vpn_cidr":"fd12:3456:789a:20::/64","future_multihop_cidr":"fd12:3456:789a:30::/64","transit_cidr":"fd12:3456:789a:40::/64","operator_cidrs_json":"[\"2001:db8:ffff::/64\"]"}' | scripts/validate-network-plan.py)"
 [[ "${ipv6_result}" == *'"valid": "true"'* ]] || {
     printf '%s\n' 'CIDR validator rejected the known-good IPv6 fixture.' >&2
     exit 1
 }
-invalid_ipv6_result="$(printf '%s\n' '{"vpc_cidr":"2001:db8:100::/56","vpn_cidr":"fd12:3456:789a:20::/64","future_multihop_cidr":"","operator_cidrs_json":"[\"fd12:3456:789a:20::1/128\"]"}' | scripts/validate-network-plan.py)"
+invalid_ipv6_result="$(printf '%s\n' '{"vpc_cidr":"2001:db8:100::/56","vpn_cidr":"fd12:3456:789a:20::/64","future_multihop_cidr":"fd12:3456:789a:30::/64","transit_cidr":"fd12:3456:789a:40::/64","operator_cidrs_json":"[\"fd12:3456:789a:20::1/128\"]"}' | scripts/validate-network-plan.py)"
 [[ "${invalid_ipv6_result}" == *'"valid": "false"'* ]] || {
     printf '%s\n' 'CIDR validator accepted an overlapping IPv6 fixture.' >&2
     exit 1

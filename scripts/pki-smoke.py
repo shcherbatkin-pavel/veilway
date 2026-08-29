@@ -2,6 +2,7 @@
 """Exercise the operator PKI lifecycle entirely in a temporary repository."""
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -25,6 +26,14 @@ PROFILE_NAMES = (
     "iphone-yc-direct",
     "ubuntu-aws-direct",
     "iphone-aws-direct",
+    "ubuntu-yc-aws-multihop",
+    "iphone-yc-aws-multihop",
+)
+SERVER_MODES = (
+    "yc-direct",
+    "aws-direct",
+    "yc-multihop-ingress",
+    "aws-transit",
 )
 
 
@@ -35,7 +44,9 @@ def require_command(name):
 
 def prepare_test_repository(root):
     for relative in (
+        ".gitignore",
         "scripts/veilway-pki",
+        "scripts/verify-client-profiles",
         "pki/openssl-ca.cnf",
         "operator-config/endpoints.conf.example",
     ):
@@ -44,12 +55,26 @@ def prepare_test_repository(root):
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
 
+    subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)
+
     (root / "operator-config/endpoints.conf").write_text(
         "yc_direct_endpoint=192.0.2.10\n"
         "aws_direct_endpoint=192.0.2.20\n",
         encoding="utf-8",
     )
     os.chmod(root / "operator-config/endpoints.conf", 0o600)
+
+    for cloud, endpoint in (
+        ("yandex", "192.0.2.10"),
+        ("aws", "192.0.2.20"),
+    ):
+        state_path = root / "infra" / cloud / "terraform.tfstate"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps({"outputs": {"public_ipv4": {"value": endpoint}}}),
+            encoding="utf-8",
+        )
+        os.chmod(state_path, 0o600)
 
 
 def run_cli(root, passphrase, *arguments):
@@ -102,6 +127,17 @@ def validate_profiles(root):
         if stat.S_IMODE(profile_path.stat().st_mode) != 0o600:
             raise RuntimeError(f"profile mode is not 0600: {profile_path.name}")
         profile_text = profile_path.read_text(encoding="utf-8")
+        expected_port = 1195 if profile_name.endswith("yc-aws-multihop") else 1194
+        endpoint = "192.0.2.20" if profile_name.endswith("aws-direct") else "192.0.2.10"
+        if profile_text.count(f"remote {endpoint} {expected_port}\n") != 1:
+            raise RuntimeError(f"profile remote is invalid: {profile_path.name}")
+        expected_server = (
+            "yc-multihop-ingress"
+            if profile_name.endswith("yc-aws-multihop")
+            else profile_name.split("-", maxsplit=1)[1]
+        )
+        if profile_text.count(f"verify-x509-name {expected_server} name\n") != 1:
+            raise RuntimeError(f"profile server identity is invalid: {profile_path.name}")
         certificate_hashes.add(
             hashlib.sha256(inline_section(profile_text, "cert")).digest()
         )
@@ -113,6 +149,69 @@ def validate_profiles(root):
         raise RuntimeError("client certificates are not unique")
     if len(tls_key_hashes) != len(PROFILE_NAMES):
         raise RuntimeError("tls-crypt-v2 client keys are not unique")
+
+
+def validate_transit_identity(root):
+    transit_dir = root / "secrets/pki/endpoints/yc-transit"
+    certificate = transit_dir / "client.crt"
+    private_key = transit_dir / "client.key"
+    tls_key = transit_dir / "tls-crypt-v2-client.key"
+    expected_modes = {
+        certificate: 0o644,
+        private_key: 0o600,
+        tls_key: 0o600,
+    }
+    for path, expected_mode in expected_modes.items():
+        if not path.is_file() or path.is_symlink():
+            raise RuntimeError(f"missing transit identity file: {path.name}")
+        if stat.S_IMODE(path.stat().st_mode) != expected_mode:
+            raise RuntimeError(f"invalid transit identity mode: {path.name}")
+
+    verify = subprocess.run(
+        [
+            "openssl",
+            "verify",
+            "-purpose",
+            "sslclient",
+            "-CAfile",
+            str(root / "secrets/pki/ca/ca.crt"),
+            str(certificate),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if verify.returncode != 0:
+        raise RuntimeError("transit client certificate validation failed")
+
+    certificate_public_key = subprocess.run(
+        ["openssl", "x509", "-in", str(certificate), "-pubkey", "-noout"],
+        capture_output=True,
+        check=True,
+    ).stdout
+    private_public_key = subprocess.run(
+        ["openssl", "pkey", "-in", str(private_key), "-pubout"],
+        capture_output=True,
+        check=True,
+    ).stdout
+    if certificate_public_key != private_public_key:
+        raise RuntimeError("transit certificate and private key do not match")
+
+
+def run_profile_validator(root, *arguments):
+    result = subprocess.run(
+        [str(root / "scripts/verify-client-profiles"), *arguments],
+        cwd=root,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "profile validator failed"
+            + (f": {result.stderr.strip()}" if result.stderr.strip() else "")
+        )
 
 
 def validate_revocation(root):
@@ -135,6 +234,7 @@ def validate_revocation(root):
 
 
 def main():
+    require_command("git")
     require_command("docker")
     require_command("openssl")
     subprocess.run(
@@ -149,8 +249,9 @@ def main():
         root = Path(temporary)
         prepare_test_repository(root)
         run_cli(root, passphrase, "init")
-        for mode in ("yc-direct", "aws-direct"):
+        for mode in SERVER_MODES:
             run_cli(root, passphrase, "server", "create", "--mode", mode)
+        run_cli(root, passphrase, "transit", "create")
         for profile_name in PROFILE_NAMES:
             device, mode = profile_name.split("-", maxsplit=1)
             run_cli(
@@ -163,7 +264,25 @@ def main():
                 "--mode",
                 mode,
             )
+        for profile_name in PROFILE_NAMES:
+            if not profile_name.endswith("aws-direct"):
+                continue
+            profile_path = root / "client-profiles" / f"{profile_name}.ovpn"
+            profile_text = profile_path.read_text(encoding="utf-8")
+            profile_path.write_text(
+                profile_text.replace(
+                    "remote 192.0.2.20 1194\n",
+                    "remote 192.0.2.20 443\n",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            os.chmod(profile_path, 0o600)
+        run_cli(root, passphrase, "profile", "update-remote", "--mode", "aws-direct")
         validate_profiles(root)
+        validate_transit_identity(root)
+        run_profile_validator(root, "--direct-only")
+        run_profile_validator(root)
         run_cli(
             root,
             passphrase,
@@ -174,7 +293,9 @@ def main():
         )
         validate_revocation(root)
 
-    print("pki-smoke.py: temporary four-profile lifecycle and revocation passed")
+    print(
+        "pki-smoke.py: temporary six-profile, transit, and revocation lifecycle passed"
+    )
 
 
 if __name__ == "__main__":

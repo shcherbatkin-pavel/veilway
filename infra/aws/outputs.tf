@@ -27,6 +27,30 @@ output "vpn_ula_cidr" {
   sensitive   = true
 }
 
+output "multihop_ipv4_cidr" {
+  description = "IPv4 client pool routed through the Yandex-to-AWS multi-hop path."
+  value       = var.future_multihop_cidr
+  sensitive   = true
+}
+
+output "multihop_ipv6_cidr" {
+  description = "Persistent generated ULA /64 for multi-hop clients."
+  value       = local.multihop_ipv6_cidr
+  sensitive   = true
+}
+
+output "transit_ipv4_cidr" {
+  description = "IPv4 network used only by the Yandex-to-AWS transit tunnel."
+  value       = var.transit_ipv4_cidr
+  sensitive   = true
+}
+
+output "transit_ipv6_cidr" {
+  description = "Persistent generated ULA /64 used only by the Yandex-to-AWS transit tunnel."
+  value       = local.transit_ipv6_cidr
+  sensitive   = true
+}
+
 output "vpc_cidr" {
   value     = var.vpc_cidr
   sensitive = true

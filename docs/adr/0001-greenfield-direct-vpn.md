@@ -1,6 +1,6 @@
 # ADR 0001: Greenfield Direct VPN architecture
 
-- Status: Accepted for implementation
+- Status: Accepted; multi-hop reservation extended by ADR 0003
 - Date: 2026-08-20
 
 ## Context
@@ -36,8 +36,9 @@ drop, and `KILL` so PID 1 can forward stop signals afterward. It drops every
 other capability and uses a read-only root filesystem.
 
 Both nodes listen for OpenVPN/UDP on port 1194 over their static public IPv4.
-UDP/1195 on Yandex and UDP/1196 on AWS are reserved for future multi-hop use but
-remain closed. SSH is allowed only from an operator-provided CIDR list.
+This ADR originally reserved UDP/1195 on Yandex and UDP/1196 on AWS without
+opening them. ADR 0003 later activated those ports for the separately accepted
+multi-hop phase. SSH is allowed only from an operator-provided CIDR list.
 
 AWS enables only the minimum IMDS configuration needed for Ubuntu cloud-init
 to install the selected EC2 public SSH key on first boot: IMDSv2 tokens are
@@ -52,13 +53,19 @@ The address plan is:
 | --- | --- |
 | `yc-direct` clients | `10.242.10.0/24` |
 | `aws-direct` clients | `10.242.20.0/24` |
-| Future multi-hop clients | `10.242.30.0/24` |
+| Multi-hop clients, reserved by this ADR | `10.242.30.0/24` |
 | AWS IPv6 clients | deployment-generated ULA `/64` from a persistent `/48` |
 
 Preflight validation rejects overlaps between VPN pools, VPC CIDRs, and each
 other. Forwarding to private, link-local, metadata, multicast, and reserved
 destinations is denied before general internet egress. IPv4 uses masquerading
 on both nodes. AWS also uses NAT66 from its client ULA to the VM's public IPv6.
+The exact public IPv6 assigned to the AWS ENI is transferred only through the
+protected Terraform state and ignored Ansible inventory, then configured as a
+`/128` by a managed Netplan overlay. `systemd-networkd` processes router
+advertisements in userspace to install the default route, while kernel RA and
+SLAAC remain disabled. The server address does not depend on DHCPv6. Inventory
+must therefore be regenerated after AWS instance replacement.
 
 `yc-direct` pushes an IPv4 default route, tunnel DNS, and IPv6 blocking.
 `aws-direct` pushes IPv4 and IPv6 defaults and tunnel DNS. Both modes push
@@ -79,8 +86,8 @@ Terraform state are local sensitive artifacts excluded from Git.
 - Yandex direct mode cannot provide IPv6 egress and must fail closed for IPv6.
 - Host networking makes nftables and sysctl part of the deployment contract,
   but avoids ambiguous Docker bridge and NAT interaction.
-- Multi-hop can later add separate OpenVPN instances and policy routing without
-  changing the direct address pools or public ports.
+- ADR 0003 later added separate OpenVPN instances and policy routing without
+  changing the direct address pools or Direct public ports.
 - The old OpenVPN Access Server remains outside all state, inventory, playbooks,
   and rollback procedures.
 

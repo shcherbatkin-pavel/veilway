@@ -10,6 +10,7 @@ data "external" "network_validation" {
     vpc_cidr             = var.vpc_cidr
     vpn_cidr             = var.vpn_ipv4_cidr
     future_multihop_cidr = var.future_multihop_cidr
+    transit_cidr         = var.transit_ipv4_cidr
     operator_cidrs_json  = jsonencode(var.operator_cidrs)
   }
 }
@@ -66,6 +67,17 @@ resource "yandex_vpc_security_group" "vpn" {
     protocol       = "UDP"
     port           = 1194
     v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  dynamic "ingress" {
+    for_each = var.enable_multihop ? [true] : []
+
+    content {
+      description    = "OpenVPN multi-hop ingress"
+      protocol       = "UDP"
+      port           = 1195
+      v4_cidr_blocks = ["0.0.0.0/0"]
+    }
   }
 
   ingress {

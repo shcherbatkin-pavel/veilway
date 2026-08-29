@@ -2,6 +2,11 @@ aws_account_id    = "123456789012"
 aws_region        = "eu-central-1"
 availability_zone = "eu-central-1a"
 
+# Replace with the static public IPv4 output of the Yandex Terraform root.
+# The /32 prevents any other source from reaching the AWS transit listener.
+enable_multihop         = false
+yc_transit_source_cidr = "192.0.2.10/32"
+
 operator_cidrs = {
   ipv4 = ["198.51.100.10/32"]
   ipv6 = []
@@ -14,3 +19,4 @@ ssh_public_key = "ssh-ed25519 REPLACE_WITH_OPERATOR_PUBLIC_KEY"
 vpc_cidr             = "10.241.2.0/24"
 vpn_ipv4_cidr        = "10.242.20.0/24"
 future_multihop_cidr = "10.242.30.0/24"
+transit_ipv4_cidr    = "10.242.40.0/29"

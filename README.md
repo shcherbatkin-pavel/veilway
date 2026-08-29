@@ -1,12 +1,13 @@
 # Veilway
 
-Veilway is a self-hosted VPN service with a planned web interface and optional
-multi-hop routing.
+Veilway is a self-hosted VPN service with Direct and fail-closed multi-hop
+routing and a planned private web interface.
 
 The prototype targets one user with an Ubuntu laptop and an iPhone. It deploys
 OpenVPN 2.6 containers to new, dedicated Ubuntu 24.04 LTS virtual machines in
-Yandex Cloud and AWS. The first MVP provides direct internet access through
-either provider. A multi-hop path and private web panel are later phases.
+Yandex Cloud and AWS. The implemented modes provide direct internet access
+through either provider and a Yandex-ingress, AWS-egress multi-hop path. The
+private web panel remains a later phase.
 
 ## Current iteration
 
@@ -20,13 +21,16 @@ unchanged.
 - [Prototype requirements](docs/requirements.md)
 - [Development roadmap](docs/roadmap.md)
 - [Greenfield architecture ADR](docs/adr/0001-greenfield-direct-vpn.md)
+- [Rejected AWS UDP/443 trial ADR](docs/adr/0002-aws-direct-udp-443.md)
+- [Fail-closed multi-hop ADR](docs/adr/0003-yc-aws-fail-closed-multihop.md)
 - [Deployment guide](docs/deployment.md)
 - [Safe VM audit guide](docs/audit.md)
 
 Run `./scripts/check.sh` for local static checks and
 `./scripts/container-smoke.sh` after building the pinned application image.
-`./scripts/pki-smoke.py` exercises all four profile identities and revocation
-using temporary test-only key material.
+`./scripts/pki-smoke.py` exercises all six profile identities, the transit
+identity, remote-update behavior, and revocation using temporary test-only key
+material.
 
 ## Safety status
 

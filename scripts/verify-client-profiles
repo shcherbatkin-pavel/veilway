@@ -11,11 +11,15 @@ readonly PROFILES_DIR="${REPOSITORY_ROOT}/client-profiles"
 readonly ENDPOINT_CONFIG="${REPOSITORY_ROOT}/operator-config/endpoints.conf"
 readonly CA_CERTIFICATE="${REPOSITORY_ROOT}/secrets/pki/ca/ca.crt"
 readonly CRL_FILE="${REPOSITORY_ROOT}/secrets/pki/crl.pem"
-readonly -a PROFILE_NAMES=(
+readonly -a DIRECT_PROFILE_NAMES=(
     ubuntu-yc-direct
     iphone-yc-direct
     ubuntu-aws-direct
     iphone-aws-direct
+)
+readonly -a MULTIHOP_PROFILE_NAMES=(
+    ubuntu-yc-aws-multihop
+    iphone-yc-aws-multihop
 )
 temporary_directory=""
 
@@ -85,14 +89,27 @@ cleanup() {
 }
 
 main() {
-    local profile_name profile_path mode endpoint expected_remote
+    local profile_name profile_path mode endpoint port expected_remote
     local certificate_file private_key_file
     local certificate_public_key private_public_key
+    local transit_directory transit_certificate transit_private_key transit_tls_key
     local yc_endpoint aws_endpoint yc_state_endpoint aws_state_endpoint
     local expected_ca_hash
+    local expected_profile_count discovered_profile_count discovered_profile_path
+    local discovered_profile_name
+    local -a profile_names=("${DIRECT_PROFILE_NAMES[@]}")
     local -A certificate_hashes=()
     local -A private_key_hashes=()
     local -A tls_key_hashes=()
+
+    if [[ $# -eq 1 && "$1" == '--direct-only' ]]; then
+        expected_profile_count=4
+    elif [[ $# -eq 0 ]]; then
+        profile_names+=("${MULTIHOP_PROFILE_NAMES[@]}")
+        expected_profile_count=6
+    else
+        fail "usage: ${PROGRAM_NAME} [--direct-only]"
+    fi
 
     for command_name in awk chmod cmp find git grep mktemp openssl python3 rm sed sha256sum stat wc; do
         require_command "${command_name}"
@@ -110,8 +127,24 @@ main() {
         || fail "CA certificate is missing or symlinked"
     [[ -f "${CRL_FILE}" && ! -L "${CRL_FILE}" ]] \
         || fail "CRL is missing or symlinked"
-    [[ "$(find "${PROFILES_DIR}" -maxdepth 1 -name '*.ovpn' | wc -l)" -eq 4 ]] \
-        || fail "expected exactly four client profiles"
+    discovered_profile_count="$(find "${PROFILES_DIR}" -maxdepth 1 -name '*.ovpn' | wc -l)"
+    if [[ "${expected_profile_count}" -eq 4 ]]; then
+        [[ "${discovered_profile_count}" -eq 4 || "${discovered_profile_count}" -eq 6 ]] \
+            || fail "expected four Direct profiles and optionally two multi-hop profiles"
+    else
+        [[ "${discovered_profile_count}" -eq 6 ]] \
+            || fail "expected exactly six client profiles"
+    fi
+    while IFS= read -r discovered_profile_path; do
+        discovered_profile_name="${discovered_profile_path##*/}"
+        case "${discovered_profile_name}" in
+            ubuntu-yc-direct.ovpn|iphone-yc-direct.ovpn|ubuntu-aws-direct.ovpn|iphone-aws-direct.ovpn|ubuntu-yc-aws-multihop.ovpn|iphone-yc-aws-multihop.ovpn)
+                ;;
+            *)
+                fail "unexpected client profile: ${discovered_profile_name}"
+                ;;
+        esac
+    done < <(find "${PROFILES_DIR}" -maxdepth 1 -name '*.ovpn' -print)
 
     yc_endpoint="$(read_endpoint yc_direct_endpoint)" \
         || fail "invalid yc_direct_endpoint"
@@ -137,7 +170,7 @@ main() {
             "${CA_CERTIFICATE}" | sha256sum | awk '{ print $1 }'
     )"
 
-    for profile_name in "${PROFILE_NAMES[@]}"; do
+    for profile_name in "${profile_names[@]}"; do
         profile_path="${PROFILES_DIR}/${profile_name}.ovpn"
         [[ -f "${profile_path}" && ! -L "${profile_path}" ]] \
             || fail "missing regular profile: ${profile_name}"
@@ -150,19 +183,29 @@ main() {
             *-yc-direct)
                 mode="yc-direct"
                 endpoint="${yc_endpoint}"
+                port=1194
                 grep -Fxq -- 'block-ipv6' "${profile_path}" \
                     || fail "yc-direct profile does not block IPv6: ${profile_name}"
                 ;;
             *-aws-direct)
                 mode="aws-direct"
                 endpoint="${aws_endpoint}"
+                port=1194
                 if grep -Fxq -- 'block-ipv6' "${profile_path}"; then
                     fail "aws-direct profile unexpectedly blocks IPv6: ${profile_name}"
                 fi
                 ;;
+            *-yc-aws-multihop)
+                mode="yc-multihop-ingress"
+                endpoint="${yc_endpoint}"
+                port=1195
+                if grep -Fxq -- 'block-ipv6' "${profile_path}"; then
+                    fail "multi-hop profile unexpectedly blocks IPv6: ${profile_name}"
+                fi
+                ;;
         esac
 
-        expected_remote="remote ${endpoint} 1194"
+        expected_remote="remote ${endpoint} ${port}"
         [[ "$(grep -Fxc -- "${expected_remote}" "${profile_path}")" -eq 1 ]] \
             || fail "profile has an unexpected endpoint: ${profile_name}"
         grep -Fxq -- 'proto udp4' "${profile_path}" \
@@ -214,17 +257,71 @@ main() {
         tls_key_hashes["$(section_hash tls-crypt-v2 "${profile_path}")"]=1
     done
 
-    [[ "${#certificate_hashes[@]}" -eq 4 ]] \
+    if [[ "${expected_profile_count}" -eq 6 ]]; then
+        transit_directory="${REPOSITORY_ROOT}/secrets/pki/endpoints/yc-transit"
+        transit_certificate="${transit_directory}/client.crt"
+        transit_private_key="${transit_directory}/client.key"
+        transit_tls_key="${transit_directory}/tls-crypt-v2-client.key"
+        [[ -d "${transit_directory}" && ! -L "${transit_directory}" ]] \
+            || fail 'transit identity directory is missing or symlinked'
+        [[ "$(stat -c '%a' -- "${transit_directory}")" == '700' ]] \
+            || fail 'transit identity directory mode must be 0700'
+        for profile_path in "${transit_certificate}" "${transit_private_key}" "${transit_tls_key}"; do
+            [[ -f "${profile_path}" && ! -L "${profile_path}" ]] \
+                || fail 'transit identity file is missing or symlinked'
+            git check-ignore --quiet --no-index -- "${profile_path}" \
+                || fail 'transit identity file is not ignored by Git'
+        done
+        [[ "$(stat -c '%a' -- "${transit_certificate}")" == '644' ]] \
+            || fail 'transit certificate mode must be 0644'
+        [[ "$(stat -c '%a' -- "${transit_private_key}")" == '600' ]] \
+            || fail 'transit private key mode must be 0600'
+        [[ "$(stat -c '%a' -- "${transit_tls_key}")" == '600' ]] \
+            || fail 'transit tls-crypt-v2 key mode must be 0600'
+        grep -Fq -- '-----BEGIN OpenVPN tls-crypt-v2 client key-----' \
+            "${transit_tls_key}" \
+            || fail 'transit tls-crypt-v2 key is invalid'
+        openssl verify \
+            -crl_check \
+            -purpose sslclient \
+            -CAfile "${CA_CERTIFICATE}" \
+            -CRLfile "${CRL_FILE}" \
+            "${transit_certificate}" >/dev/null 2>&1 \
+            || fail 'transit client certificate or CRL validation failed'
+        openssl x509 \
+            -in "${transit_certificate}" \
+            -noout \
+            -checkhost yc-transit >/dev/null 2>&1 \
+            || fail 'transit client certificate identity is invalid'
+        openssl x509 \
+            -in "${transit_certificate}" \
+            -pubkey \
+            -noout \
+            | openssl pkey -pubin -outform DER \
+                > "${temporary_directory}/yc-transit.cert.pub" 2>/dev/null
+        openssl pkey \
+            -in "${transit_private_key}" \
+            -pubout \
+            -outform DER > "${temporary_directory}/yc-transit.key.pub" 2>/dev/null
+        cmp -s -- \
+            "${temporary_directory}/yc-transit.cert.pub" \
+            "${temporary_directory}/yc-transit.key.pub" \
+            || fail 'transit certificate and private key do not match'
+        printf '%s\n' 'Yandex-to-AWS transit identity validation: passed'
+    fi
+
+    [[ "${#certificate_hashes[@]}" -eq "${expected_profile_count}" ]] \
         || fail "client certificates are not unique"
-    [[ "${#private_key_hashes[@]}" -eq 4 ]] \
+    [[ "${#private_key_hashes[@]}" -eq "${expected_profile_count}" ]] \
         || fail "client private keys are not unique"
-    [[ "${#tls_key_hashes[@]}" -eq 4 ]] \
+    [[ "${#tls_key_hashes[@]}" -eq "${expected_profile_count}" ]] \
         || fail "tls-crypt-v2 client keys are not unique"
 
     printf '%s\n' 'client profile files and permissions: passed'
     printf '%s\n' 'client profile endpoints and routing policy: passed'
     printf '%s\n' 'client certificate, key, and CRL validation: passed'
-    printf '%s\n' 'four unique client identities and tls-crypt-v2 keys: passed'
+    printf '%s unique client identities and tls-crypt-v2 keys: passed\n' \
+        "${expected_profile_count}"
 }
 
 main "$@"

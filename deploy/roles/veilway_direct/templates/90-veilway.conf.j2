@@ -2,11 +2,18 @@
 net.ipv4.ip_forward = 1
 net.ipv4.conf.all.rp_filter = 2
 net.ipv4.conf.default.rp_filter = 2
-{% if veilway_enable_ipv6 %}
+{% if veilway_enable_ipv6 or veilway_multihop_enabled %}
 net.ipv6.conf.all.forwarding = 1
 net.ipv6.conf.default.forwarding = 1
-net.ipv6.conf.all.accept_ra = 2
-net.ipv6.conf.default.accept_ra = 2
+net.ipv6.conf.all.accept_ra = 0
+net.ipv6.conf.default.accept_ra = 0
+{% if veilway_enable_ipv6 %}
+# systemd-networkd is the sole RA owner through the managed Netplan overlay.
+# Keep the kernel RA and SLAAC implementations disabled on the cloud interface.
+net.ipv6.conf.{{ ansible_facts['default_ipv4']['interface'] }}.disable_ipv6 = 0
+net.ipv6.conf.{{ ansible_facts['default_ipv4']['interface'] }}.accept_ra = 0
+net.ipv6.conf.{{ ansible_facts['default_ipv4']['interface'] }}.autoconf = 0
+{% endif %}
 {% else %}
 net.ipv6.conf.all.forwarding = 0
 net.ipv6.conf.default.forwarding = 0

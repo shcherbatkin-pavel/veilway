@@ -16,6 +16,9 @@ from typing import Any
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 INVENTORY_PATH = REPOSITORY_ROOT / "deploy" / "inventory.yml"
 ENDPOINT_CONFIG = REPOSITORY_ROOT / "operator-config" / "endpoints.conf"
+OPENVPN_PORTS = {"yc-direct": 1194, "aws-direct": 1194}
+MULTIHOP_INGRESS_PORT = 1195
+TRANSIT_PORT = 1196
 
 
 class InventoryError(RuntimeError):
@@ -130,6 +133,55 @@ def validate_endpoint(value: Any, label: str) -> str:
     return str(address)
 
 
+def validate_ipv6_address(value: Any, label: str) -> str:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as error:
+        raise InventoryError(f"invalid {label} IPv6 address") from error
+    if address.version != 6 or not address.is_global:
+        raise InventoryError(f"{label} must be a global IPv6 address")
+    return str(address)
+
+
+def rule_port(rule: dict[str, Any]) -> int | None:
+    if isinstance(rule.get("port"), int):
+        return rule["port"]
+    if rule.get("from_port") == rule.get("to_port"):
+        return rule.get("from_port")
+    return None
+
+
+def require_multihop_security_groups(
+    yandex_state: dict[str, Any], aws_state: dict[str, Any], yc_endpoint: str
+) -> None:
+    yandex_sg = resource_attributes(
+        yandex_state, "yandex_vpc_security_group", "vpn"
+    )
+    aws_sg = resource_attributes(aws_state, "aws_security_group", "vpn")
+
+    yandex_rules = [
+        rule
+        for rule in yandex_sg.get("ingress", [])
+        if str(rule.get("protocol", "")).upper() == "UDP"
+        and rule_port(rule) == MULTIHOP_INGRESS_PORT
+        and rule.get("v4_cidr_blocks") == ["0.0.0.0/0"]
+    ]
+    aws_rules = [
+        rule
+        for rule in aws_sg.get("ingress", [])
+        if str(rule.get("protocol", "")).lower() == "udp"
+        and rule_port(rule) == TRANSIT_PORT
+        and rule.get("cidr_blocks") == [f"{yc_endpoint}/32"]
+        and not (rule.get("ipv6_cidr_blocks") or [])
+    ]
+    if len(yandex_rules) != 1:
+        raise InventoryError("Yandex state does not contain public UDP/1195")
+    if len(aws_rules) != 1:
+        raise InventoryError(
+            "AWS state does not restrict UDP/1196 to the Yandex static IPv4"
+        )
+
+
 def read_endpoint_config() -> dict[str, str]:
     require_protected_file(ENDPOINT_CONFIG)
     values: dict[str, str] = {}
@@ -176,13 +228,16 @@ def render_host(
     name: str,
     endpoint: str,
     known_hosts: Path,
+    openvpn_port: int,
     vpc_ipv4: str,
     vpn_ipv4: str,
     operator_ipv4: list[str],
     operator_ipv6: list[str],
     enable_ipv6: bool,
+    public_ipv6: str | None = None,
     vpc_ipv6: str | None = None,
     vpn_ipv6: str | None = None,
+    multihop: dict[str, str] | None = None,
 ) -> list[str]:
     indent = " " * 8
     lines = [
@@ -192,6 +247,7 @@ def render_host(
         f"{indent}  ansible_ssh_common_args: {quoted(f'-o StrictHostKeyChecking=yes -o UserKnownHostsFile={known_hosts}')}",
         f"{indent}  veilway_dedicated_host_ack: true",
         f"{indent}  veilway_mode: {name}",
+        f"{indent}  veilway_openvpn_port: {openvpn_port}",
         f"{indent}  veilway_vpc_ipv4_cidr: {quoted(vpc_ipv4)}",
     ]
     if vpc_ipv6 is not None:
@@ -199,6 +255,8 @@ def render_host(
     lines.append(f"{indent}  veilway_vpn_ipv4_cidr: {quoted(vpn_ipv4)}")
     if vpn_ipv6 is not None:
         lines.append(f"{indent}  veilway_vpn_ipv6_cidr: {quoted(vpn_ipv6)}")
+    if public_ipv6 is not None:
+        lines.append(f"{indent}  veilway_public_ipv6: {quoted(public_ipv6)}")
     lines.append(f"{indent}  veilway_operator_ipv4_cidrs:")
     lines.extend(yaml_list(operator_ipv4, 12))
     lines.append(f"{indent}  veilway_operator_ipv6_cidrs:")
@@ -206,12 +264,45 @@ def render_host(
     lines.append(
         f"{indent}  veilway_enable_ipv6: {'true' if enable_ipv6 else 'false'}"
     )
+    lines.append(
+        f"{indent}  veilway_multihop_enabled: "
+        f"{'true' if multihop is not None else 'false'}"
+    )
+    if multihop is not None:
+        lines.extend(
+            [
+                f"{indent}  veilway_multihop_ingress_port: {MULTIHOP_INGRESS_PORT}",
+                f"{indent}  veilway_transit_port: {TRANSIT_PORT}",
+                f"{indent}  veilway_multihop_ipv4_cidr: {quoted(multihop['ipv4'])}",
+                f"{indent}  veilway_multihop_ipv6_cidr: {quoted(multihop['ipv6'])}",
+                f"{indent}  veilway_transit_ipv4_cidr: {quoted(multihop['transit_ipv4'])}",
+                f"{indent}  veilway_transit_ipv6_cidr: {quoted(multihop['transit_ipv6'])}",
+                f"{indent}  veilway_yc_public_ipv4: {quoted(multihop['yc_endpoint'])}",
+                f"{indent}  veilway_aws_public_ipv4: {quoted(multihop['aws_endpoint'])}",
+            ]
+        )
     return lines
 
 
 def main() -> None:
+    arguments = os.sys.argv[1:]
+    if len(arguments) != len(set(arguments)) or any(
+        argument not in {"--replace", "--enable-multihop"}
+        for argument in arguments
+    ):
+        raise InventoryError(
+            "usage: render-inventory.py [--replace] [--enable-multihop]"
+        )
+    replace = "--replace" in arguments
+    enable_multihop = "--enable-multihop" in arguments
+
     if INVENTORY_PATH.exists() or INVENTORY_PATH.is_symlink():
-        raise InventoryError("inventory.yml already exists; refusing to overwrite it")
+        if not replace:
+            raise InventoryError(
+                "inventory.yml already exists; use --replace after reviewing the change"
+            )
+        require_protected_file(INVENTORY_PATH)
+        require_ignored(INVENTORY_PATH)
     require_ignored(INVENTORY_PATH)
 
     yandex_state = load_state("yandex")
@@ -225,6 +316,50 @@ def main() -> None:
         "aws_direct_endpoint": aws_endpoint,
     }:
         raise InventoryError("endpoint configuration does not match Terraform state")
+
+    multihop: dict[str, str] | None = None
+    if enable_multihop:
+        require_multihop_security_groups(yandex_state, aws_state, yc_endpoint)
+        yc_multihop_ipv4 = validate_network(
+            output_value(yandex_state, "multihop_ipv4_cidr"),
+            4,
+            "Yandex multi-hop VPN",
+        )
+        aws_multihop_ipv4 = validate_network(
+            output_value(aws_state, "multihop_ipv4_cidr"),
+            4,
+            "AWS multi-hop VPN",
+        )
+        yc_transit_ipv4 = validate_network(
+            output_value(yandex_state, "transit_ipv4_cidr"),
+            4,
+            "Yandex transit VPN",
+        )
+        aws_transit_ipv4 = validate_network(
+            output_value(aws_state, "transit_ipv4_cidr"),
+            4,
+            "AWS transit VPN",
+        )
+        if yc_multihop_ipv4 != aws_multihop_ipv4:
+            raise InventoryError("multi-hop IPv4 outputs differ between clouds")
+        if yc_transit_ipv4 != aws_transit_ipv4:
+            raise InventoryError("transit IPv4 outputs differ between clouds")
+        multihop = {
+            "ipv4": yc_multihop_ipv4,
+            "ipv6": validate_network(
+                output_value(aws_state, "multihop_ipv6_cidr"),
+                6,
+                "AWS multi-hop VPN IPv6",
+            ),
+            "transit_ipv4": yc_transit_ipv4,
+            "transit_ipv6": validate_network(
+                output_value(aws_state, "transit_ipv6_cidr"),
+                6,
+                "AWS transit VPN IPv6",
+            ),
+            "yc_endpoint": yc_endpoint,
+            "aws_endpoint": aws_endpoint,
+        }
 
     yc_alias = output_value(yandex_state, "ansible_host_alias")
     aws_alias = output_value(aws_state, "ansible_host_alias")
@@ -244,6 +379,7 @@ def main() -> None:
             name="yc-direct",
             endpoint=yc_endpoint,
             known_hosts=yc_known_hosts,
+            openvpn_port=OPENVPN_PORTS["yc-direct"],
             vpc_ipv4=validate_network(
                 output_value(yandex_state, "vpc_cidr"), 4, "Yandex VPC"
             ),
@@ -253,6 +389,7 @@ def main() -> None:
             operator_ipv4=yc_operator_ipv4,
             operator_ipv6=yc_operator_ipv6,
             enable_ipv6=False,
+            multihop=multihop,
         )
     )
     lines.append("")
@@ -261,6 +398,7 @@ def main() -> None:
             name="aws-direct",
             endpoint=aws_endpoint,
             known_hosts=aws_known_hosts,
+            openvpn_port=OPENVPN_PORTS["aws-direct"],
             vpc_ipv4=validate_network(
                 output_value(aws_state, "vpc_cidr"), 4, "AWS VPC"
             ),
@@ -273,9 +411,13 @@ def main() -> None:
             vpn_ipv6=validate_network(
                 output_value(aws_state, "vpn_ipv6_cidr"), 6, "AWS VPN IPv6"
             ),
+            public_ipv6=validate_ipv6_address(
+                output_value(aws_state, "public_ipv6"), "AWS ENI"
+            ),
             operator_ipv4=aws_operator_ipv4,
             operator_ipv6=aws_operator_ipv6,
             enable_ipv6=True,
+            multihop=multihop,
         )
     )
     inventory_text = "\n".join(lines) + "\n"

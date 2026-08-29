@@ -30,6 +30,7 @@ data "external" "network_validation" {
     vpc_cidr             = var.vpc_cidr
     vpn_cidr             = var.vpn_ipv4_cidr
     future_multihop_cidr = var.future_multihop_cidr
+    transit_cidr         = var.transit_ipv4_cidr
     operator_cidrs_json  = jsonencode(var.operator_cidrs.ipv4)
   }
 }
@@ -43,9 +44,11 @@ resource "random_id" "vpn_ula_global_id" {
 }
 
 locals {
-  vpn_ula_prefix = "fd${substr(random_id.vpn_ula_global_id.hex, 0, 2)}:${substr(random_id.vpn_ula_global_id.hex, 2, 4)}:${substr(random_id.vpn_ula_global_id.hex, 6, 4)}"
-  vpn_ula_cidr   = "${local.vpn_ula_prefix}::/48"
-  vpn_ipv6_cidr  = "${local.vpn_ula_prefix}:20::/64"
+  vpn_ula_prefix     = "fd${substr(random_id.vpn_ula_global_id.hex, 0, 2)}:${substr(random_id.vpn_ula_global_id.hex, 2, 4)}:${substr(random_id.vpn_ula_global_id.hex, 6, 4)}"
+  vpn_ula_cidr       = "${local.vpn_ula_prefix}::/48"
+  vpn_ipv6_cidr      = "${local.vpn_ula_prefix}:20::/64"
+  multihop_ipv6_cidr = "${local.vpn_ula_prefix}:30::/64"
+  transit_ipv6_cidr  = "${local.vpn_ula_prefix}:40::/64"
 }
 
 data "external" "ipv6_network_validation" {
@@ -54,7 +57,8 @@ data "external" "ipv6_network_validation" {
   query = {
     vpc_cidr             = aws_vpc.vpn.ipv6_cidr_block
     vpn_cidr             = local.vpn_ipv6_cidr
-    future_multihop_cidr = ""
+    future_multihop_cidr = local.multihop_ipv6_cidr
+    transit_cidr         = local.transit_ipv6_cidr
     operator_cidrs_json  = jsonencode(var.operator_cidrs.ipv6)
   }
 }
@@ -141,6 +145,18 @@ resource "aws_security_group" "vpn" {
     from_port   = 1194
     to_port     = 1194
     cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  dynamic "ingress" {
+    for_each = var.enable_multihop ? [true] : []
+
+    content {
+      description = "OpenVPN transit from the Yandex static IPv4"
+      protocol    = "udp"
+      from_port   = 1196
+      to_port     = 1196
+      cidr_blocks = [var.yc_transit_source_cidr]
+    }
   }
 
   ingress {

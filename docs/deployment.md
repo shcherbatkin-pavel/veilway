@@ -58,6 +58,64 @@ Repeat separately for `infra/yandex` and `infra/aws`. The two local state files
 are sensitive infrastructure data. Keep them on an encrypted disk with mode
 `0600`; do not publish or commit them.
 
+### Existing AWS endpoint: roll back the rejected UDP/443 trial
+
+ADR 0002 records why moving `aws-direct` to UDP/443 did not restore direct data
+traffic. Restore the Direct baseline with a dedicated plan. The reviewer
+requires exactly one in-place security-group update from UDP/443 to UDP/1194
+and rejects VM replacement or any other managed-resource change:
+
+```sh
+terraform -chdir=infra/aws plan -out=udp1194-rollback.tfplan
+terraform -chdir=infra/aws show -json udp1194-rollback.tfplan \
+    | python3 scripts/review-aws-direct-plan.py --port-rollback
+```
+
+Do not apply that plan until it has been reviewed and explicitly approved.
+After apply, regenerate the protected inventory with the deliberate replace
+flag so both Direct nodes again receive port 1194:
+
+```sh
+./scripts/render-inventory.py --replace
+```
+
+The subsequent Ansible deployment must be limited to `aws-direct`. It restores
+the OpenVPN listener and nftables ingress rule to UDP/1194 and removes the
+trial-only `NET_BIND_SERVICE` capability. The server and profile certificates,
+keys, ciphers, VPN pools, and Yandex node do not change.
+
+### Enable the accepted Yandex-to-AWS multi-hop infrastructure
+
+ADR 0003 adds no VM or network. For the existing deployment, save two separate
+plans that may update only the existing security groups. First plan Yandex:
+
+```sh
+terraform -chdir=infra/yandex plan -out=multihop-ingress.tfplan
+terraform -chdir=infra/yandex show -json multihop-ingress.tfplan \
+    | python3 scripts/review-yandex-multihop-plan.py
+```
+
+The expected summary is `0 to add, 1 to change, 0 to destroy`. The reviewer
+requires public UDP/1195, keeps Direct on UDP/1194, rejects UDP/1196 on Yandex,
+and requires the existing VM and static address to remain unchanged.
+
+Set `enable_multihop = true` in both protected `terraform.tfvars` files. In the
+AWS file, also set `yc_transit_source_cidr` to the Yandex static IPv4 followed
+by `/32`. Do not copy that value into documentation, Git, or a command line.
+Then plan AWS:
+
+```sh
+terraform -chdir=infra/aws plan -out=multihop-transit.tfplan
+terraform -chdir=infra/aws show -json multihop-transit.tfplan \
+    | python3 scripts/review-aws-direct-plan.py --enable-multihop
+```
+
+This plan must also report `0 to add, 1 to change, 0 to destroy`. The reviewer
+requires UDP/1196 from exactly one IPv4 `/32`, keeps public Direct UDP/1194,
+keeps UDP/1195 closed on AWS, and rejects VM or Elastic IP replacement. Apply
+each saved plan only after its output has been reviewed and explicitly
+approved. Re-run a normal plan in each root afterward and require `No changes`.
+
 ## 3. Prepare PKI and local configuration
 
 Build the pinned application image locally:
@@ -98,14 +156,41 @@ Generate the four MVP profiles:
 ./scripts/veilway-pki profile create --device iphone --mode yc-direct
 ./scripts/veilway-pki profile create --device ubuntu --mode aws-direct
 ./scripts/veilway-pki profile create --device iphone --mode aws-direct
+./scripts/verify-client-profiles --direct-only
 ```
 
-Validate the real profiles without printing their keys, certificates,
-fingerprints, or endpoints:
+For the accepted multi-hop phase, create independent endpoint and transit
+identities. These commands do not replace any Direct identity:
 
 ```sh
+./scripts/veilway-pki server create --mode yc-multihop-ingress
+./scripts/veilway-pki server create --mode aws-transit
+./scripts/veilway-pki transit create
+```
+
+The two device profiles are generated only after the multi-hop servers have
+been deployed and verified:
+
+```sh
+./scripts/veilway-pki profile create --device ubuntu --mode yc-aws-multihop
+./scripts/veilway-pki profile create --device iphone --mode yc-aws-multihop
 ./scripts/verify-client-profiles
 ```
+
+New Direct profiles use UDP/1194. To restore the two protected AWS profiles
+created during the rejected UDP/443 trial without reissuing certificates or
+printing embedded key material, run:
+
+```sh
+./scripts/veilway-pki profile update-remote --mode aws-direct
+./scripts/verify-client-profiles --direct-only
+```
+
+The update is atomic per profile, accepts only the known UDP/443-to-UDP/1194
+AWS rollback, preserves mode `0600`, and refuses symlinks, unexpected profile
+identities, or files that are not ignored by Git. Re-import the updated Ubuntu
+profile and replace the iPhone import only after the AWS security group and
+server listener have both returned to UDP/1194.
 
 Review profiles locally before importing them. They contain private keys.
 On Ubuntu, import the profile through NetworkManager so pushed routes and DNS
@@ -125,6 +210,8 @@ nmcli connection modify ubuntu-yc-direct \
   vpn.persistent yes ipv4.dns-priority -50 ipv6.dns-priority -50
 nmcli connection modify ubuntu-aws-direct \
   vpn.persistent yes ipv4.dns-priority -50 ipv6.dns-priority -50
+nmcli connection modify ubuntu-yc-aws-multihop \
+  vpn.persistent yes ipv4.dns-priority -50 ipv6.dns-priority -50
 ```
 
 ## 4. Configure the new VMs
@@ -137,11 +224,34 @@ ansible-galaxy collection install -r deploy/requirements.yml
 
 Generate the ignored `deploy/inventory.yml` from the protected Terraform state,
 endpoint file, and independently verified host-key files. The generator refuses
-to overwrite an existing inventory and does not print addresses or CIDRs:
+to overwrite an existing inventory unless `--replace` is explicitly supplied
+and does not print addresses or CIDRs:
 
 ```sh
 ./scripts/render-inventory.py
 ```
+
+After both multi-hop Terraform applies are complete, enable the feature in the
+protected inventory explicitly:
+
+```sh
+./scripts/render-inventory.py --replace --enable-multihop
+```
+
+The generator refuses this mode unless Yandex state contains public UDP/1195,
+AWS state contains UDP/1196 restricted to the Yandex endpoint `/32`, both roots
+agree on the IPv4 pools, and the persistent AWS ULA outputs are present. It
+also copies the exact Terraform-assigned AWS ENI IPv6 into the protected
+inventory without printing it. Regenerate the inventory after any AWS instance
+replacement so Ansible cannot retain the previous ENI address.
+
+On AWS, Ansible writes that assigned address as `/128` in the protected
+`90-veilway-ipv6.yaml` Netplan overlay. `systemd-networkd` is the sole owner of
+router-advertisement processing for the VPC default route; kernel RA and SLAAC
+are disabled explicitly, including for newly created tunnel interfaces. The
+server address does not depend on DHCPv6. Netplan is validated before it is
+applied; applying a changed overlay can briefly interrupt SSH and requires
+explicit operator approval.
 
 For `aws-direct`, verify and record the ED25519 host key by comparing an SSH
 scan with the authenticated EC2 console output. The script reads the endpoint
@@ -187,7 +297,35 @@ and that the offline CA private key is absent from both VMs:
 ansible-playbook -i deploy/inventory.yml deploy/verify.yml
 ```
 
-The managed firewall keeps two named diagnostic counters for UDP/1194.
+For an IPv6-enabled AWS node, also run the read-only egress diagnostic. It
+validates the exact assigned ENI address, source route, Netplan/sysctl contract,
+AAAA resolution, and IPv6 HTTPS without displaying protected values:
+
+```sh
+ansible-playbook -i deploy/inventory.yml deploy/diagnose-egress.yml --limit aws-direct
+```
+
+Deploy multi-hop in cloud-egress order. Each `site.yml` command changes the
+selected dedicated VM and therefore requires a separate explicit operator
+approval:
+
+```sh
+ansible-playbook -i deploy/inventory.yml deploy/preflight.yml --limit aws-direct
+ansible-playbook -i deploy/inventory.yml deploy/site.yml --limit aws-direct
+ansible-playbook -i deploy/inventory.yml deploy/verify.yml --limit aws-direct
+
+ansible-playbook -i deploy/inventory.yml deploy/preflight.yml --limit yc-direct
+ansible-playbook -i deploy/inventory.yml deploy/site.yml --limit yc-direct
+ansible-playbook -i deploy/inventory.yml deploy/verify.yml --limit yc-direct
+```
+
+On Yandex, Compose starts the transit client first and starts client ingress
+only after that tunnel is healthy. The nftables ruleset never NATs the
+multi-hop pool on Yandex, and source-specific policy tables retain an
+unreachable default below the transit route. Re-run `deploy/site.yml` against
+both hosts afterward and require `changed=0` before client acceptance.
+
+The managed firewall keeps two named diagnostic counters for OpenVPN UDP/1194.
 `openvpn_ingress_raw` has no verdict and observes packets before conntrack
 validity is enforced; `openvpn_ingress` is attached to the later accept rule.
 Both store only aggregate packet and byte totals on the VM and never record
@@ -336,16 +474,24 @@ observed addresses, and disconnects Veilway before returning:
 ```sh
 ./scripts/acceptance-ubuntu-direct --mode yc-direct
 ./scripts/acceptance-ubuntu-direct --mode aws-direct
+./scripts/acceptance-ubuntu-direct --mode yc-aws-multihop
 ```
 
 - On both Ubuntu and iPhone, confirm that DNS uses only the tunnel resolver.
 - In `yc-direct`, confirm the public IPv4 is the Yandex address and IPv6 cannot
   connect while the tunnel is active.
 - In `aws-direct`, confirm both public IPv4 and public IPv6 belong to AWS.
+- In `yc-aws-multihop`, confirm both public addresses belong to AWS and the
+  Yandex address is never observed as egress.
 - Confirm provider-private CIDRs and `169.254.169.254` are unreachable through
   both profiles.
 - Reboot each disposable VM and repeat the connection checks.
-- Confirm both Compose services report `healthy` after startup and reboot.
+- Confirm all expected Compose services report `healthy` after startup and
+  reboot.
+- In a separately approved failure test, stop only the Yandex transit
+  container and confirm the multi-hop profile loses IPv4, IPv6, and DNS while
+  `yc-direct` remains usable. Confirm that no traffic falls back to Yandex
+  egress, then restore the reviewed Compose stack.
 - Revoke one test profile and confirm it cannot reconnect.
 
 Use only operator-approved diagnostic endpoints. Do not publish addresses,

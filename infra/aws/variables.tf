@@ -44,9 +44,36 @@ variable "vpn_ipv4_cidr" {
 }
 
 variable "future_multihop_cidr" {
-  description = "Reserved future multi-hop pool; no route or port is created for it."
+  description = "IPv4 client pool routed through the Yandex-to-AWS multi-hop path."
   type        = string
   default     = "10.242.30.0/24"
+}
+
+variable "transit_ipv4_cidr" {
+  description = "Point-to-point IPv4 network for the Yandex-to-AWS OpenVPN transit."
+  type        = string
+  default     = "10.242.40.0/29"
+}
+
+variable "enable_multihop" {
+  description = "Explicitly open the restricted AWS transit ingress for the accepted multi-hop phase."
+  type        = bool
+  default     = false
+}
+
+variable "yc_transit_source_cidr" {
+  description = "Static public IPv4 of the Yandex node as a canonical /32; the AWS transit listener accepts only this source."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = !var.enable_multihop || (
+      can(regex("^([0-9]{1,3}\\.){3}[0-9]{1,3}/32$", var.yc_transit_source_cidr)) &&
+      can(cidrhost(var.yc_transit_source_cidr, 0))
+    )
+    error_message = "yc_transit_source_cidr must be a valid IPv4 host /32 when enable_multihop is true."
+  }
 }
 
 variable "operator_cidrs" {

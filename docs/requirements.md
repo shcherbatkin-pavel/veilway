@@ -21,10 +21,10 @@ AWS. The prototype is for a single operator and is not a multi-tenant service.
 All modes provide internet access only. They must not grant access to private
 AWS or Yandex Cloud networks.
 
-The Direct VPN MVP implements `yc-direct` and `aws-direct`. It reserves but does
-not open or implement the multi-hop ports. `yc-direct` is IPv4-only and must
-block IPv6 rather than let it bypass the tunnel. `aws-direct` provides IPv4 and
-IPv6 egress.
+The first MVP implements `yc-direct`, `aws-direct`, and the separately accepted
+`yc-aws-multihop` phase. `yc-direct` is IPv4-only and must block IPv6 rather
+than let it bypass the tunnel. `aws-direct` and `yc-aws-multihop` provide IPv4
+and IPv6 egress through AWS.
 
 ## Management and coexistence
 
@@ -50,8 +50,9 @@ IPv6 egress.
   It drops all other capabilities and uses a read-only root filesystem.
 - The host nftables ruleset is the single owner of forwarding and NAT. Docker
   bridge networking and Docker-managed port publishing are not used.
-- SSH ingress is limited to operator-provided CIDRs. UDP port 1194 is the only
-  public VPN port in the Direct MVP.
+- SSH ingress is limited to operator-provided CIDRs. UDP/1194 remains the
+  Direct listener on both VMs. Yandex UDP/1195 is the multi-hop client ingress;
+  AWS UDP/1196 accepts transit only from the Yandex static IPv4 `/32`.
 
 ## VPN and PKI requirements
 
@@ -62,6 +63,8 @@ IPv6 egress.
   operator workstation. The root CA private key must never be copied to a VM.
 - Servers receive only their own key and certificate, the public CA,
   certificate revocation list, and endpoint-specific `tls-crypt-v2` server key.
+- The Yandex transit client receives only its own client key and certificate,
+  public CA, and AWS-transit-specific `tls-crypt-v2` client key.
 - DNS is served locally by Unbound, is reachable only from the VPN tunnel, and
   must not log individual queries.
 
@@ -85,11 +88,11 @@ IPv6 egress.
 - Explicit Ansible deployment for the two new VMs.
 - Compose-managed OpenVPN and Unbound services for both direct modes.
 - Local client-profile creation and revocation tooling.
+- Fail-closed Yandex-to-AWS multi-hop routing and transit-only DNS.
 - Static validation and operator acceptance-test instructions.
 
 ## First-iteration non-goals
 
 - Implementing the web panel or its API.
-- Implementing multi-hop packet forwarding.
 - Migrating or modifying the old VMs or existing OpenVPN Access Server.
 - Automatically applying Terraform or connecting to any VM.

@@ -44,9 +44,21 @@ variable "vpn_ipv4_cidr" {
 }
 
 variable "future_multihop_cidr" {
-  description = "Reserved future multi-hop pool; no route or port is created for it."
+  description = "IPv4 client pool routed through the Yandex-to-AWS multi-hop path."
   type        = string
   default     = "10.242.30.0/24"
+}
+
+variable "transit_ipv4_cidr" {
+  description = "Point-to-point IPv4 network for the Yandex-to-AWS OpenVPN transit."
+  type        = string
+  default     = "10.242.40.0/29"
+}
+
+variable "enable_multihop" {
+  description = "Explicitly open the Yandex client ingress for the accepted multi-hop phase."
+  type        = bool
+  default     = false
 }
 
 variable "operator_cidrs" {

@@ -1,0 +1,5 @@
+# Managed by Veilway. Only the yc-transit certificate may own these routes.
+ifconfig-push {{ veilway_transit_ipv4_cidr | veilway_network_host(2) }} {{ veilway_transit_ipv4_cidr | veilway_network_netmask }}
+ifconfig-ipv6-push {{ veilway_transit_ipv6_cidr | veilway_network_host(2) }}/64 {{ veilway_transit_ipv6_cidr | veilway_network_first_host }}
+iroute {{ veilway_multihop_ipv4_cidr | veilway_network_address }} {{ veilway_multihop_ipv4_cidr | veilway_network_netmask }}
+iroute-ipv6 {{ veilway_multihop_ipv6_cidr }}
