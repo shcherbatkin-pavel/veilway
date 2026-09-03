@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+[ "${dev:-}" = "{{ veilway_transit_tunnel_interface }}" ] || exit 1
+
+/usr/sbin/ip route replace unreachable default metric 42760 table {{ veilway_multihop_route_table_ipv4 }}
+/usr/sbin/ip route replace default dev "${dev}" metric 10 table {{ veilway_multihop_route_table_ipv4 }}
+/usr/sbin/ip -6 route replace unreachable default metric 42760 table {{ veilway_multihop_route_table_ipv6 }}
+/usr/sbin/ip -6 route replace default dev "${dev}" metric 10 table {{ veilway_multihop_route_table_ipv6 }}
+
+/usr/sbin/ip rule show | /usr/bin/grep -Fq -- "from {{ veilway_multihop_ipv4_cidr }} lookup {{ veilway_multihop_route_table_ipv4 }}" \
+    || /usr/sbin/ip rule add priority {{ veilway_multihop_route_priority }} from {{ veilway_multihop_ipv4_cidr }} table {{ veilway_multihop_route_table_ipv4 }}
+/usr/sbin/ip -6 rule show | /usr/bin/grep -Fq -- "from {{ veilway_multihop_ipv6_cidr }} lookup {{ veilway_multihop_route_table_ipv6 }}" \
+    || /usr/sbin/ip -6 rule add priority {{ veilway_multihop_route_priority }} from {{ veilway_multihop_ipv6_cidr }} table {{ veilway_multihop_route_table_ipv6 }}
+
+/usr/sbin/ip route flush cache

@@ -1,0 +1,745 @@
+---
+- name: Verify the deployed Veilway Direct nodes without changing them
+  hosts: direct_vpn
+  become: true
+  gather_facts: false
+  serial: 1
+
+  vars:
+    # This playbook runs independently from the role, so role defaults are not
+    # loaded automatically. Keep the fixed multi-hop routing identifiers here
+    # as explicit verification expectations.
+    veilway_transit_tunnel_interface: tun-transit
+    veilway_multihop_route_table_ipv4: 242
+    veilway_multihop_route_table_ipv6: 243
+    veilway_expected_sysctls_base:
+      - name: net.ipv4.ip_forward
+        value: "1"
+      - name: net.ipv4.conf.all.rp_filter
+        value: "2"
+      - name: net.ipv4.conf.default.rp_filter
+        value: "2"
+    veilway_expected_sysctls_ipv6_enabled:
+      - name: net.ipv6.conf.all.forwarding
+        value: "1"
+      - name: net.ipv6.conf.default.forwarding
+        value: "1"
+      - name: net.ipv6.conf.all.accept_ra
+        value: "0"
+      - name: net.ipv6.conf.default.accept_ra
+        value: "0"
+    veilway_expected_sysctls_ipv6_disabled:
+      - name: net.ipv6.conf.all.forwarding
+        value: "0"
+      - name: net.ipv6.conf.default.forwarding
+        value: "0"
+
+  tasks:
+    - name: Read required systemd service state
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/systemctl
+          - show
+          - "{{ item.name }}"
+          - --property=LoadState
+          - --property=ActiveState
+          - --property=SubState
+          - --property=UnitFileState
+          - --property=Result
+          - --no-pager
+      loop:
+        - name: docker.service
+          substate: running
+        - name: nftables.service
+          substate: exited
+      register: veilway_service_states
+      changed_when: false
+
+    - name: Require Docker and nftables to be running and enabled
+      ansible.builtin.assert:
+        that:
+          - "'LoadState=loaded' in item.stdout_lines"
+          - "'ActiveState=active' in item.stdout_lines"
+          - "('SubState=' ~ item.item.substate) in item.stdout_lines"
+          - "'UnitFileState=enabled' in item.stdout_lines"
+          - "'Result=success' in item.stdout_lines"
+        quiet: true
+      loop: "{{ veilway_service_states.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Validate the deployed Compose model
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/docker
+          - compose
+          - --project-directory
+          - /opt/veilway
+          - --file
+          - /opt/veilway/compose.yaml
+          - config
+          - --quiet
+      changed_when: false
+
+    - name: Require client-side local-network blocking policy
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/grep
+          - --fixed-strings
+          - --quiet
+          - --
+          - >-
+            push "redirect-gateway def1 bypass-dhcp block-local{{
+            ' ipv6' if veilway_enable_ipv6 else '' }}"
+          - /etc/veilway/openvpn/server.conf
+      changed_when: false
+
+    - name: Build the exact expected container name list
+      ansible.builtin.set_fact:
+        veilway_expected_container_names: >-
+          {{
+            ['veilway-openvpn', 'veilway-unbound']
+            + (
+              ['veilway-openvpn-multihop', 'veilway-openvpn-transit']
+              if veilway_multihop_enabled and veilway_mode == 'yc-direct'
+              else []
+            )
+            + (
+              ['veilway-openvpn-transit', 'veilway-unbound-transit']
+              if veilway_multihop_enabled and veilway_mode == 'aws-direct'
+              else []
+            )
+          }}
+
+    - name: Read container runtime metadata
+      ansible.builtin.command:
+        argv: >-
+          {{ ['/usr/bin/docker', 'inspect', '--type', 'container'] +
+          veilway_expected_container_names }}
+      register: veilway_container_inspect
+      changed_when: false
+      no_log: true
+
+    - name: Parse container runtime metadata without displaying it
+      ansible.builtin.set_fact:
+        veilway_containers: "{{ veilway_container_inspect.stdout | from_json }}"
+      no_log: true
+
+    - name: Require exactly the expected containers
+      ansible.builtin.assert:
+        that:
+          - veilway_containers | length == veilway_expected_container_names | length
+          - >-
+            (veilway_containers | map(attribute='Name') | sort | list) ==
+            (veilway_expected_container_names |
+            map('regex_replace', '^', '/') | sort | list)
+        quiet: true
+
+    - name: Select the expected container records without displaying them
+      ansible.builtin.set_fact:
+        veilway_openvpn_runtime: >-
+          {{ veilway_containers |
+          selectattr('Name', 'equalto', '/veilway-openvpn') | first }}
+        veilway_unbound_runtime: >-
+          {{ veilway_containers |
+          selectattr('Name', 'equalto', '/veilway-unbound') | first }}
+      no_log: true
+
+    - name: Build non-sensitive named container checks
+      ansible.builtin.set_fact:
+        veilway_container_runtime_checks:
+          - name: openvpn is running and healthy
+            passed: >-
+              {{ veilway_openvpn_runtime.State.Status == 'running' and
+              veilway_openvpn_runtime.State.Health.Status == 'healthy' }}
+          - name: unbound is running and healthy
+            passed: >-
+              {{ veilway_unbound_runtime.State.Status == 'running' and
+              veilway_unbound_runtime.State.Health.Status == 'healthy' }}
+          - name: both containers use host networking
+            passed: >-
+              {{ veilway_openvpn_runtime.HostConfig.NetworkMode == 'host' and
+              veilway_unbound_runtime.HostConfig.NetworkMode == 'host' }}
+          - name: both container root filesystems are read-only
+            passed: >-
+              {{ veilway_openvpn_runtime.HostConfig.ReadonlyRootfs and
+              veilway_unbound_runtime.HostConfig.ReadonlyRootfs }}
+          - name: neither container is privileged
+            passed: >-
+              {{ not veilway_openvpn_runtime.HostConfig.Privileged and
+              not veilway_unbound_runtime.HostConfig.Privileged }}
+          - name: both containers drop all inherited capabilities
+            passed: >-
+              {{ (veilway_openvpn_runtime.HostConfig.CapDrop |
+              default([], true) | map('regex_replace', '^CAP_', '') | list) ==
+              ['ALL'] and
+              (veilway_unbound_runtime.HostConfig.CapDrop | default([], true) |
+              map('regex_replace', '^CAP_', '') | list) == ['ALL'] }}
+          - name: openvpn has only its required capabilities
+            passed: >-
+              {{ (veilway_openvpn_runtime.HostConfig.CapAdd | default([], true) |
+              map('regex_replace', '^CAP_', '') | sort | list) ==
+              (['KILL', 'NET_ADMIN', 'SETGID', 'SETUID'] | sort) }}
+          - name: unbound has only its required capabilities
+            passed: >-
+              {{ (veilway_unbound_runtime.HostConfig.CapAdd | default([], true) |
+              map('regex_replace', '^CAP_', '') | sort | list) ==
+              (['NET_BIND_SERVICE', 'SETGID', 'SETUID'] | sort) }}
+          - name: both containers enforce no-new-privileges
+            passed: >-
+              {{ (veilway_openvpn_runtime.HostConfig.SecurityOpt |
+              default([], true)) in
+              [['no-new-privileges'], ['no-new-privileges:true']] and
+              (veilway_unbound_runtime.HostConfig.SecurityOpt |
+              default([], true)) in
+              [['no-new-privileges'], ['no-new-privileges:true']] }}
+          - name: both containers restart unless explicitly stopped
+            passed: >-
+              {{ veilway_openvpn_runtime.HostConfig.RestartPolicy.Name ==
+              'unless-stopped' and
+              veilway_unbound_runtime.HostConfig.RestartPolicy.Name ==
+              'unless-stopped' }}
+          - name: both containers use bounded local logging
+            passed: >-
+              {{ veilway_openvpn_runtime.HostConfig.LogConfig.Type == 'local' and
+              veilway_openvpn_runtime.HostConfig.LogConfig.Config['max-size'] ==
+              '10m' and
+              veilway_openvpn_runtime.HostConfig.LogConfig.Config['max-file'] ==
+              '3' and
+              veilway_unbound_runtime.HostConfig.LogConfig.Type == 'local' and
+              veilway_unbound_runtime.HostConfig.LogConfig.Config['max-size'] ==
+              '10m' and
+              veilway_unbound_runtime.HostConfig.LogConfig.Config['max-file'] ==
+              '3' }}
+          - name: openvpn receives only the TUN device
+            passed: >-
+              {{ veilway_openvpn_runtime.HostConfig.Devices |
+              default([], true) | length == 1 and
+              veilway_openvpn_runtime.HostConfig.Devices[0].PathOnHost ==
+              '/dev/net/tun' and
+              veilway_openvpn_runtime.HostConfig.Devices[0].PathInContainer ==
+              '/dev/net/tun' and
+              veilway_openvpn_runtime.HostConfig.Devices[0].CgroupPermissions ==
+              'rwm' }}
+          - name: unbound receives no host devices
+            passed: >-
+              {{ veilway_unbound_runtime.HostConfig.Devices |
+              default([], true) | length == 0 }}
+      no_log: true
+
+    - name: Require healthy hardened host-network containers
+      ansible.builtin.assert:
+        that:
+          - item.passed | bool
+        fail_msg: "Container runtime invariant failed: {{ item.name }}"
+        quiet: true
+      loop: "{{ veilway_container_runtime_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Require baseline hardening on every additional multi-hop container
+      ansible.builtin.assert:
+        that:
+          - item.State.Status == 'running'
+          - item.State.Health.Status == 'healthy'
+          - item.HostConfig.NetworkMode == 'host'
+          - item.HostConfig.ReadonlyRootfs
+          - not item.HostConfig.Privileged
+          - (item.HostConfig.CapDrop | default([], true) | map('regex_replace', '^CAP_', '') | list) == ['ALL']
+          - item.HostConfig.SecurityOpt | default([], true) in [['no-new-privileges'], ['no-new-privileges:true']]
+          - item.HostConfig.RestartPolicy.Name == 'unless-stopped'
+          - item.HostConfig.LogConfig.Type == 'local'
+          - item.HostConfig.LogConfig.Config['max-size'] == '10m'
+          - item.HostConfig.LogConfig.Config['max-file'] == '3'
+        quiet: true
+      loop: >-
+        {{ veilway_containers |
+        rejectattr('Name', 'equalto', '/veilway-openvpn') |
+        rejectattr('Name', 'equalto', '/veilway-unbound') | list }}
+      loop_control:
+        label: "{{ item.Name | regex_replace('^/', '') }}"
+      no_log: true
+      when: veilway_multihop_enabled
+
+    - name: Build the non-sensitive additional capability checks
+      ansible.builtin.set_fact:
+        veilway_additional_capability_checks:
+          - name: Yandex multi-hop ingress server capabilities
+            enabled: "{{ veilway_mode == 'yc-direct' }}"
+            container: veilway-openvpn-multihop
+            capabilities: [KILL, NET_ADMIN, SETGID, SETUID]
+            tun_device: true
+          - name: Yandex transit client capabilities
+            enabled: "{{ veilway_mode == 'yc-direct' }}"
+            container: veilway-openvpn-transit
+            capabilities: [NET_ADMIN]
+            tun_device: true
+          - name: AWS transit server capabilities
+            enabled: "{{ veilway_mode == 'aws-direct' }}"
+            container: veilway-openvpn-transit
+            capabilities: [KILL, NET_ADMIN, SETGID, SETUID]
+            tun_device: true
+          - name: AWS transit resolver capabilities
+            enabled: "{{ veilway_mode == 'aws-direct' }}"
+            container: veilway-unbound-transit
+            capabilities: [NET_BIND_SERVICE, SETGID, SETUID]
+            tun_device: false
+      when: veilway_multihop_enabled
+
+    - name: Select and validate each additional capability allowlist
+      ansible.builtin.assert:
+        that:
+          - matched | length == 1
+          - >-
+            (matched[0].HostConfig.CapAdd | default([], true) |
+            map('regex_replace', '^CAP_', '') | sort | list) ==
+            (item.capabilities | sort)
+          - >-
+            (matched[0].HostConfig.Devices | default([], true) | length) ==
+            (1 if item.tun_device else 0)
+          - >-
+            not item.tun_device or
+            (matched[0].HostConfig.Devices[0].PathOnHost == '/dev/net/tun' and
+            matched[0].HostConfig.Devices[0].PathInContainer == '/dev/net/tun'
+            and matched[0].HostConfig.Devices[0].CgroupPermissions == 'rwm')
+        quiet: true
+      vars:
+        matched: >-
+          {{ veilway_containers |
+          selectattr('Name', 'equalto', '/' ~ item.container) | list }}
+      loop: >-
+        {{ veilway_additional_capability_checks |
+        selectattr('enabled', 'equalto', true) | list }}
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+      when: veilway_multihop_enabled
+
+    - name: Check that Compose created no project bridge network
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/docker
+          - network
+          - ls
+          - --filter
+          - label=com.docker.compose.project=veilway
+          - --quiet
+      register: veilway_project_networks
+      changed_when: false
+
+    - name: Require no Veilway Docker bridge network
+      ansible.builtin.assert:
+        that:
+          - veilway_project_networks.stdout | trim == ''
+
+    - name: Validate the installed nftables file
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/nft
+          - --check
+          - --file
+          - /etc/nftables.conf
+      changed_when: false
+
+    - name: Require the OpenVPN ingress rule to use its named counter
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/grep
+          - --fixed-strings
+          - --quiet
+          - --
+          - counter name openvpn_ingress accept
+          - /etc/nftables.conf
+      changed_when: false
+
+    - name: Require the raw OpenVPN counter before conntrack validation
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - >-
+            from pathlib import Path;
+            text = Path('/etc/nftables.conf').read_text(encoding='utf-8');
+            raw = 'udp dport {{ veilway_openvpn_port }} counter name openvpn_ingress_raw';
+            invalid = 'ct state invalid drop';
+            accepted = 'udp dport {{ veilway_openvpn_port }} counter name openvpn_ingress accept';
+            raise SystemExit(0 if text.index(raw) < text.index(invalid) <
+            text.index(accepted) else 1)
+      changed_when: false
+      no_log: true
+
+    - name: Read only the active OpenVPN ingress counter
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/nft
+          - --json
+          - list
+          - counter
+          - inet
+          - veilway_filter
+          - openvpn_ingress
+      register: veilway_openvpn_ingress_counter_json
+      changed_when: false
+      no_log: true
+
+    - name: Select the active OpenVPN ingress counter without displaying it
+      ansible.builtin.set_fact:
+        veilway_openvpn_ingress_counters: >-
+          {{ (veilway_openvpn_ingress_counter_json.stdout |
+          from_json).nftables |
+          selectattr('counter', 'defined') |
+          map(attribute='counter') |
+          selectattr('family', 'equalto', 'inet') |
+          selectattr('table', 'equalto', 'veilway_filter') |
+          selectattr('name', 'equalto', 'openvpn_ingress') | list }}
+      no_log: true
+
+    - name: Require one valid active OpenVPN ingress counter
+      ansible.builtin.assert:
+        that:
+          - veilway_openvpn_ingress_counters | length == 1
+          - veilway_openvpn_ingress_counters[0].packets is integer
+          - veilway_openvpn_ingress_counters[0].bytes is integer
+          - veilway_openvpn_ingress_counters[0].packets >= 0
+          - veilway_openvpn_ingress_counters[0].bytes >= 0
+        quiet: true
+      no_log: true
+
+    - name: Read only the active raw OpenVPN ingress counter
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/nft
+          - --json
+          - list
+          - counter
+          - inet
+          - veilway_filter
+          - openvpn_ingress_raw
+      register: veilway_openvpn_ingress_raw_counter_json
+      changed_when: false
+      no_log: true
+
+    - name: Select the active raw OpenVPN ingress counter without displaying it
+      ansible.builtin.set_fact:
+        veilway_openvpn_ingress_raw_counters: >-
+          {{ (veilway_openvpn_ingress_raw_counter_json.stdout |
+          from_json).nftables |
+          selectattr('counter', 'defined') |
+          map(attribute='counter') |
+          selectattr('family', 'equalto', 'inet') |
+          selectattr('table', 'equalto', 'veilway_filter') |
+          selectattr('name', 'equalto', 'openvpn_ingress_raw') | list }}
+      no_log: true
+
+    - name: Require one valid active raw OpenVPN ingress counter
+      ansible.builtin.assert:
+        that:
+          - veilway_openvpn_ingress_raw_counters | length == 1
+          - veilway_openvpn_ingress_raw_counters[0].packets is integer
+          - veilway_openvpn_ingress_raw_counters[0].bytes is integer
+          - veilway_openvpn_ingress_raw_counters[0].packets >= 0
+          - veilway_openvpn_ingress_raw_counters[0].bytes >= 0
+        quiet: true
+      no_log: true
+
+    - name: Read active nftables table names
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/nft
+          - list
+          - tables
+      register: veilway_nft_tables
+      changed_when: false
+
+    - name: Require Veilway to be the sole nftables owner
+      ansible.builtin.assert:
+        that:
+          - >-
+            (veilway_nft_tables.stdout_lines | sort) ==
+            ((['table inet veilway_filter', 'table ip veilway_nat4'] +
+            (['table ip6 veilway_nat6'] if veilway_enable_ipv6 else [])) | sort)
+
+    - name: Require fail-closed Yandex multi-hop forwarding policy
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - >-
+            from pathlib import Path;
+            text = Path('/etc/nftables.conf').read_text(encoding='utf-8');
+            required = [
+              'iifname $multihop_if ip daddr @blocked_v4 drop',
+              'iifname $multihop_if oifname $transit_if ip saddr $multihop_v4 accept',
+              'iifname $multihop_if ip6 daddr @blocked_v6 drop',
+              'iifname $multihop_if oifname $transit_if ip6 saddr {{ veilway_multihop_ipv6_cidr }} accept'
+            ];
+            forbidden = [
+              'oifname $wan_if ip saddr $multihop_v4 masquerade',
+              'iifname $multihop_if oifname $wan_if'
+            ];
+            raise SystemExit(0 if all(value in text for value in required)
+            and all(value not in text for value in forbidden) else 1)
+      changed_when: false
+      when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+    - name: Require AWS multi-hop forwarding and NAT policy
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - >-
+            from pathlib import Path;
+            text = Path('/etc/nftables.conf').read_text(encoding='utf-8');
+            required = [
+              'ip saddr {{ veilway_yc_public_ipv4 }} udp dport {{ veilway_transit_port }} counter name transit_ingress accept',
+              'iifname $transit_if ip daddr @blocked_v4 drop',
+              'iifname $transit_if oifname $wan_if ip saddr $multihop_v4 accept',
+              'oifname $wan_if ip saddr $multihop_v4 masquerade',
+              'oifname $wan_if ip6 saddr {{ veilway_multihop_ipv6_cidr }} masquerade'
+            ];
+            raise SystemExit(0 if all(value in text for value in required) else 1)
+      changed_when: false
+      no_log: true
+      when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+
+    - name: Read Yandex multi-hop source policy routes
+      ansible.builtin.command:
+        argv: "{{ item }}"
+      loop:
+        - [/usr/sbin/ip, rule, show]
+        - [/usr/sbin/ip, route, show, table, "{{ veilway_multihop_route_table_ipv4 }}"]
+        - [/usr/sbin/ip, -6, rule, show]
+        - [/usr/sbin/ip, -6, route, show, table, "{{ veilway_multihop_route_table_ipv6 }}"]
+      register: veilway_multihop_policy_routes
+      changed_when: false
+      no_log: true
+      when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+    - name: Build non-sensitive Yandex source policy route checks
+      ansible.builtin.set_fact:
+        veilway_yc_policy_route_checks:
+          - name: IPv4 source policy rule
+            passed: >-
+              {{ 'from ' ~ veilway_multihop_ipv4_cidr ~ ' lookup ' ~
+              veilway_multihop_route_table_ipv4 in
+              veilway_multihop_policy_routes.results[0].stdout }}
+          - name: IPv4 transit default
+            passed: >-
+              {{ 'default dev ' ~ veilway_transit_tunnel_interface in
+              veilway_multihop_policy_routes.results[1].stdout }}
+          - name: IPv4 fail-closed fallback
+            passed: >-
+              {{ 'unreachable default' in
+              veilway_multihop_policy_routes.results[1].stdout }}
+          - name: IPv6 source policy rule
+            passed: >-
+              {{ 'from ' ~ veilway_multihop_ipv6_cidr ~ ' lookup ' ~
+              veilway_multihop_route_table_ipv6 in
+              veilway_multihop_policy_routes.results[2].stdout }}
+          - name: IPv6 transit default
+            passed: >-
+              {{ 'default dev ' ~ veilway_transit_tunnel_interface in
+              veilway_multihop_policy_routes.results[3].stdout }}
+          - name: IPv6 fail-closed fallback
+            passed: >-
+              {{ 'unreachable default' in
+              veilway_multihop_policy_routes.results[3].stdout }}
+      no_log: true
+      when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+    - name: Require active and fail-closed Yandex source policy routes
+      ansible.builtin.assert:
+        that:
+          - item.passed | bool
+        quiet: true
+      loop: "{{ veilway_yc_policy_route_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+    - name: Read AWS routes owned by the exclusive Yandex transit identity
+      ansible.builtin.command:
+        argv: "{{ item }}"
+      loop:
+        - [/usr/sbin/ip, -4, route, show, "{{ veilway_multihop_ipv4_cidr }}"]
+        - [/usr/sbin/ip, -6, route, show, "{{ veilway_multihop_ipv6_cidr }}"]
+      register: veilway_aws_multihop_routes
+      changed_when: false
+      no_log: true
+      when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+
+    - name: Require AWS multi-hop routes to use only the transit tunnel
+      ansible.builtin.assert:
+        that:
+          - veilway_aws_multihop_routes.results[0].stdout | trim | length > 0
+          - veilway_aws_multihop_routes.results[1].stdout | trim | length > 0
+          - "'dev ' ~ veilway_transit_tunnel_interface in veilway_aws_multihop_routes.results[0].stdout"
+          - "'dev ' ~ veilway_transit_tunnel_interface in veilway_aws_multihop_routes.results[1].stdout"
+        quiet: true
+      no_log: true
+      when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+
+    - name: Read the IPv4 route used to identify the cloud interface
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/ip
+          - -4
+          - -json
+          - route
+          - get
+          - 1.1.1.1
+      register: veilway_cloud_interface_route
+      changed_when: false
+      no_log: true
+
+    - name: Require exactly one cloud-interface route
+      ansible.builtin.assert:
+        that:
+          - veilway_cloud_interface_route.stdout | from_json | length == 1
+          - (veilway_cloud_interface_route.stdout | from_json)[0].dev | length > 0
+        quiet: true
+      no_log: true
+
+    - name: Select the cloud interface without displaying it
+      ansible.builtin.set_fact:
+        veilway_cloud_interface: >-
+          {{ (veilway_cloud_interface_route.stdout | from_json)[0].dev }}
+      no_log: true
+
+    - name: Read required sysctl values
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/sysctl
+          - -n
+          - "{{ item.name }}"
+      loop: >-
+        {{ veilway_expected_sysctls_base +
+        (veilway_expected_sysctls_ipv6_enabled if (veilway_enable_ipv6 or veilway_multihop_enabled)
+        else veilway_expected_sysctls_ipv6_disabled) +
+        ([
+          {'name': 'net.ipv6.conf.' ~ veilway_cloud_interface ~ '.disable_ipv6', 'value': '0'},
+          {'name': 'net.ipv6.conf.' ~ veilway_cloud_interface ~ '.accept_ra', 'value': '0'},
+          {'name': 'net.ipv6.conf.' ~ veilway_cloud_interface ~ '.autoconf', 'value': '0'}
+        ] if veilway_enable_ipv6 else []) }}
+      register: veilway_sysctl_values
+      changed_when: false
+
+    - name: Require the deployed forwarding and rp_filter policy
+      ansible.builtin.assert:
+        that:
+          - item.stdout | trim == item.item.value
+      loop: "{{ veilway_sysctl_values.results }}"
+
+    - name: Read the effective Netplan configuration without displaying it
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/netplan
+          - get
+      register: veilway_effective_netplan
+      changed_when: false
+      no_log: true
+      when: veilway_enable_ipv6
+
+    - name: Initialize matching AWS Netplan definitions
+      ansible.builtin.set_fact:
+        veilway_aws_netplan_definitions: []
+      no_log: true
+      when: veilway_enable_ipv6
+
+    - name: Select matching AWS Netplan definitions
+      ansible.builtin.set_fact:
+        veilway_aws_netplan_definitions: >-
+          {{ veilway_aws_netplan_definitions + [item.value] }}
+      loop: >-
+        {{ ((veilway_effective_netplan.stdout | from_yaml)
+        .get('network', {}).get('ethernets', {})) | dict2items }}
+      no_log: true
+      when:
+        - veilway_enable_ipv6
+        - >-
+          item.key == veilway_cloud_interface or
+          item.value.get('set-name', '') == veilway_cloud_interface
+
+    - name: Require the assigned AWS ENI IPv6 in Netplan
+      ansible.builtin.assert:
+        that:
+          - veilway_aws_netplan_definitions | length == 1
+          - >-
+            veilway_public_ipv6 ~ '/128' in
+            (veilway_aws_netplan_definitions |
+            first | default({})).get('addresses', [])
+          - >-
+            (veilway_aws_netplan_definitions |
+            first | default({})).get('accept-ra', false) | bool
+        quiet: true
+      no_log: true
+      when: veilway_enable_ipv6
+
+    - name: Build the deployed endpoint PKI metadata contract
+      ansible.builtin.set_fact:
+        veilway_expected_remote_pki_files: >-
+          {{
+            [
+              {'path': '/etc/veilway/pki/ca.crt', 'mode': '0644', 'group': 'veilway'},
+              {'path': '/etc/veilway/pki/crl.pem', 'mode': '0644', 'group': 'veilway'},
+              {'path': '/etc/veilway/pki/server.crt', 'mode': '0644', 'group': 'veilway'},
+              {'path': '/etc/veilway/pki/server.key', 'mode': '0640', 'group': 'veilway'},
+              {'path': '/etc/veilway/pki/tls-crypt-v2-server.key', 'mode': '0640', 'group': 'veilway'}
+            ]
+            + (
+              [
+                {'path': '/etc/veilway/pki/multihop-ingress/server.crt', 'mode': '0644', 'group': 'veilway'},
+                {'path': '/etc/veilway/pki/multihop-ingress/server.key', 'mode': '0640', 'group': 'veilway'},
+                {'path': '/etc/veilway/pki/multihop-ingress/tls-crypt-v2-server.key', 'mode': '0640', 'group': 'veilway'},
+                {'path': '/etc/veilway/pki/transit-client/client.crt', 'mode': '0644', 'group': 'veilway'},
+                {'path': '/etc/veilway/pki/transit-client/client.key', 'mode': '0640', 'group': 'veilway'},
+                {'path': '/etc/veilway/pki/transit-client/tls-crypt-v2-client.key', 'mode': '0640', 'group': 'veilway'}
+              ]
+              if veilway_multihop_enabled and veilway_mode == 'yc-direct'
+              else []
+            )
+            + (
+              [
+                {'path': '/etc/veilway/pki/transit-server/server.crt', 'mode': '0644', 'group': 'veilway'},
+                {'path': '/etc/veilway/pki/transit-server/server.key', 'mode': '0640', 'group': 'veilway'},
+                {'path': '/etc/veilway/pki/transit-server/tls-crypt-v2-server.key', 'mode': '0640', 'group': 'veilway'}
+              ]
+              if veilway_multihop_enabled and veilway_mode == 'aws-direct'
+              else []
+            )
+          }}
+
+    - name: Read deployed endpoint PKI metadata
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+        get_attributes: false
+        get_checksum: false
+        get_mime: false
+      loop: "{{ veilway_expected_remote_pki_files }}"
+      register: veilway_remote_pki_files
+      no_log: true
+
+    - name: Require protected endpoint-only PKI on the VM
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg | default(false)
+          - not (item.stat.islnk | default(false))
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == item.item.group
+          - item.stat.mode == item.item.mode
+      loop: "{{ veilway_remote_pki_files.results }}"
+      no_log: true
+
+    - name: Check that the offline CA private key is absent
+      ansible.builtin.stat:
+        path: /etc/veilway/pki/ca.key
+        get_attributes: false
+        get_checksum: false
+        get_mime: false
+      register: veilway_remote_ca_private_key
+
+    - name: Require the offline CA private key to remain local
+      ansible.builtin.assert:
+        that:
+          - not veilway_remote_ca_private_key.stat.exists

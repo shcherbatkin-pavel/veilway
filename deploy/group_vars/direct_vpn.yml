@@ -1,0 +1,4 @@
+---
+# Both Direct nodes are dedicated Ubuntu 24.04 hosts. Pin the stable system
+# Python path so Ansible never changes interpreters because of discovery.
+ansible_python_interpreter: /usr/bin/python3

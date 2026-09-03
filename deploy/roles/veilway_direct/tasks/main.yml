@@ -1,0 +1,570 @@
+---
+- name: Run the read-only deployment preflight
+  ansible.builtin.import_tasks: preflight.yml
+
+- name: Finish the role after preflight in Ansible check mode
+  ansible.builtin.meta: end_role
+  when: ansible_check_mode
+
+- name: Install the explicitly required host packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - docker.io
+      - docker-compose-v2
+      - nftables
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the fixed host group matching the OpenVPN container
+  ansible.builtin.group:
+    name: veilway
+    gid: "{{ veilway_openvpn_server_gid }}"
+    system: true
+    state: present
+
+- name: Create application and configuration directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ veilway_install_root }}"
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_install_root }}/image"
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_config_root }}"
+      group: veilway
+      mode: "0750"
+    - path: "{{ veilway_config_root }}/openvpn"
+      group: veilway
+      mode: "0750"
+    - path: "{{ veilway_config_root }}/openvpn/ccd"
+      group: veilway
+      mode: "0750"
+      multihop: true
+    - path: "{{ veilway_config_root }}/pki"
+      group: veilway
+      mode: "0750"
+    - path: "{{ veilway_config_root }}/pki/multihop-ingress"
+      group: veilway
+      mode: "0750"
+      multihop: true
+    - path: "{{ veilway_config_root }}/pki/transit-client"
+      group: veilway
+      mode: "0750"
+      multihop: true
+    - path: "{{ veilway_config_root }}/pki/transit-server"
+      group: veilway
+      mode: "0750"
+      multihop: true
+    - path: "{{ veilway_config_root }}/unbound"
+      group: root
+      mode: "0755"
+  when: not (item.multihop | default(false)) or veilway_multihop_enabled
+
+- name: Disable Docker firewall management on the dedicated host
+  ansible.builtin.template:
+    src: docker-daemon.json.j2
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Docker
+
+- name: Read effective Netplan configuration for IPv6-enabled nodes
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/netplan
+      - get
+  register: veilway_netplan_configuration
+  changed_when: false
+  no_log: true
+  when: veilway_enable_ipv6
+
+- name: Initialize matching cloud-interface Netplan definitions
+  ansible.builtin.set_fact:
+    veilway_netplan_cloud_definitions: []
+  no_log: true
+  when: veilway_enable_ipv6
+
+- name: Select matching cloud-interface Netplan definitions
+  ansible.builtin.set_fact:
+    veilway_netplan_cloud_definitions: >-
+      {{ veilway_netplan_cloud_definitions + [item.key] }}
+  loop: >-
+    {{ ((veilway_netplan_configuration.stdout | from_yaml)
+    .get('network', {}).get('ethernets', {})) | dict2items }}
+  no_log: true
+  when:
+    - veilway_enable_ipv6
+    - >-
+      item.key == ansible_facts['default_ipv4']['interface'] or
+      item.value.get('set-name', '') ==
+      ansible_facts['default_ipv4']['interface']
+
+- name: Require exactly one cloud-interface Netplan definition
+  ansible.builtin.assert:
+    that:
+      - veilway_netplan_cloud_definitions | length == 1
+    quiet: true
+  no_log: true
+  when: veilway_enable_ipv6
+
+- name: Select the cloud-interface Netplan definition without displaying it
+  ansible.builtin.set_fact:
+    veilway_netplan_cloud_definition: >-
+      {{ veilway_netplan_cloud_definitions | first }}
+  no_log: true
+  when: veilway_enable_ipv6
+
+- name: Install the AWS IPv6 Netplan overlay
+  ansible.builtin.template:
+    src: 90-veilway-ipv6.yaml.j2
+    dest: /etc/netplan/90-veilway-ipv6.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  notify:
+    - Apply Veilway netplan
+    - Apply Veilway sysctl
+  when: veilway_enable_ipv6
+
+- name: Install explicit Veilway sysctl settings
+  ansible.builtin.template:
+    src: 90-veilway.conf.j2
+    dest: /etc/sysctl.d/90-veilway.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Apply Veilway sysctl
+
+- name: Copy public PKI material
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ veilway_config_root }}/pki/{{ item.dest }}"
+    owner: root
+    group: veilway
+    mode: "0644"
+  no_log: true
+  register: veilway_public_pki_copy
+  loop:
+    - src: "{{ veilway_pki_root }}/ca/ca.crt"
+      dest: ca.crt
+    - src: "{{ veilway_pki_root }}/crl.pem"
+      dest: crl.pem
+    - src: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/server.crt"
+      dest: server.crt
+
+- name: Copy endpoint private key material
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ veilway_config_root }}/pki/{{ item.dest }}"
+    owner: root
+    group: veilway
+    mode: "0640"
+  no_log: true
+  register: veilway_private_pki_copy
+  loop:
+    - src: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/server.key"
+      dest: server.key
+    - src: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/tls-crypt-v2-server.key"
+      dest: tls-crypt-v2-server.key
+
+- name: Copy public multi-hop PKI material on Yandex
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ veilway_config_root }}/pki/{{ item.dest }}"
+    owner: root
+    group: veilway
+    mode: "0644"
+  no_log: true
+  register: veilway_yc_multihop_public_pki_copy
+  loop:
+    - src: "{{ veilway_pki_root }}/endpoints/yc-multihop-ingress/server.crt"
+      dest: multihop-ingress/server.crt
+    - src: "{{ veilway_pki_root }}/endpoints/yc-transit/client.crt"
+      dest: transit-client/client.crt
+  when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+- name: Copy private multi-hop PKI material on Yandex
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ veilway_config_root }}/pki/{{ item.dest }}"
+    owner: root
+    group: veilway
+    mode: "0640"
+  no_log: true
+  register: veilway_yc_multihop_private_pki_copy
+  loop:
+    - src: "{{ veilway_pki_root }}/endpoints/yc-multihop-ingress/server.key"
+      dest: multihop-ingress/server.key
+    - src: "{{ veilway_pki_root }}/endpoints/yc-multihop-ingress/tls-crypt-v2-server.key"
+      dest: multihop-ingress/tls-crypt-v2-server.key
+    - src: "{{ veilway_pki_root }}/endpoints/yc-transit/client.key"
+      dest: transit-client/client.key
+    - src: "{{ veilway_pki_root }}/endpoints/yc-transit/tls-crypt-v2-client.key"
+      dest: transit-client/tls-crypt-v2-client.key
+  when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+- name: Copy public transit-server PKI material on AWS
+  ansible.builtin.copy:
+    src: "{{ veilway_pki_root }}/endpoints/aws-transit/server.crt"
+    dest: "{{ veilway_config_root }}/pki/transit-server/server.crt"
+    owner: root
+    group: veilway
+    mode: "0644"
+  no_log: true
+  register: veilway_aws_transit_public_pki_copy
+  when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+
+- name: Copy private transit-server PKI material on AWS
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ veilway_config_root }}/pki/transit-server/{{ item.dest }}"
+    owner: root
+    group: veilway
+    mode: "0640"
+  no_log: true
+  register: veilway_aws_transit_private_pki_copy
+  loop:
+    - src: "{{ veilway_pki_root }}/endpoints/aws-transit/server.key"
+      dest: server.key
+    - src: "{{ veilway_pki_root }}/endpoints/aws-transit/tls-crypt-v2-server.key"
+      dest: tls-crypt-v2-server.key
+  when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+
+- name: Install the OpenVPN server configuration
+  ansible.builtin.template:
+    src: openvpn-server.conf.j2
+    dest: "{{ veilway_config_root }}/openvpn/server.conf"
+    owner: root
+    group: veilway
+    mode: "0640"
+  register: veilway_openvpn_config
+
+- name: Install the Yandex multi-hop OpenVPN configurations
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ veilway_config_root }}/openvpn/{{ item.dest }}"
+    owner: root
+    group: veilway
+    mode: "{{ item.mode }}"
+  register: veilway_yc_multihop_configs
+  loop:
+    - src: openvpn-multihop-server.conf.j2
+      dest: multihop-server.conf
+      mode: "0640"
+    - src: openvpn-transit-client.conf.j2
+      dest: transit-client.conf
+      mode: "0640"
+    - src: transit-route-up.j2
+      dest: transit-route-up
+      mode: "0750"
+    - src: transit-route-down.j2
+      dest: transit-route-down
+      mode: "0750"
+  when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+- name: Install the AWS transit OpenVPN server configuration
+  ansible.builtin.template:
+    src: openvpn-transit-server.conf.j2
+    dest: "{{ veilway_config_root }}/openvpn/transit-server.conf"
+    owner: root
+    group: veilway
+    mode: "0640"
+  register: veilway_aws_transit_config
+  when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+
+- name: Install the exclusive AWS transit client route
+  ansible.builtin.template:
+    src: yc-transit.ccd.j2
+    dest: "{{ veilway_config_root }}/openvpn/ccd/yc-transit"
+    owner: root
+    group: veilway
+    mode: "0640"
+  register: veilway_aws_transit_ccd
+  when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+
+- name: Install the Unbound configuration
+  ansible.builtin.template:
+    src: unbound.conf.j2
+    dest: "{{ veilway_config_root }}/unbound/unbound.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  register: veilway_unbound_config
+
+- name: Install the AWS transit-only Unbound configuration
+  ansible.builtin.template:
+    src: unbound-transit.conf.j2
+    dest: "{{ veilway_config_root }}/unbound/transit.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  register: veilway_transit_unbound_config
+  when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+
+- name: Copy the minimal container build context
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/image/"
+    dest: "{{ veilway_install_root }}/image/"
+    owner: root
+    group: root
+    mode: preserve
+  register: veilway_image_context
+
+- name: Install the Docker Compose definition
+  ansible.builtin.template:
+    src: compose.yaml.j2
+    dest: "{{ veilway_install_root }}/compose.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+  register: veilway_compose_config
+
+- name: Install the complete nftables ruleset
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload Veilway firewall
+
+- name: Apply prerequisite service changes before Compose
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable Docker and nftables at boot
+  ansible.builtin.service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - docker
+    - nftables
+
+- name: Read the fail-closed Yandex multi-hop policy baseline
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop:
+    - [/usr/sbin/ip, rule, show]
+    - [/usr/sbin/ip, route, show, table, "{{ veilway_multihop_route_table_ipv4 }}"]
+    - [/usr/sbin/ip, -6, rule, show]
+    - [/usr/sbin/ip, -6, route, show, table, "{{ veilway_multihop_route_table_ipv6 }}"]
+  register: veilway_multihop_policy_baseline
+  changed_when: false
+  no_log: true
+  when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+- name: Restore missing fail-closed Yandex multi-hop policy entries
+  ansible.builtin.command:
+    argv: "{{ item.command }}"
+  loop:
+    - name: IPv4 source policy rule
+      present: >-
+        {{ 'from ' ~ veilway_multihop_ipv4_cidr ~ ' lookup ' ~
+        veilway_multihop_route_table_ipv4 in
+        veilway_multihop_policy_baseline.results[0].stdout }}
+      command:
+        - /usr/sbin/ip
+        - rule
+        - add
+        - priority
+        - "{{ veilway_multihop_route_priority }}"
+        - from
+        - "{{ veilway_multihop_ipv4_cidr }}"
+        - table
+        - "{{ veilway_multihop_route_table_ipv4 }}"
+    - name: IPv4 unreachable fallback
+      present: >-
+        {{ 'unreachable default' in
+        veilway_multihop_policy_baseline.results[1].stdout }}
+      command:
+        - /usr/sbin/ip
+        - route
+        - add
+        - unreachable
+        - default
+        - metric
+        - "42760"
+        - table
+        - "{{ veilway_multihop_route_table_ipv4 }}"
+    - name: IPv6 source policy rule
+      present: >-
+        {{ 'from ' ~ veilway_multihop_ipv6_cidr ~ ' lookup ' ~
+        veilway_multihop_route_table_ipv6 in
+        veilway_multihop_policy_baseline.results[2].stdout }}
+      command:
+        - /usr/sbin/ip
+        - -6
+        - rule
+        - add
+        - priority
+        - "{{ veilway_multihop_route_priority }}"
+        - from
+        - "{{ veilway_multihop_ipv6_cidr }}"
+        - table
+        - "{{ veilway_multihop_route_table_ipv6 }}"
+    - name: IPv6 unreachable fallback
+      present: >-
+        {{ 'unreachable default' in
+        veilway_multihop_policy_baseline.results[3].stdout }}
+      command:
+        - /usr/sbin/ip
+        - -6
+        - route
+        - add
+        - unreachable
+        - default
+        - metric
+        - "42760"
+        - table
+        - "{{ veilway_multihop_route_table_ipv6 }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: true
+  no_log: true
+  when:
+    - veilway_multihop_enabled and veilway_mode == 'yc-direct'
+    - not (item.present | bool)
+
+- name: Build and start the Veilway Compose stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ veilway_install_root }}"
+    project_name: veilway
+    state: present
+    build: "{{ 'always' if veilway_image_context.changed else 'policy' }}"
+    recreate: >-
+      {{ 'always' if (
+        veilway_public_pki_copy.changed or
+        veilway_private_pki_copy.changed or
+        veilway_yc_multihop_public_pki_copy.changed or
+        veilway_yc_multihop_private_pki_copy.changed or
+        veilway_aws_transit_public_pki_copy.changed or
+        veilway_aws_transit_private_pki_copy.changed or
+        veilway_openvpn_config.changed or
+        veilway_yc_multihop_configs.changed or
+        veilway_aws_transit_config.changed or
+        veilway_aws_transit_ccd.changed or
+        veilway_unbound_config.changed or
+        veilway_transit_unbound_config.changed or
+        veilway_image_context.changed or
+        veilway_compose_config.changed
+      ) else 'auto' }}
+    remove_orphans: true
+  register: veilway_compose_result
+
+- name: Remove endpoint-only multi-hop files after an explicit disable
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ veilway_config_root }}/openvpn/multihop-server.conf"
+    - "{{ veilway_config_root }}/openvpn/transit-client.conf"
+    - "{{ veilway_config_root }}/openvpn/transit-server.conf"
+    - "{{ veilway_config_root }}/openvpn/transit-route-up"
+    - "{{ veilway_config_root }}/openvpn/transit-route-down"
+    - "{{ veilway_config_root }}/openvpn/ccd"
+    - "{{ veilway_config_root }}/unbound/transit.conf"
+    - "{{ veilway_config_root }}/pki/multihop-ingress"
+    - "{{ veilway_config_root }}/pki/transit-client"
+    - "{{ veilway_config_root }}/pki/transit-server"
+  when: not veilway_multihop_enabled
+
+- name: Remove an explicitly disabled Yandex multi-hop source rule
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop:
+    - >-
+      {{ ['/usr/sbin/ip', 'rule', 'del', 'priority',
+      veilway_multihop_route_priority | string, 'table',
+      veilway_multihop_route_table_ipv4 | string] }}
+    - >-
+      {{ ['/usr/sbin/ip', '-6', 'rule', 'del', 'priority',
+      veilway_multihop_route_priority | string, 'table',
+      veilway_multihop_route_table_ipv6 | string] }}
+  register: veilway_disabled_multihop_rule_removal
+  changed_when: veilway_disabled_multihop_rule_removal.rc == 0
+  failed_when: veilway_disabled_multihop_rule_removal.rc not in [0, 2]
+  no_log: true
+  when:
+    - not veilway_multihop_enabled
+    - veilway_mode == 'yc-direct'
+
+- name: Read explicitly disabled Yandex multi-hop policy tables
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop:
+    - [/usr/sbin/ip, route, show, table, "{{ veilway_multihop_route_table_ipv4 }}"]
+    - [/usr/sbin/ip, -6, route, show, table, "{{ veilway_multihop_route_table_ipv6 }}"]
+  register: veilway_disabled_multihop_tables
+  changed_when: false
+  failed_when: veilway_disabled_multihop_tables.rc not in [0, 2]
+  no_log: true
+  when:
+    - not veilway_multihop_enabled
+    - veilway_mode == 'yc-direct'
+
+- name: Flush explicitly disabled Yandex multi-hop policy tables
+  ansible.builtin.command:
+    argv: "{{ item.command }}"
+  loop:
+    - command: [/usr/sbin/ip, route, flush, table, "{{ veilway_multihop_route_table_ipv4 }}"]
+      populated: "{{ veilway_disabled_multihop_tables.results[0].stdout | trim | length > 0 }}"
+    - command: [/usr/sbin/ip, -6, route, flush, table, "{{ veilway_multihop_route_table_ipv6 }}"]
+      populated: "{{ veilway_disabled_multihop_tables.results[1].stdout | trim | length > 0 }}"
+  when:
+    - not veilway_multihop_enabled
+    - veilway_mode == 'yc-direct'
+    - item.populated | bool
+  no_log: true
+
+- name: Build the expected healthy container list
+  ansible.builtin.set_fact:
+    veilway_expected_healthy_containers: >-
+      {{
+        ['veilway-openvpn', 'veilway-unbound']
+        + (
+          ['veilway-openvpn-multihop', 'veilway-openvpn-transit']
+          if veilway_multihop_enabled and veilway_mode == 'yc-direct'
+          else []
+        )
+        + (
+          ['veilway-openvpn-transit', 'veilway-unbound-transit']
+          if veilway_multihop_enabled and veilway_mode == 'aws-direct'
+          else []
+        )
+      }}
+
+- name: Wait for the Veilway containers to become healthy
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - inspect
+      - --type
+      - container
+      - "{{ item }}"
+  loop: "{{ veilway_expected_healthy_containers }}"
+  register: veilway_container_health
+  changed_when: false
+  retries: 12
+  delay: 5
+  until: >-
+    veilway_container_health.rc == 0 and
+    (veilway_container_health.stdout | from_json | first).State.Health.Status == 'healthy'
+
+- name: Record the dedicated-host deployment marker
+  ansible.builtin.copy:
+    content: |
+      This dedicated VM is managed by the Veilway {{ veilway_mode }} deployment.
+      Do not reuse it for unrelated services.
+    dest: "{{ veilway_config_root }}/managed-by-veilway"
+    owner: root
+    group: root
+    mode: "0644"

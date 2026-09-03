@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if (( $# < 3 )); then
+    printf '%s\n' 'Usage: wait-for-interface <interface> <IPv4-address> <command> [arguments...]' >&2
+    exit 2
+fi
+
+readonly INTERFACE_NAME="$1"
+readonly EXPECTED_ADDRESS="$2"
+shift 2
+
+[[ "${INTERFACE_NAME}" =~ ^[A-Za-z0-9_.-]+$ ]] || {
+    printf '%s\n' 'Error: invalid interface name.' >&2
+    exit 2
+}
+[[ "${EXPECTED_ADDRESS}" =~ ^[0-9.]+$ ]] || {
+    printf '%s\n' 'Error: expected address must be IPv4.' >&2
+    exit 2
+}
+
+for attempt in {1..60}; do
+    if ip -4 address show dev "${INTERFACE_NAME}" 2>/dev/null | grep -Fq -- " ${EXPECTED_ADDRESS}/"; then
+        exec "$@"
+    fi
+    sleep 1
+done
+
+printf 'Error: interface %s did not acquire %s within 60 seconds.\n' \
+    "${INTERFACE_NAME}" "${EXPECTED_ADDRESS}" >&2
+exit 1

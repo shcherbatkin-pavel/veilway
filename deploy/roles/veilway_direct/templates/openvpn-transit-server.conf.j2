@@ -1,0 +1,38 @@
+# Managed by Veilway. AWS egress server for the single Yandex transit identity.
+port {{ veilway_transit_port }}
+proto udp4
+dev {{ veilway_transit_tunnel_interface }}
+topology subnet
+server {{ veilway_transit_ipv4_cidr | veilway_network_address }} {{ veilway_transit_ipv4_cidr | veilway_network_netmask }}
+server-ipv6 {{ veilway_transit_ipv6_cidr }}
+
+ca /etc/veilway/pki/ca.crt
+cert /etc/veilway/pki/transit-server/server.crt
+key /etc/veilway/pki/transit-server/server.key
+crl-verify /etc/veilway/pki/crl.pem
+tls-crypt-v2 /etc/veilway/pki/transit-server/tls-crypt-v2-server.key force-cookie
+verify-client-cert require
+remote-cert-tls client
+client-config-dir /etc/openvpn/ccd
+ccd-exclusive
+max-clients 1
+
+route {{ veilway_multihop_ipv4_cidr | veilway_network_address }} {{ veilway_multihop_ipv4_cidr | veilway_network_netmask }}
+route-ipv6 {{ veilway_multihop_ipv6_cidr }}
+
+dh none
+ecdh-curve prime256v1
+tls-version-min 1.3
+tls-cert-profile preferred
+data-ciphers CHACHA20-POLY1305:AES-256-GCM:AES-128-GCM
+auth SHA256
+allow-compression no
+
+keepalive 10 60
+explicit-exit-notify 1
+persist-key
+persist-tun
+user openvpn
+group openvpn
+verb 3
+mute 10

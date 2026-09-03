@@ -1,0 +1,9 @@
+# Managed by Veilway. The target must be a dedicated dual-stack VPN VM.
+network:
+  version: 2
+  ethernets:
+    {{ veilway_netplan_cloud_definition | to_json }}:
+      dhcp6: false
+      accept-ra: true
+      addresses:
+        - {{ (veilway_public_ipv6 ~ '/128') | to_json }}

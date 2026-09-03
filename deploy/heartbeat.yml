@@ -1,0 +1,17 @@
+---
+- name: Install the outbound-only heartbeat on approved VPN nodes
+  hosts: direct_vpn
+  become: true
+  gather_facts: false
+  serial: 1
+
+  vars:
+    veilway_heartbeat_apply_ack: true
+    veilway_heartbeat_token: >-
+      {{ lookup('env',
+        'VEILWAY_DEPLOY_HEARTBEAT_AWS_DIRECT_TOKEN'
+        if veilway_mode == 'aws-direct'
+        else 'VEILWAY_DEPLOY_HEARTBEAT_YC_DIRECT_TOKEN') }}
+
+  roles:
+    - role: veilway_heartbeat

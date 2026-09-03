@@ -1,0 +1,22 @@
+---
+veilway_install_root: /opt/veilway
+veilway_config_root: /etc/veilway
+veilway_pki_root: "{{ playbook_dir }}/../secrets/pki"
+veilway_image_name: veilway/openvpn:2.6-ubuntu24.04
+veilway_openvpn_port: 1194
+veilway_tunnel_interface: tun0
+veilway_openvpn_server_gid: 900
+veilway_enable_ipv6: false
+veilway_public_ipv6: ""
+veilway_multihop_enabled: false
+veilway_multihop_ingress_port: 1195
+veilway_transit_port: 1196
+veilway_multihop_tunnel_interface: tun-multihop
+veilway_transit_tunnel_interface: tun-transit
+veilway_multihop_ipv4_cidr: 10.242.30.0/24
+veilway_transit_ipv4_cidr: 10.242.40.0/29
+veilway_multihop_route_table_ipv4: 242
+veilway_multihop_route_table_ipv6: 243
+veilway_multihop_route_priority: 24200
+veilway_operator_ipv4_cidrs: []
+veilway_operator_ipv6_cidrs: []

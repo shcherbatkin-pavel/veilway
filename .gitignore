@@ -1,0 +1,91 @@
+# VM audit output and exports
+/audit-results/
+audit-results*.tar
+audit-results*.tar.*
+audit-results*.zip
+audit-*.tar
+audit-*.tar.*
+audit-*.zip
+
+# Logs and temporary files
+*.log
+/logs/
+__pycache__/
+*.py[cod]
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Local control-plane build and test output
+/web/backend/build/
+/web/backend/.pytest_cache/
+/web/backend/src/*.egg-info/
+/web/frontend/node_modules/
+/web/frontend/dist/
+/web/frontend/*.tsbuildinfo
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+/secrets/
+/private/
+
+# SSH keys
+id_rsa
+id_rsa.*
+id_dsa
+id_dsa.*
+id_ecdsa
+id_ecdsa.*
+id_ed25519
+id_ed25519.*
+*.ppk
+
+# VPN keys, certificates, and client profiles
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.csr
+*.ovpn
+*.mobileconfig
+wg*.conf
+openvpn*.conf
+/client-profiles/
+/vpn-profiles/
+/operator-config/*
+!/operator-config/endpoints.conf.example
+
+# Terraform local state, plans, and credentials
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.*
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+.terraformrc
+terraform.rc
+
+# Local deployment inventory and generated configuration
+/deploy/inventory.yml
+/deploy/control-inventory.yml
+/deploy/host_vars/
+/deploy/generated/
+
+# Safe documentation and configuration templates may be committed
+!*.example
+!*.example.*
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,6 @@
+{
+  "node": {{ veilway_mode | to_json }},
+  "endpoint": {{ veilway_heartbeat_endpoint | to_json }},
+  "token_file": "/etc/veilway-heartbeat/token",
+  "containers": {{ veilway_heartbeat_containers | to_json }}
+}

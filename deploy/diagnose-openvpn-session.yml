@@ -1,0 +1,110 @@
+---
+- name: Diagnose the recent AWS OpenVPN session without changing it
+  hosts: aws-direct
+  become: true
+  gather_facts: false
+
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+
+  tasks:
+    - name: Read only the bounded OpenVPN container output
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/docker
+          - logs
+          - --tail
+          - "5000"
+          - veilway-openvpn
+      register: veilway_recent_openvpn_output
+      changed_when: false
+      no_log: true
+
+    - name: Combine both container output streams without displaying them
+      ansible.builtin.set_fact:
+        veilway_recent_openvpn_text: >-
+          {{ (veilway_recent_openvpn_output.stdout | default('')) ~ '\n' ~
+          (veilway_recent_openvpn_output.stderr | default('')) }}
+      no_log: true
+
+    - name: Classify the recent session without displaying sensitive output
+      ansible.builtin.set_fact:
+        veilway_recent_session_checks:
+          - name: AWS client session marker
+            found: >-
+              {{ 'ubuntu-aws-direct' in
+              (veilway_recent_openvpn_text | lower) }}
+          - name: TLS control channel establishment marker
+            found: >-
+              {{ 'peer connection initiated with' in
+              (veilway_recent_openvpn_text | lower) }}
+          - name: client certificate verification marker
+            found: >-
+              {{ 'verify ok: depth=0' in
+              (veilway_recent_openvpn_text | lower) }}
+          - name: trusted TLS session promotion marker
+            found: >-
+              {{ 'initial untrusted session promoted to trusted' in
+              (veilway_recent_openvpn_text | lower) }}
+          - name: TLS control cipher marker
+            found: >-
+              {{ 'control channel:' in
+              (veilway_recent_openvpn_text | lower) }}
+          - name: IPv4 tunnel lease marker
+            found: >-
+              {{ 'pool returned ipv4=' in
+              (veilway_recent_openvpn_text | lower) or
+              'primary virtual ip for' in
+              (veilway_recent_openvpn_text | lower) }}
+          - name: IPv6 tunnel lease marker
+            found: >-
+              {{ 'pool returned ipv6=' in
+              (veilway_recent_openvpn_text | lower) }}
+          - name: AEAD data cipher marker
+            found: >-
+              {{ ((veilway_recent_openvpn_text | lower) |
+              regex_search('(?s)(data channel|data cipher).*(chacha20-poly1305|aes-256-gcm|aes-128-gcm)')) is not none }}
+          - name: pushed client configuration marker
+            found: >-
+              {{ 'push_reply' in
+              (veilway_recent_openvpn_text | lower) }}
+          - name: data-channel negotiation or initialization error
+            found: >-
+              {{ ((veilway_recent_openvpn_text | lower) |
+              regex_search('(?s)(data channel negotiation failed|initializing data channel failed|no usable data channel cipher|missing data_v2|does not support data_v2)')) is not none }}
+          - name: unavailable data send key or dropped offload packet
+            found: >-
+              {{ ((veilway_recent_openvpn_text | lower) |
+              regex_search('(?s)(no data channel send key available|attempting to send data packet while data channel offload is in use)')) is not none }}
+          - name: tls-crypt packet authentication or unwrap error
+            found: >-
+              {{ ((veilway_recent_openvpn_text | lower) |
+              regex_search('(?s)(incoming packet authentication failed|tls-crypt unwrapping failed|cannot locate hmac in incoming packet)')) is not none }}
+          - name: data packet authentication or decryption error
+            found: >-
+              {{ ((veilway_recent_openvpn_text | lower) |
+              regex_search('(?s)(authenticate/decrypt packet error|aead decrypt error|packet hmac authentication failed|tls keys are out of sync)')) is not none }}
+          - name: replay or packet-ID error
+            found: >-
+              {{ ((veilway_recent_openvpn_text | lower) |
+              regex_search('(?s)(replay-window backtrack occurred|bad packet id|packet replay)')) is not none }}
+          - name: invalid client tunnel source error
+            found: >-
+              {{ ((veilway_recent_openvpn_text | lower) |
+              regex_search('(?s)(bad source address from client|unknown ip version)')) is not none }}
+          - name: TLS session error
+            found: >-
+              {{ ((veilway_recent_openvpn_text | lower) |
+              regex_search('tls error:')) is not none }}
+          - name: data-channel timeout or restart marker
+            found: >-
+              {{ ((veilway_recent_openvpn_text | lower) |
+              regex_search('(?s)(inactivity timeout|ping-restart|received sigusr1)')) is not none }}
+      no_log: true
+
+    - name: Report only non-sensitive session classifications
+      ansible.builtin.debug:
+        msg: "{{ item.name }}: {{ 'found' if item.found else 'not found' }}"
+      loop: "{{ veilway_recent_session_checks }}"
+      loop_control:
+        label: "{{ item.name }}"

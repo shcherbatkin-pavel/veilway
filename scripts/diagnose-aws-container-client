@@ -1,0 +1,507 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+umask 077
+
+readonly PROGRAM_NAME="${0##*/}"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
+readonly PROFILE_PATH="${REPOSITORY_ROOT}/client-profiles/ubuntu-aws-direct.ovpn"
+readonly ENDPOINT_CONFIG="${REPOSITORY_ROOT}/operator-config/endpoints.conf"
+readonly IMAGE_NAME='veilway/openvpn:2.6-ubuntu24.04'
+readonly CONTAINER_NAME='veilway-aws-client-diagnostic'
+readonly VPN_CIDR='10.242.20.0/24'
+readonly VPN_DNS='10.242.20.1'
+container_started=false
+diagnostic_directory=''
+diagnostic_log=''
+
+usage() {
+    cat <<EOF
+Usage: ${PROGRAM_NAME} --run [--via-existing-vpn]
+
+Starts one bounded, isolated OpenVPN client using the protected AWS profile.
+The profile is mounted read-only, Docker logging is disabled, host routes are
+not changed, and the diagnostic container is removed automatically.
+The optional nested mode preserves exactly one existing host VPN and verifies
+that the protected AWS endpoint route uses that tunnel before and during the
+container test.
+EOF
+}
+
+fail() {
+    printf '%s: %s\n' "${PROGRAM_NAME}" "$*" >&2
+    exit 1
+}
+
+require_command() {
+    command -v -- "$1" >/dev/null 2>&1 \
+        || fail "required command is unavailable: $1"
+}
+
+profile_is_protected() {
+    [[ -f "${PROFILE_PATH}" && ! -L "${PROFILE_PATH}" \
+        && "$(stat -c '%a' -- "${PROFILE_PATH}")" == '600' ]]
+}
+
+profile_is_ignored() {
+    git check-ignore --quiet --no-index -- "${PROFILE_PATH}"
+}
+
+read_endpoint() {
+    local key value selected=""
+
+    while IFS='=' read -r key value; do
+        [[ "${key}" == 'aws_direct_endpoint' ]] || continue
+        [[ -z "${selected}" ]] || return 1
+        selected="${value}"
+    done < "${ENDPOINT_CONFIG}"
+    [[ -n "${selected}" ]] || return 1
+    printf '%s\n' "${selected}"
+}
+
+validate_ipv4() {
+    python3 -c '
+import ipaddress
+import sys
+
+try:
+    address = ipaddress.ip_address(sys.stdin.read().strip())
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if address.version == 4 else 1)
+'
+}
+
+active_tunnel_interface() {
+    /usr/sbin/ip --json --details link show up |
+        python3 -c '
+import json
+import sys
+
+try:
+    links = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+matches = []
+for link in links:
+    name = link.get("ifname", "")
+    kind = link.get("linkinfo", {}).get("info_kind", "")
+    if kind in {"tun", "wireguard"} or name.startswith(("tun", "tap", "wg")):
+        matches.append(name)
+if len(matches) != 1 or not matches[0]:
+    raise SystemExit(1)
+print(matches[0])
+'
+}
+
+active_tunnel_count() {
+    /usr/sbin/ip --json --details link show up |
+        python3 -c '
+import json
+import sys
+
+try:
+    links = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+count = 0
+for link in links:
+    name = link.get("ifname", "")
+    kind = link.get("linkinfo", {}).get("info_kind", "")
+    if kind in {"tun", "wireguard"} or name.startswith(("tun", "tap", "wg")):
+        count += 1
+print(count)
+'
+}
+
+route_interface_for_destination() {
+    local destination="$1"
+
+    /usr/sbin/ip -4 --json route get "${destination}" |
+        python3 -c '
+import json
+import sys
+
+try:
+    routes = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+if len(routes) != 1 or not routes[0].get("dev"):
+    raise SystemExit(1)
+print(routes[0]["dev"])
+'
+}
+
+container_exists() {
+    /usr/bin/timeout --signal=TERM --kill-after=2s 10s \
+        docker container inspect "${CONTAINER_NAME}" >/dev/null 2>&1
+}
+
+container_is_running() {
+    local state
+
+    state="$(
+        /usr/bin/timeout --signal=TERM --kill-after=2s 10s \
+            docker container inspect \
+            --format '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null
+    )" || return 1
+    [[ "${state}" == 'true' ]]
+}
+
+report_container_failure() {
+    local runtime_state='unavailable'
+    local runtime_failure=false
+    local runtime_oom=false
+    local exit_code='unavailable'
+
+    if container_exists; then
+        runtime_state="$(
+            /usr/bin/timeout --signal=TERM --kill-after=2s 10s \
+                docker container inspect \
+                --format '{{.State.ExitCode}}|{{.State.OOMKilled}}|{{if .State.Error}}true{{else}}false{{end}}' \
+                "${CONTAINER_NAME}" 2>/dev/null
+        )" || runtime_state='unavailable'
+    fi
+    case "${runtime_state}" in
+        '0|false|false') printf '%s\n' 'isolated client process exit: clean' ;;
+        'unavailable') printf '%s\n' 'isolated client process exit: unavailable' ;;
+        *)
+            printf '%s\n' 'isolated client process exit: failed'
+            exit_code="${runtime_state%%|*}"
+            [[ "${runtime_state}" == *'|true' ]] && runtime_failure=true
+            [[ "${runtime_state}" == *'|true|'* ]] && runtime_oom=true
+            ;;
+    esac
+    case "${exit_code}" in
+        1) printf '%s\n' 'isolated client exit-code category: application error' ;;
+        2) printf '%s\n' 'isolated client exit-code category: option or usage error' ;;
+        126) printf '%s\n' 'isolated client exit-code category: cannot execute' ;;
+        127) printf '%s\n' 'isolated client exit-code category: executable not found' ;;
+        137) printf '%s\n' 'isolated client exit-code category: forcibly killed' ;;
+        143) printf '%s\n' 'isolated client exit-code category: terminated' ;;
+        unavailable) ;;
+        *) printf '%s\n' 'isolated client exit-code category: other failure' ;;
+    esac
+
+    if [[ -n "${diagnostic_log}" && -f "${diagnostic_log}" \
+        && ! -L "${diagnostic_log}" ]]; then
+        python3 -c '
+from pathlib import Path
+import sys
+
+try:
+    text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").lower()
+except OSError:
+    print("isolated OpenVPN failure category: unavailable")
+    raise SystemExit(0)
+
+stages = (
+    ("process startup", ("openvpn 2.6.",)),
+    ("outer UDP transport", ("udp link remote", "preserving recently used remote")),
+    ("TLS peer authentication", ("peer connection initiated", "control channel: tlsv1.3")),
+    ("server configuration PUSH", ("push_reply", "options imported")),
+    ("TUN device setup", ("tun/tap device", "net_iface_up")),
+    ("data-channel initialization", ("data channel: cipher",)),
+    ("completed initialization", ("initialization sequence completed",)),
+)
+last_stage = "no OpenVPN startup marker"
+for label, markers in stages:
+    if any(marker in text for marker in markers):
+        last_stage = label
+print(f"isolated OpenVPN last reached stage: {last_stage}")
+
+categories = (
+    ("configuration option rejected", (
+        "options error", "unrecognized option", "failed to apply push options")),
+    ("TUN device unavailable", (
+        "cannot open tun", "error opening tun", "tunsetiff")),
+    ("container permission denied", ("operation not permitted", "permission denied")),
+    ("IPv4 or IPv6 interface configuration failed", (
+        "rtnetlink answers", "netlink error", "ip route add command failed",
+        "ip -6 addr add failed", "external program exited with error status")),
+    ("certificate or private-key loading failed", (
+        "cannot load certificate", "cannot load inline certificate",
+        "cannot pre-load keyfile", "error parsing private key",
+        "private key password verification failed")),
+    ("certificate verification failed", ("verify error", "certificate verify failed")),
+    ("data-cipher negotiation failed", (
+        "data channel cipher negotiation failed", "no shared cipher")),
+    ("tls-crypt-v2 processing failed", (
+        "tls-crypt-v2 error", "cannot unwrap wrapped client key",
+        "failed to unwrap", "invalid tls-crypt-v2")),
+    ("TLS control-channel failure", ("tls error", "tls handshake failed")),
+    ("outer network unreachable", ("network is unreachable", "no route to host")),
+    ("connection timeout", ("inactivity timeout", "ping-restart")),
+)
+for label, markers in categories:
+    if any(marker in text for marker in markers):
+        print(f"isolated OpenVPN failure category: {label}")
+        break
+else:
+    if not text.strip():
+        print("isolated OpenVPN failure category: empty protected log")
+    elif "initialization sequence completed" in text:
+        print("isolated OpenVPN failure category: exited after initialization")
+    else:
+        print("isolated OpenVPN failure category: unclassified")
+' "${diagnostic_log}"
+    else
+        printf '%s\n' 'isolated OpenVPN failure category: unavailable'
+    fi
+    if [[ "${runtime_oom}" == true ]]; then
+        printf '%s\n' 'isolated container runtime category: memory limit reached'
+    elif [[ "${runtime_failure}" == true ]]; then
+        printf '%s\n' 'isolated container runtime category: process launch failed'
+    else
+        printf '%s\n' 'isolated container runtime category: no launch error'
+    fi
+}
+
+container_has_vpn_address() {
+    /usr/bin/timeout --signal=TERM --kill-after=2s 10s \
+        docker container exec "${CONTAINER_NAME}" \
+        /usr/bin/ip -4 -json address show up 2>/dev/null |
+        python3 -c '
+import ipaddress
+import json
+import sys
+
+network = ipaddress.ip_network(sys.argv[1])
+try:
+    links = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+matches = {
+    ipaddress.ip_address(address["local"])
+    for link in links
+    for address in link.get("addr_info", [])
+    if address.get("family") == "inet" and address.get("local")
+    and ipaddress.ip_address(address["local"]) in network
+}
+raise SystemExit(0 if len(matches) == 1 else 1)
+' "${VPN_CIDR}"
+}
+
+container_routes_dns_through_tunnel() {
+    /usr/bin/timeout --signal=TERM --kill-after=2s 10s \
+        docker container exec "${CONTAINER_NAME}" \
+        /usr/bin/ip -4 -json route get "${VPN_DNS}" 2>/dev/null |
+        python3 -c '
+import json
+import sys
+
+try:
+    routes = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+if len(routes) != 1:
+    raise SystemExit(1)
+device = routes[0].get("dev", "")
+raise SystemExit(0 if device.startswith("tun") else 1)
+'
+}
+
+cleanup() {
+    local original_status=$?
+    local cleanup_failed=false
+
+    if [[ "${container_started}" == true ]]; then
+        if container_is_running; then
+            /usr/bin/timeout --signal=TERM --kill-after=3s 15s \
+                docker container stop --time 5 "${CONTAINER_NAME}" \
+                >/dev/null 2>&1 || true
+        fi
+        if container_exists; then
+            /usr/bin/timeout --signal=TERM --kill-after=3s 15s \
+                docker container rm --force "${CONTAINER_NAME}" \
+                >/dev/null 2>&1 || true
+        fi
+        if container_exists; then
+            printf '%s\n' \
+                'cleanup: diagnostic container requires manual review' >&2
+            cleanup_failed=true
+        else
+            printf '%s\n' 'automatic diagnostic container cleanup: passed'
+        fi
+    fi
+    if [[ -n "${diagnostic_log}" && -e "${diagnostic_log}" ]]; then
+        if [[ -f "${diagnostic_log}" && ! -L "${diagnostic_log}" \
+            && "$(stat -c '%a' -- "${diagnostic_log}")" == '600' ]]; then
+            rm -- "${diagnostic_log}"
+            printf '%s\n' 'automatic protected diagnostic log cleanup: passed'
+        else
+            printf '%s\n' \
+                'cleanup: protected diagnostic log requires manual review' >&2
+            cleanup_failed=true
+        fi
+    fi
+    if [[ -n "${diagnostic_directory}" \
+        && -e "${diagnostic_directory}" ]]; then
+        if [[ -d "${diagnostic_directory}" \
+            && ! -L "${diagnostic_directory}" \
+            && "${diagnostic_directory}" == /tmp/veilway-aws-client.* \
+            && "$(stat -c '%a' -- "${diagnostic_directory}")" == '700' \
+            && "$(stat -c '%u' -- "${diagnostic_directory}")" == "$(id -u)" ]] \
+            && rmdir -- "${diagnostic_directory}"; then
+            printf '%s\n' \
+                'automatic protected diagnostic directory cleanup: passed'
+        else
+            printf '%s\n' \
+                'cleanup: protected diagnostic directory requires manual review' >&2
+            cleanup_failed=true
+        fi
+    elif [[ -n "${diagnostic_log}" && -e "${diagnostic_log}" ]]; then
+        printf '%s\n' \
+            'cleanup: protected diagnostic directory requires manual review' >&2
+        cleanup_failed=true
+    fi
+    [[ "${cleanup_failed}" == false ]] || return 1
+    return "${original_status}"
+}
+
+main() {
+    local attempt
+    local endpoint=''
+    local existing_tunnel_interface=''
+    local route_interface=''
+    local tunnel_ready=false
+    local dns_succeeded=false
+    local via_existing_vpn=false
+
+    [[ $# -ge 1 && $# -le 2 && "$1" == '--run' ]] || {
+        usage >&2
+        fail 'explicit --run approval is required'
+    }
+    if [[ $# -eq 2 ]]; then
+        [[ "$2" == '--via-existing-vpn' ]] \
+            || fail 'unknown diagnostic flag'
+        via_existing_vpn=true
+    fi
+    for command_name in chmod docker git id install ip mktemp python3 rm rmdir stat timeout; do
+        require_command "${command_name}"
+    done
+    profile_is_protected \
+        || fail 'protected AWS client profile is missing or has an unsafe mode'
+    profile_is_ignored \
+        || fail 'protected AWS client profile is not ignored by Git'
+    [[ -c /dev/net/tun ]] || fail 'the local TUN device is unavailable'
+    if [[ "${via_existing_vpn}" == true ]]; then
+        [[ -f "${ENDPOINT_CONFIG}" && ! -L "${ENDPOINT_CONFIG}" \
+            && "$(stat -c '%a' -- "${ENDPOINT_CONFIG}")" == '600' ]] \
+            || fail 'protected endpoint configuration is invalid'
+        endpoint="$(read_endpoint)" \
+            || fail 'AWS endpoint configuration is invalid'
+        printf '%s\n' "${endpoint}" | validate_ipv4 \
+            || fail 'AWS endpoint is not IPv4'
+        existing_tunnel_interface="$(active_tunnel_interface)" \
+            || fail 'nested test requires exactly one existing host tunnel'
+        [[ "${existing_tunnel_interface}" =~ ^[A-Za-z0-9_.:-]+$ ]] \
+            || fail 'the existing host tunnel interface is ambiguous'
+        route_interface="$(route_interface_for_destination "${endpoint}")" \
+            || fail 'cannot inspect the initial AWS endpoint route'
+        [[ "${route_interface}" == "${existing_tunnel_interface}" ]] \
+            || fail 'the existing VPN does not carry the AWS endpoint route'
+        printf '%s\n' 'nested container transport precondition: passed'
+    else
+        [[ "$(active_tunnel_count)" == '0' ]] \
+            || fail 'disable every host VPN before the direct container test'
+    fi
+    container_exists \
+        && fail 'the diagnostic container name is already in use'
+    /usr/bin/timeout --signal=TERM --kill-after=2s 10s \
+        docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1 \
+        || fail 'the pinned local Veilway image is unavailable'
+    diagnostic_directory="$(
+        mktemp --directory --tmpdir=/tmp veilway-aws-client.XXXXXX
+    )" || fail 'cannot create the protected temporary diagnostic directory'
+    chmod 0700 -- "${diagnostic_directory}" \
+        || fail 'cannot protect the temporary diagnostic directory'
+    diagnostic_log="${diagnostic_directory}/openvpn.log"
+    install --mode=0600 /dev/null "${diagnostic_log}" \
+        || fail 'cannot create the protected temporary diagnostic log'
+
+    printf '%s\n' 'Isolated Docker client operations:'
+    printf '%s\n' \
+        '  start one no-pull, no-log container with NET_ADMIN, DAC_OVERRIDE, and /dev/net/tun'
+    printf '%s\n' '  mount the protected AWS profile read-only'
+    printf '%s\n' '  query one public hostname through tunnel-only DNS'
+    printf '%s\n' '  stop and automatically remove only the diagnostic container'
+
+    container_started=true
+    /usr/bin/timeout --signal=TERM --kill-after=5s 30s \
+        docker run --detach --pull never \
+        --name "${CONTAINER_NAME}" \
+        --network bridge \
+        --dns "${VPN_DNS}" \
+        --log-driver none \
+        --read-only \
+        --tmpfs /run:rw,noexec,nosuid,nodev,size=1m \
+        --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m \
+        --cap-drop ALL \
+        --cap-add NET_ADMIN \
+        --cap-add DAC_OVERRIDE \
+        --device /dev/net/tun:/dev/net/tun:rwm \
+        --security-opt no-new-privileges=true \
+        --pids-limit 64 \
+        --memory 128m \
+        --cpus 1 \
+        --mount \
+        "type=bind,src=${PROFILE_PATH},dst=/etc/openvpn/client.ovpn,readonly" \
+        --mount \
+        "type=bind,src=${diagnostic_directory},dst=/diagnostic" \
+        --entrypoint /bin/sh \
+        "${IMAGE_NAME}" \
+        -c \
+        'umask 077; exec /usr/sbin/openvpn --config /etc/openvpn/client.ovpn --route-nopull --pull-filter ignore redirect-gateway --pull-filter ignore dhcp-option --disable-dco --verb 3 > /diagnostic/openvpn.log 2>&1' \
+        >/dev/null \
+        || fail 'cannot start the isolated diagnostic client'
+
+    for ((attempt = 1; attempt <= 20; attempt++)); do
+        if ! container_is_running; then
+            report_container_failure
+            fail 'the isolated OpenVPN client exited before tunnel setup'
+        fi
+        if container_has_vpn_address; then
+            tunnel_ready=true
+            break
+        fi
+        sleep 1
+    done
+    [[ "${tunnel_ready}" == true ]] \
+        || {
+            report_container_failure
+            fail 'the isolated OpenVPN client did not establish a tunnel'
+        }
+    printf '%s\n' 'isolated OpenVPN control channel and tunnel lease: passed'
+
+    if [[ "${via_existing_vpn}" == true ]]; then
+        route_interface="$(route_interface_for_destination "${endpoint}")" \
+            || fail 'cannot recheck the nested AWS endpoint route'
+        [[ "${route_interface}" == "${existing_tunnel_interface}" ]] \
+            || fail 'the AWS endpoint route left the existing VPN during the test'
+        printf '%s\n' 'nested container transport remained active: passed'
+    fi
+
+    container_routes_dns_through_tunnel \
+        || fail 'the isolated client does not route Veilway DNS through TUN'
+    printf '%s\n' 'isolated Veilway DNS route: passed'
+
+    if /usr/bin/timeout --signal=TERM --kill-after=2s 15s \
+        docker container exec "${CONTAINER_NAME}" \
+        /usr/bin/getent ahostsv4 example.com >/dev/null 2>&1; then
+        dns_succeeded=true
+    fi
+    if [[ "${dns_succeeded}" == true ]]; then
+        printf '%s\n' 'isolated OpenVPN data channel and DNS response: passed'
+    else
+        printf '%s\n' 'isolated OpenVPN data channel and DNS response: FAILED'
+        report_container_failure
+        return 1
+    fi
+    printf '%s\n' "${PROGRAM_NAME}: independent client check passed"
+}
+
+trap cleanup EXIT
+main "$@"

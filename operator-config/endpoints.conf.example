@@ -1,0 +1,5 @@
+# Copy this file to endpoints.conf and replace both documentation addresses with
+# the sensitive Terraform public_ipv4 outputs. Do not quote values or add shell
+# syntax: this file is parsed as data and is never sourced.
+yc_direct_endpoint=192.0.2.10
+aws_direct_endpoint=192.0.2.20
