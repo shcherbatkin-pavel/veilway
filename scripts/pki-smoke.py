@@ -28,6 +28,8 @@ PROFILE_NAMES = (
     "iphone-aws-direct",
     "ubuntu-yc-aws-multihop",
     "iphone-yc-aws-multihop",
+    "test-windows-aws-direct",
+    "test-iphone-yc-aws-multihop",
 )
 SERVER_MODES = (
     "yc-direct",
@@ -108,6 +110,26 @@ def run_cli(root, passphrase, *arguments):
         )
 
 
+def run_cli_expect_failure(root, *arguments):
+    result = subprocess.run(
+        [str(root / "scripts/veilway-pki"), *arguments],
+        cwd=root,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if result.returncode == 0:
+        raise RuntimeError(f"PKI command unexpectedly passed: {' '.join(arguments)}")
+
+
+def split_profile_name(profile_name):
+    for mode in ("yc-aws-multihop", "yc-direct", "aws-direct"):
+        suffix = f"-{mode}"
+        if profile_name.endswith(suffix):
+            return profile_name[: -len(suffix)], mode
+    raise RuntimeError(f"profile name has no known mode: {profile_name}")
+
+
 def inline_section(profile_text, tag):
     match = re.search(
         rf"<{re.escape(tag)}>\s*(.+?)\s*</{re.escape(tag)}>",
@@ -131,10 +153,11 @@ def validate_profiles(root):
         endpoint = "192.0.2.20" if profile_name.endswith("aws-direct") else "192.0.2.10"
         if profile_text.count(f"remote {endpoint} {expected_port}\n") != 1:
             raise RuntimeError(f"profile remote is invalid: {profile_path.name}")
+        _, profile_mode = split_profile_name(profile_name)
         expected_server = (
             "yc-multihop-ingress"
-            if profile_name.endswith("yc-aws-multihop")
-            else profile_name.split("-", maxsplit=1)[1]
+            if profile_mode == "yc-aws-multihop"
+            else profile_mode
         )
         if profile_text.count(f"verify-x509-name {expected_server} name\n") != 1:
             raise RuntimeError(f"profile server identity is invalid: {profile_path.name}")
@@ -214,7 +237,7 @@ def run_profile_validator(root, *arguments):
         )
 
 
-def validate_revocation(root):
+def validate_revocation(root, profile_name):
     command = [
         "openssl",
         "verify",
@@ -225,7 +248,7 @@ def validate_revocation(root):
         str(root / "secrets/pki/ca/ca.crt"),
         "-CRLfile",
         str(root / "secrets/pki/crl.pem"),
-        str(root / "secrets/pki/clients/ubuntu-yc-direct/client.crt"),
+        str(root / "secrets/pki/clients" / profile_name / "client.crt"),
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     combined_output = f"{result.stdout}\n{result.stderr}".lower()
@@ -252,8 +275,26 @@ def main():
         for mode in SERVER_MODES:
             run_cli(root, passphrase, "server", "create", "--mode", mode)
         run_cli(root, passphrase, "transit", "create")
+        for invalid_device in (
+            "",
+            "../escape",
+            "Uppercase",
+            "-leading",
+            "trailing-",
+            "double--hyphen",
+            "a" * 49,
+        ):
+            run_cli_expect_failure(
+                root,
+                "profile",
+                "create",
+                "--device",
+                invalid_device,
+                "--mode",
+                "yc-direct",
+            )
         for profile_name in PROFILE_NAMES:
-            device, mode = profile_name.split("-", maxsplit=1)
+            device, mode = split_profile_name(profile_name)
             run_cli(
                 root,
                 passphrase,
@@ -289,12 +330,12 @@ def main():
             "profile",
             "revoke",
             "--name",
-            "ubuntu-yc-direct",
+            "test-iphone-yc-aws-multihop",
         )
-        validate_revocation(root)
+        validate_revocation(root, "test-iphone-yc-aws-multihop")
 
     print(
-        "pki-smoke.py: temporary six-profile, transit, and revocation lifecycle passed"
+        "pki-smoke.py: temporary eight-profile, transit, and revocation lifecycle passed"
     )
 
 

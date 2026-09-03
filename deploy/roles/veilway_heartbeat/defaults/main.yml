@@ -1,0 +1,6 @@
+---
+veilway_heartbeat_endpoint: >-
+  https://veilway.ru/api/v1/agents/{{ veilway_mode }}/heartbeat
+veilway_heartbeat_config_root: /etc/veilway-heartbeat
+veilway_heartbeat_containers: []
+veilway_heartbeat_apply_ack: false

@@ -1,0 +1,347 @@
+---
+- name: Require explicit web control plane deployment approval
+  ansible.builtin.assert:
+    that:
+      - veilway_control_web_apply_ack | bool
+      - veilway_control_admin_login | length >= 3
+      - veilway_control_admin_password | length >= 14
+      - veilway_control_postgres_password | length >= 20
+      - veilway_control_aws_access_key_id | length >= 16
+      - veilway_control_aws_secret_access_key | length >= 32
+      - veilway_control_aws_direct_instance_id | length >= 6
+      - veilway_control_yc_direct_instance_id | length >= 6
+      - veilway_control_aws_heartbeat_token | length >= 32
+      - veilway_control_yc_heartbeat_token | length >= 32
+    quiet: true
+  no_log: true
+
+- name: Install the explicitly required web host packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - docker.io
+      - docker-compose-v2
+      - e2fsprogs
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Require the dedicated persistent data disk
+  ansible.builtin.stat:
+    path: "{{ veilway_control_data_device }}"
+  register: veilway_control_data_device_stat
+
+- name: Refuse deployment without the exact dedicated data disk
+  ansible.builtin.assert:
+    that:
+      - veilway_control_data_device_stat.stat.exists
+    fail_msg: >-
+      The Terraform-managed data disk is absent; PostgreSQL must not use the
+      web VM boot disk.
+
+- name: Read the dedicated data disk filesystem type
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - --output
+      - value
+      - --match-tag
+      - TYPE
+      - "{{ veilway_control_data_device }}"
+  register: veilway_control_data_filesystem
+  changed_when: false
+  failed_when: veilway_control_data_filesystem.rc not in [0, 2]
+
+- name: Refuse to overwrite an unexpected data disk filesystem
+  ansible.builtin.assert:
+    that:
+      - veilway_control_data_filesystem.stdout in ['', 'ext4']
+    fail_msg: The dedicated data disk has an unexpected filesystem.
+
+- name: Create ext4 only on the empty dedicated data disk
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/mkfs.ext4
+      - -F
+      - -L
+      - "{{ veilway_control_data_label }}"
+      - "{{ veilway_control_data_device }}"
+  when: veilway_control_data_filesystem.stdout == ''
+  changed_when: true
+
+- name: Read the dedicated data disk label after filesystem initialization
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - -s
+      - LABEL
+      - -o
+      - value
+      - "{{ veilway_control_data_device }}"
+  register: veilway_control_data_current_label
+  changed_when: false
+  failed_when: veilway_control_data_current_label.rc not in [0, 2]
+
+- name: Refuse to relabel an unexpected ext4 data disk
+  ansible.builtin.assert:
+    that:
+      - >-
+        veilway_control_data_current_label.stdout in
+        [veilway_control_data_label, 'veilway-control-']
+    fail_msg: The dedicated ext4 data disk has an unexpected label.
+
+- name: Repair the label truncated by the previous overlong ext4 label
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/e2label
+      - "{{ veilway_control_data_device }}"
+      - "{{ veilway_control_data_label }}"
+  when: veilway_control_data_current_label.stdout == 'veilway-control-'
+  changed_when: true
+
+- name: Create the persistent data mountpoint
+  ansible.builtin.file:
+    path: "{{ veilway_control_data_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Persist the dedicated data disk mount
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: '^LABEL=veilway-(control-data|data)\s+'
+    line: >-
+      LABEL={{ veilway_control_data_label }} {{ veilway_control_data_root }} ext4
+      defaults,nosuid,nodev 0 2
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Check whether the dedicated data disk is mounted
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/mountpoint
+      - --quiet
+      - "{{ veilway_control_data_root }}"
+  register: veilway_control_data_mounted
+  changed_when: false
+  # util-linux mountpoint returns 32 when the path is valid but not mounted.
+  failed_when: veilway_control_data_mounted.rc not in [0, 32]
+
+- name: Mount the dedicated persistent data disk
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/mount
+      - "{{ veilway_control_data_root }}"
+  when: veilway_control_data_mounted.rc == 32
+  changed_when: true
+
+- name: Create web control plane directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ veilway_control_install_root }}"
+      owner: root
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_control_install_root }}/app"
+      owner: root
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_control_install_root }}/app/backend"
+      owner: root
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_control_install_root }}/app/frontend"
+      owner: root
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_control_secret_root }}"
+      owner: root
+      group: root
+      mode: "0700"
+    - path: "{{ veilway_control_data_root }}/postgres"
+      owner: "70"
+      group: "70"
+      mode: "0700"
+    - path: "{{ veilway_control_data_root }}/caddy-data"
+      owner: "10001"
+      group: "10001"
+      mode: "0700"
+    - path: "{{ veilway_control_data_root }}/caddy-config"
+      owner: "10001"
+      group: "10001"
+      mode: "0700"
+    - path: "{{ veilway_control_runtime_root }}"
+      owner: "10001"
+      group: "10001"
+      mode: "0700"
+
+- name: Copy the control plane Compose manifest
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../web/compose.yaml"
+    dest: "{{ veilway_control_install_root }}/app/compose.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Copy only allowlisted backend build inputs
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../web/backend/{{ item }}"
+    dest: "{{ veilway_control_install_root }}/app/backend/{{ item }}"
+    owner: root
+    group: root
+    directory_mode: "0755"
+    mode: preserve
+  loop:
+    - Dockerfile
+    - alembic.ini
+    - container-entrypoint.py
+    - migrations/
+    - pyproject.toml
+    - src/
+
+- name: Copy only allowlisted frontend build inputs
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../web/frontend/{{ item }}"
+    dest: "{{ veilway_control_install_root }}/app/frontend/{{ item }}"
+    owner: root
+    group: root
+    directory_mode: "0755"
+    mode: preserve
+  loop:
+    - Caddyfile
+    - Dockerfile
+    - index.html
+    - package-lock.json
+    - package.json
+    - src/
+    - tsconfig.app.json
+    - tsconfig.json
+    - vite.config.ts
+
+- name: Install root-only runtime secrets
+  ansible.builtin.copy:
+    content: "{{ item.value }}\n"
+    dest: "{{ veilway_control_secret_root }}/{{ item.name }}"
+    owner: root
+    group: root
+    mode: "0400"
+  loop:
+    - name: postgres_password
+      value: "{{ veilway_control_postgres_password }}"
+    - name: aws_access_key_id
+      value: "{{ veilway_control_aws_access_key_id }}"
+    - name: aws_secret_access_key
+      value: "{{ veilway_control_aws_secret_access_key }}"
+  no_log: true
+
+- name: Build the web and API application images
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - build
+      - --pull
+  register: veilway_control_build
+  changed_when: true
+
+- name: Start PostgreSQL before migrations
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - up
+      - --detach
+      - db
+  register: veilway_control_db_start
+  changed_when: "'Started' in veilway_control_db_start.stdout or 'Created' in veilway_control_db_start.stdout"
+
+- name: Apply database migrations
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - run
+      - --rm
+      - api
+      - alembic
+      - upgrade
+      - head
+  register: veilway_control_migrate
+  changed_when: "'Running upgrade' in veilway_control_migrate.stdout"
+
+- name: Synchronize the only administrator from protected stdin
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - run
+      - --rm
+      - --no-deps
+      - api
+      - veilway-control
+      - bootstrap-admin
+    stdin: >-
+      {{ {'login': veilway_control_admin_login,
+          'password': veilway_control_admin_password} | to_json }}
+  no_log: true
+  changed_when: true
+
+- name: Synchronize the two immutable VPN VM records from protected stdin
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - run
+      - --rm
+      - --no-deps
+      - api
+      - veilway-control
+      - sync-vms
+    stdin: >-
+      {{ {
+        'aws-direct': {
+          'instance_id': veilway_control_aws_direct_instance_id,
+          'region': veilway_control_aws_region,
+          'heartbeat_token': veilway_control_aws_heartbeat_token
+        },
+        'yc-direct': {
+          'instance_id': veilway_control_yc_direct_instance_id,
+          'region': veilway_control_yc_region,
+          'heartbeat_token': veilway_control_yc_heartbeat_token
+        }
+      } | to_json }}
+  no_log: true
+  changed_when: true
+
+- name: Start exactly the three control plane containers
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - up
+      - --detach
+      - --remove-orphans
+      - --force-recreate
+      - api
+      - web
+  register: veilway_control_start
+  changed_when: "'Started' in veilway_control_start.stdout or 'Created' in veilway_control_start.stdout"

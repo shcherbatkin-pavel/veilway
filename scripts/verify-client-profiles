@@ -11,13 +11,13 @@ readonly PROFILES_DIR="${REPOSITORY_ROOT}/client-profiles"
 readonly ENDPOINT_CONFIG="${REPOSITORY_ROOT}/operator-config/endpoints.conf"
 readonly CA_CERTIFICATE="${REPOSITORY_ROOT}/secrets/pki/ca/ca.crt"
 readonly CRL_FILE="${REPOSITORY_ROOT}/secrets/pki/crl.pem"
-readonly -a DIRECT_PROFILE_NAMES=(
+readonly -a REQUIRED_DIRECT_PROFILE_NAMES=(
     ubuntu-yc-direct
     iphone-yc-direct
     ubuntu-aws-direct
     iphone-aws-direct
 )
-readonly -a MULTIHOP_PROFILE_NAMES=(
+readonly -a REQUIRED_MULTIHOP_PROFILE_NAMES=(
     ubuntu-yc-aws-multihop
     iphone-yc-aws-multihop
 )
@@ -26,6 +26,43 @@ temporary_directory=""
 fail() {
     printf '%s: %s\n' "${PROGRAM_NAME}" "$*" >&2
     exit 1
+}
+
+valid_device_id() {
+    local device_id="$1"
+
+    [[ -n "${device_id}" && "${#device_id}" -le 48 ]] || return 1
+    case "${device_id}" in
+        -*|*-|*--*|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*)
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+profile_mode() {
+    local profile_name="$1"
+    local device_id mode
+
+    case "${profile_name}" in
+        *-yc-aws-multihop)
+            device_id="${profile_name%-yc-aws-multihop}"
+            mode='yc-aws-multihop'
+            ;;
+        *-yc-direct)
+            device_id="${profile_name%-yc-direct}"
+            mode='yc-direct'
+            ;;
+        *-aws-direct)
+            device_id="${profile_name%-aws-direct}"
+            mode='aws-direct'
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    valid_device_id "${device_id}" || return 1
+    printf '%s\n' "${mode}"
 }
 
 require_command() {
@@ -89,29 +126,29 @@ cleanup() {
 }
 
 main() {
-    local profile_name profile_path mode endpoint port expected_remote
+    local profile_filename profile_name profile_path mode endpoint port expected_remote
     local certificate_file private_key_file
     local certificate_public_key private_public_key
     local transit_directory transit_certificate transit_private_key transit_tls_key
     local yc_endpoint aws_endpoint yc_state_endpoint aws_state_endpoint
     local expected_ca_hash
-    local expected_profile_count discovered_profile_count discovered_profile_path
-    local discovered_profile_name
-    local -a profile_names=("${DIRECT_PROFILE_NAMES[@]}")
+    local expected_profile_count discovered_profile_path required_profile_name
+    local discovered_profile_mode verify_multihop
+    local -a profile_names=()
+    local -a discovered_profile_paths=()
     local -A certificate_hashes=()
     local -A private_key_hashes=()
     local -A tls_key_hashes=()
 
     if [[ $# -eq 1 && "$1" == '--direct-only' ]]; then
-        expected_profile_count=4
+        verify_multihop=false
     elif [[ $# -eq 0 ]]; then
-        profile_names+=("${MULTIHOP_PROFILE_NAMES[@]}")
-        expected_profile_count=6
+        verify_multihop=true
     else
         fail "usage: ${PROGRAM_NAME} [--direct-only]"
     fi
 
-    for command_name in awk chmod cmp find git grep mktemp openssl python3 rm sed sha256sum stat wc; do
+    for command_name in awk chmod cmp git grep mktemp openssl python3 rm sed sha256sum stat; do
         require_command "${command_name}"
     done
 
@@ -127,24 +164,37 @@ main() {
         || fail "CA certificate is missing or symlinked"
     [[ -f "${CRL_FILE}" && ! -L "${CRL_FILE}" ]] \
         || fail "CRL is missing or symlinked"
-    discovered_profile_count="$(find "${PROFILES_DIR}" -maxdepth 1 -name '*.ovpn' | wc -l)"
-    if [[ "${expected_profile_count}" -eq 4 ]]; then
-        [[ "${discovered_profile_count}" -eq 4 || "${discovered_profile_count}" -eq 6 ]] \
-            || fail "expected four Direct profiles and optionally two multi-hop profiles"
-    else
-        [[ "${discovered_profile_count}" -eq 6 ]] \
-            || fail "expected exactly six client profiles"
+    for required_profile_name in "${REQUIRED_DIRECT_PROFILE_NAMES[@]}"; do
+        [[ -f "${PROFILES_DIR}/${required_profile_name}.ovpn" \
+            && ! -L "${PROFILES_DIR}/${required_profile_name}.ovpn" ]] \
+            || fail "missing required Direct profile: ${required_profile_name}"
+    done
+    if [[ "${verify_multihop}" == true ]]; then
+        for required_profile_name in "${REQUIRED_MULTIHOP_PROFILE_NAMES[@]}"; do
+            [[ -f "${PROFILES_DIR}/${required_profile_name}.ovpn" \
+                && ! -L "${PROFILES_DIR}/${required_profile_name}.ovpn" ]] \
+                || fail "missing required multi-hop profile: ${required_profile_name}"
+        done
     fi
-    while IFS= read -r discovered_profile_path; do
-        discovered_profile_name="${discovered_profile_path##*/}"
-        case "${discovered_profile_name}" in
-            ubuntu-yc-direct.ovpn|iphone-yc-direct.ovpn|ubuntu-aws-direct.ovpn|iphone-aws-direct.ovpn|ubuntu-yc-aws-multihop.ovpn|iphone-yc-aws-multihop.ovpn)
-                ;;
-            *)
-                fail "unexpected client profile: ${discovered_profile_name}"
-                ;;
-        esac
-    done < <(find "${PROFILES_DIR}" -maxdepth 1 -name '*.ovpn' -print)
+
+    shopt -s nullglob
+    discovered_profile_paths=("${PROFILES_DIR}"/*.ovpn)
+    shopt -u nullglob
+    ((${#discovered_profile_paths[@]} > 0)) || fail 'no client profiles found'
+    for discovered_profile_path in "${discovered_profile_paths[@]}"; do
+        [[ -f "${discovered_profile_path}" && ! -L "${discovered_profile_path}" ]] \
+            || fail "client profile must be a regular file: ${discovered_profile_path##*/}"
+        profile_filename="${discovered_profile_path##*/}"
+        profile_name="${profile_filename%.ovpn}"
+        discovered_profile_mode="$(profile_mode "${profile_name}")" \
+            || fail "unexpected client profile: ${profile_filename}"
+        if [[ "${verify_multihop}" == false \
+            && "${discovered_profile_mode}" == 'yc-aws-multihop' ]]; then
+            continue
+        fi
+        profile_names+=("${profile_name}")
+    done
+    expected_profile_count="${#profile_names[@]}"
 
     yc_endpoint="$(read_endpoint yc_direct_endpoint)" \
         || fail "invalid yc_direct_endpoint"
@@ -257,7 +307,7 @@ main() {
         tls_key_hashes["$(section_hash tls-crypt-v2 "${profile_path}")"]=1
     done
 
-    if [[ "${expected_profile_count}" -eq 6 ]]; then
+    if [[ "${verify_multihop}" == true ]]; then
         transit_directory="${REPOSITORY_ROOT}/secrets/pki/endpoints/yc-transit"
         transit_certificate="${transit_directory}/client.crt"
         transit_private_key="${transit_directory}/client.key"

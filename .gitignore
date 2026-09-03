@@ -18,6 +18,14 @@ __pycache__/
 *.swo
 *~
 
+# Local control-plane build and test output
+/web/backend/build/
+/web/backend/.pytest_cache/
+/web/backend/src/*.egg-info/
+/web/frontend/node_modules/
+/web/frontend/dist/
+/web/frontend/*.tsbuildinfo
+
 # Local environment and secrets
 .env
 .env.*
@@ -68,6 +76,7 @@ terraform.rc
 
 # Local deployment inventory and generated configuration
 /deploy/inventory.yml
+/deploy/control-inventory.yml
 /deploy/host_vars/
 /deploy/generated/
 

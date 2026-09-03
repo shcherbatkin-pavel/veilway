@@ -1,0 +1,11 @@
+[Unit]
+Description=Send Veilway VPN heartbeat every 15 seconds
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=15s
+AccuracySec=1s
+Unit=veilway-heartbeat.service
+
+[Install]
+WantedBy=timers.target

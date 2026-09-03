@@ -1,0 +1,8 @@
+---
+veilway_control_install_root: /opt/veilway-control
+veilway_control_data_root: /srv/veilway-control
+veilway_control_runtime_root: /run/veilway-control
+veilway_control_secret_root: /etc/veilway-control/secrets
+veilway_control_data_device: /dev/disk/by-id/virtio-data
+veilway_control_data_label: veilway-data
+veilway_control_web_apply_ack: false

@@ -1,0 +1,24 @@
+---
+all:
+  children:
+    control_web:
+      hosts:
+        veilway-web:
+          ansible_host: 192.0.2.30
+          ansible_user: ubuntu
+    direct_vpn:
+      hosts:
+        aws-direct:
+          ansible_host: 192.0.2.20
+          ansible_user: ubuntu
+          veilway_mode: aws-direct
+          veilway_heartbeat_containers:
+            - veilway-openvpn
+            - veilway-unbound
+        yc-direct:
+          ansible_host: 192.0.2.10
+          ansible_user: ubuntu
+          veilway_mode: yc-direct
+          veilway_heartbeat_containers:
+            - veilway-openvpn
+            - veilway-unbound

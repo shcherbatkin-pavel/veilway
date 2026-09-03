@@ -1,0 +1,6 @@
+cloud_id             = "replace-with-cloud-id"
+folder_id            = "replace-with-folder-id"
+zone                 = "ru-central1-a"
+subnet_cidr          = "10.241.30.0/24"
+ssh_public_key       = "ssh-ed25519 replace-with-public-key operator"
+yc_direct_instance_id = "replace-with-yc-direct-instance-id"

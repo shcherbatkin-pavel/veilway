@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+
+"""Send a read-only health snapshot for an explicitly configured VPN node."""
+
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+
+CONFIG_PATH = Path("/etc/veilway-heartbeat/config.json")
+BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
+UPTIME_PATH = Path("/proc/uptime")
+NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
+ALLOWED_NODES = {"aws-direct", "yc-direct"}
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, new_url):
+        del request, fp, code, message, headers, new_url
+        return None
+
+
+HTTPS_OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}),
+    NoRedirect(),
+)
+
+
+def load_configuration() -> dict[str, object]:
+    value = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("configuration must be an object")
+    node = value.get("node")
+    endpoint = value.get("endpoint")
+    token_file = value.get("token_file")
+    containers = value.get("containers")
+    if (
+        node not in ALLOWED_NODES
+        or not isinstance(endpoint, str)
+        or endpoint != f"https://veilway.ru/api/v1/agents/{node}/heartbeat"
+        or not isinstance(token_file, str)
+        or token_file != "/etc/veilway-heartbeat/token"
+        or not isinstance(containers, list)
+        or not 1 <= len(containers) <= 8
+        or len(set(containers)) != len(containers)
+        or any(
+            not isinstance(name, str) or not NAME_PATTERN.fullmatch(name)
+            for name in containers
+        )
+    ):
+        raise ValueError("invalid heartbeat configuration")
+    return value
+
+
+def inspect_container(name: str) -> str:
+    result = subprocess.run(
+        [
+            "/usr/bin/docker",
+            "inspect",
+            "--format",
+            "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}unknown{{end}}",
+            name,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    if result.returncode != 0:
+        return "missing"
+    parts = result.stdout.strip().split()
+    if len(parts) != 2 or parts[0] != "running":
+        return "unhealthy"
+    if parts[1] == "healthy":
+        return "healthy"
+    if parts[1] == "starting":
+        return "starting"
+    return "unhealthy"
+
+
+def main() -> int:
+    try:
+        config = load_configuration()
+        token = Path(str(config["token_file"])).read_text(encoding="utf-8").strip()
+        if len(token) < 32:
+            raise ValueError("invalid token")
+        container_names = config["containers"]
+        assert isinstance(container_names, list)
+        payload = {
+            "boot_id": BOOT_ID_PATH.read_text(encoding="ascii").strip(),
+            "uptime_seconds": int(float(UPTIME_PATH.read_text(encoding="ascii").split()[0])),
+            "containers": {name: inspect_container(name) for name in container_names},
+        }
+        request = urllib.request.Request(
+            str(config["endpoint"]),
+            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with HTTPS_OPENER.open(request, timeout=10) as response:
+            if response.status != 204:
+                raise RuntimeError("unexpected HTTP status")
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, urllib.error.URLError):
+        print("heartbeat delivery failed", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

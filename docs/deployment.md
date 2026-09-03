@@ -4,6 +4,10 @@ This guide describes an explicit operator workflow for new, dedicated VMs. It
 does not authorize connecting to or changing any existing host. Review every
 Terraform plan and the Ansible target inventory before continuing.
 
+The separately staged public restart panel has its own
+[operator guide](control-plane.md). Its Terraform, IAM, DNS, web deployment,
+heartbeat installation and first real restart each require separate approval.
+
 ## 1. Local prerequisites
 
 - Terraform compatible with the versions declared under `infra/`.
@@ -176,6 +180,20 @@ been deployed and verified:
 ./scripts/veilway-pki profile create --device iphone --mode yc-aws-multihop
 ./scripts/verify-client-profiles
 ```
+
+Additional authorized devices use a non-personal device identifier followed by
+the existing mode suffix. The identifier must contain 1 to 48 lowercase ASCII
+letters or digits, with only single internal hyphens. For example:
+
+```sh
+./scripts/veilway-pki profile create --device guest-windows --mode yc-aws-multihop
+./scripts/verify-client-profiles
+```
+
+The validator continues to require the six baseline profiles and validates all
+additional profiles, including their unique certificates, private keys, and
+`tls-crypt-v2` keys. Additional identities remain operator-managed profiles;
+they do not create accounts or make the service multi-tenant.
 
 New Direct profiles use UDP/1194. To restore the two protected AWS profiles
 created during the rejected UDP/443 trial without reissuing certificates or

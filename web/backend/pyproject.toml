@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "veilway-control"
+version = "0.1.0"
+description = "Minimal Veilway VPN VM restart control plane"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "alembic==1.16.5",
+  "argon2-cffi==25.1.0",
+  "boto3==1.40.21",
+  "fastapi==0.141.1",
+  "httpx==0.28.1",
+  "psycopg[binary]==3.2.9",
+  "pydantic-settings==2.10.1",
+  "sqlalchemy==2.0.43",
+  "starlette==1.3.1",
+  "uvicorn==0.35.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest==9.1.1",
+  "pytest-cov==6.2.1",
+]
+
+[project.scripts]
+veilway-control = "veilway_control.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

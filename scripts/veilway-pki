@@ -24,7 +24,7 @@ Usage:
   ${PROGRAM_NAME} init
   ${PROGRAM_NAME} server create --mode <yc-direct|aws-direct|yc-multihop-ingress|aws-transit>
   ${PROGRAM_NAME} transit create
-  ${PROGRAM_NAME} profile create --device <ubuntu|iphone> --mode <yc-direct|aws-direct|yc-aws-multihop>
+  ${PROGRAM_NAME} profile create --device <device-id> --mode <yc-direct|aws-direct|yc-aws-multihop>
   ${PROGRAM_NAME} profile update-remote --mode <yc-direct|aws-direct|yc-aws-multihop>
   ${PROGRAM_NAME} profile revoke --name <profile-name>
 
@@ -86,11 +86,13 @@ validate_server_mode() {
 }
 
 validate_device() {
-    case "$1" in
-        ubuntu|iphone)
-            ;;
-        *)
-            fail "device must be ubuntu or iphone"
+    local device_id="$1"
+
+    [[ -n "${device_id}" && "${#device_id}" -le 48 ]] \
+        || fail "device identifier must contain 1 to 48 characters"
+    case "${device_id}" in
+        -*|*-|*--*|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*)
+            fail "device identifier must use lowercase ASCII letters, digits, and single internal hyphens"
             ;;
     esac
 }
@@ -127,13 +129,24 @@ server_identity_for_mode() {
 }
 
 validate_profile_name() {
-    case "$1" in
-        ubuntu-yc-direct|iphone-yc-direct|ubuntu-aws-direct|iphone-aws-direct|ubuntu-yc-aws-multihop|iphone-yc-aws-multihop)
+    local profile_name="$1"
+    local device_id
+
+    case "${profile_name}" in
+        *-yc-aws-multihop)
+            device_id="${profile_name%-yc-aws-multihop}"
+            ;;
+        *-yc-direct)
+            device_id="${profile_name%-yc-direct}"
+            ;;
+        *-aws-direct)
+            device_id="${profile_name%-aws-direct}"
             ;;
         *)
-            fail "unknown Veilway profile name: $1"
+            fail "unknown Veilway profile name: ${profile_name}"
             ;;
     esac
+    validate_device "${device_id}"
 }
 
 validate_ipv4() {
@@ -482,9 +495,10 @@ create_profile() (
 
 update_profile_remotes() (
     local mode="$1"
-    local endpoint port server_identity device profile_name profile_path temporary_directory
+    local endpoint port server_identity profile_filename profile_name profile_path temporary_directory
     local temporary_profile desired_remote legacy_remote remote_count updated=0
     local -a profile_names=()
+    local -a profile_paths=()
 
     validate_mode "${mode}"
     endpoint="$(read_endpoint "${mode}")"
@@ -515,9 +529,16 @@ update_profile_remotes() (
     }
     trap cleanup_remote_update EXIT
 
-    for device in ubuntu iphone; do
-        profile_name="${device}-${mode}"
-        profile_path="${PROFILES_DIR}/${profile_name}.ovpn"
+    shopt -s nullglob
+    profile_paths=("${PROFILES_DIR}"/*-"${mode}".ovpn)
+    shopt -u nullglob
+    ((${#profile_paths[@]} > 0)) \
+        || fail "no protected profiles found for mode: ${mode}"
+
+    for profile_path in "${profile_paths[@]}"; do
+        profile_filename="${profile_path##*/}"
+        profile_name="${profile_filename%.ovpn}"
+        validate_profile_name "${profile_name}"
         temporary_profile="${temporary_directory}/${profile_name}.ovpn"
         profile_names+=("${profile_name}")
 

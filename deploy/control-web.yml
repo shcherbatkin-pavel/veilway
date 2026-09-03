@@ -1,0 +1,22 @@
+---
+- name: Deploy the explicitly approved Veilway web control plane
+  hosts: control_web
+  become: true
+  gather_facts: true
+
+  vars:
+    veilway_control_web_apply_ack: true
+    veilway_control_admin_login: "{{ lookup('env', 'VEILWAY_DEPLOY_ADMIN_LOGIN') }}"
+    veilway_control_admin_password: "{{ lookup('env', 'VEILWAY_DEPLOY_ADMIN_PASSWORD') }}"
+    veilway_control_postgres_password: "{{ lookup('env', 'VEILWAY_DEPLOY_POSTGRES_PASSWORD') }}"
+    veilway_control_aws_access_key_id: "{{ lookup('env', 'VEILWAY_DEPLOY_AWS_ACCESS_KEY_ID') }}"
+    veilway_control_aws_secret_access_key: "{{ lookup('env', 'VEILWAY_DEPLOY_AWS_SECRET_ACCESS_KEY') }}"
+    veilway_control_aws_region: "{{ lookup('env', 'VEILWAY_DEPLOY_AWS_REGION') }}"
+    veilway_control_aws_direct_instance_id: "{{ lookup('env', 'VEILWAY_DEPLOY_AWS_DIRECT_INSTANCE_ID') }}"
+    veilway_control_yc_region: "{{ lookup('env', 'VEILWAY_DEPLOY_YC_REGION') }}"
+    veilway_control_yc_direct_instance_id: "{{ lookup('env', 'VEILWAY_DEPLOY_YC_DIRECT_INSTANCE_ID') }}"
+    veilway_control_aws_heartbeat_token: "{{ lookup('env', 'VEILWAY_DEPLOY_HEARTBEAT_AWS_DIRECT_TOKEN') }}"
+    veilway_control_yc_heartbeat_token: "{{ lookup('env', 'VEILWAY_DEPLOY_HEARTBEAT_YC_DIRECT_TOKEN') }}"
+
+  roles:
+    - role: veilway_control_web

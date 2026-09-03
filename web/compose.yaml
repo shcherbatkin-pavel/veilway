@@ -1,0 +1,118 @@
+name: veilway-control
+
+services:
+  db:
+    image: postgres:17.4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: veilway_control
+      POSTGRES_USER: veilway_control
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - ${VEILWAY_DATA_ROOT:-/srv/veilway-control}/postgres:/var/lib/postgresql/data
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U veilway_control -d veilway_control"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  api:
+    image: veilway-control-api:0.1.0
+    build:
+      context: backend
+    restart: unless-stopped
+    environment:
+      VEILWAY_ENVIRONMENT: production
+      VEILWAY_PUBLIC_HOST: veilway.ru
+      VEILWAY_DATABASE_HOST: db
+      VEILWAY_DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+      VEILWAY_AWS_ACCESS_KEY_ID_FILE: /run/secrets/aws_access_key_id
+      VEILWAY_AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/aws_secret_access_key
+    secrets:
+      - postgres_password
+      - aws_access_key_id
+      - aws_secret_access_key
+    volumes:
+      - ${VEILWAY_RUNTIME_ROOT:-/run/veilway-control}:/run/veilway
+    networks:
+      - control
+      - data
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  web:
+    image: veilway-control-web:0.1.0
+    build:
+      context: frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${VEILWAY_RUNTIME_ROOT:-/run/veilway-control}:/run/veilway:ro
+      - ${VEILWAY_DATA_ROOT:-/srv/veilway-control}/caddy-data:/data
+      - ${VEILWAY_DATA_ROOT:-/srv/veilway-control}/caddy-config:/config
+    networks:
+      - edge
+    depends_on:
+      - api
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  edge: {}
+  control: {}
+  data:
+    internal: true
+
+secrets:
+  postgres_password:
+    file: ${VEILWAY_SECRET_ROOT:-/etc/veilway-control/secrets}/postgres_password
+  aws_access_key_id:
+    file: ${VEILWAY_SECRET_ROOT:-/etc/veilway-control/secrets}/aws_access_key_id
+  aws_secret_access_key:
+    file: ${VEILWAY_SECRET_ROOT:-/etc/veilway-control/secrets}/aws_secret_access_key

@@ -8,8 +8,11 @@ AWS. The prototype is for a single operator and is not a multi-tenant service.
 
 ## Users and clients
 
-- One user.
-- Two client devices: an Ubuntu laptop and an iPhone.
+- One operator; the prototype does not provide application users or tenant
+  accounts.
+- The baseline has two client devices: an Ubuntu laptop and an iPhone.
+- The operator may explicitly provision additional device profiles with
+  non-personal identifiers.
 - Client profiles and credentials must be generated and handled as secrets.
 
 ## Planned connection modes
@@ -28,8 +31,11 @@ and IPv6 egress through AWS.
 
 ## Management and coexistence
 
-- The future web panel will bind to a non-public interface and be accessed
-  through an operator-created SSH tunnel.
+- The accepted restart-only panel is public at `https://veilway.ru` so it stays
+  reachable during a VPN outage. It manages only `aws-direct` and `yc-direct`
+  and uses a single administrator with a server-side cookie session.
+- Registration, MFA, PKI and profile generation are not part of the restart
+  control-plane MVP.
 - Veilway deployment targets only newly created, dedicated VMs. Inventory and
   Terraform state must not reference the old VMs.
 - The existing OpenVPN Access Server is outside the target architecture and
@@ -90,9 +96,12 @@ and IPv6 egress through AWS.
 - Local client-profile creation and revocation tooling.
 - Fail-closed Yandex-to-AWS multi-hop routing and transit-only DNS.
 - Static validation and operator acceptance-test instructions.
+- A separately deployable three-container restart control plane and outbound
+  heartbeat agent for the two dedicated VPN VMs.
 
 ## First-iteration non-goals
 
-- Implementing the web panel or its API.
+- Web registration, user profile issuance, PKI management, cloud discovery or
+  management of any VM other than `aws-direct` and `yc-direct`.
 - Migrating or modifying the old VMs or existing OpenVPN Access Server.
 - Automatically applying Terraform or connecting to any VM.

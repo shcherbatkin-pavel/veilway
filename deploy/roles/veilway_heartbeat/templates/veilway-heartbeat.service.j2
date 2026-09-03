@@ -1,0 +1,17 @@
+[Unit]
+Description=Send Veilway VPN heartbeat
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/sbin/veilway-heartbeat-agent
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectControlGroups=true
+ProtectKernelTunables=true
+NoNewPrivileges=true
+RestrictSUIDSGID=true
+UMask=0077
