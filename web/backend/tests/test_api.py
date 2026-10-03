@@ -183,3 +183,31 @@ def test_restart_requires_fresh_healthy_heartbeat(
                 Settings(public_host="testserver"),
             )
         assert stale.value.status_code == 409
+
+
+@pytest.mark.parametrize("age,accepted", [(60, True), (60.000001, False)])
+def test_heartbeat_freshness_boundary(db_factory, seed_control_data, monkeypatch, age, accepted):
+    seed_control_data()
+    now = utcnow()
+    monkeypatch.setattr("veilway_control.api.utcnow", lambda: now)
+    with db_factory() as db:
+        for heartbeat in db.scalars(select(VmHeartbeat)):
+            heartbeat.received_at = now - timedelta(seconds=age)
+        db.commit()
+    with build_client(db_factory) as client:
+        csrf = login(client)
+        vms = client.get("/api/v1/vpn-vms").json()
+        assert all(vm["state"] == ("healthy" if accepted else "degraded") for vm in vms)
+        response = client.post("/api/v1/restart-jobs", json={"targets": ["aws-direct"]}, headers={"X-CSRF-Token": csrf})
+        assert response.status_code == (202 if accepted else 409)
+        if accepted:
+            body = response.json()
+            assert set(body) == {"id", "status", "created_at", "started_at", "finished_at", "error_code", "targets"}
+            assert set(body["targets"][0]) == {"slug", "position", "status", "dispatched_at", "recovered_at", "error_code"}
+            detail = client.get(f"/api/v1/restart-jobs/{body['id']}").json()
+            # SQLite reloads timezone-aware columns as naive UTC datetimes.
+            assert detail["created_at"].removesuffix("Z") == body["created_at"].removesuffix("Z")
+            assert {key: value for key, value in detail.items() if key != "created_at"} == {key: value for key, value in body.items() if key != "created_at"}
+            assert client.get("/api/v1/restart-jobs").json() == [detail]
+        else:
+            assert response.json() == {"detail": "target heartbeat is not fresh and healthy"}

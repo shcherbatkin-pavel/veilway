@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+import pytest
+
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from veilway_control.cloud import CloudOperationError, RebootReceipt
+from veilway_control.cloud import CloudMutationError, CloudOperationError, RebootReceipt
 from veilway_control.config import Settings
 from veilway_control.models import (
     RestartJob,
@@ -195,3 +197,31 @@ def test_definitive_cloud_operation_failure_stops_job(
     assert job.status == "failed"
     assert job.error_code == "yandex_operation_failed"
     assert providers["yc-direct"].calls == ["yc-direct"]
+
+
+@pytest.mark.parametrize("ambiguous,status", [(True, "needs_review"), (False, "failed")])
+def test_mutation_failure_never_retries(db_factory, seed_control_data, ambiguous, status):
+    ids = seed_control_data()
+    create_job(db_factory, ids)
+    worker, providers = make_worker(db_factory)
+
+    def fail_reboot(vm):
+        # The dispatch marker must already be durable before any cloud mutation.
+        job = load_job(db_factory)
+        assert job.status == "dispatching"
+        assert job.targets[0].status == "dispatching"
+        providers[vm.slug].calls.append(vm.slug)
+        raise CloudMutationError("synthetic_mutation_error", ambiguous=ambiguous)
+
+    providers["aws-direct"].reboot = fail_reboot
+    worker.step()
+    worker.step()
+    worker.recover_interrupted_dispatches()
+    worker.step()
+    job = load_job(db_factory)
+    assert job.status == status
+    assert job.targets[0].status == status
+    assert job.error_code == "synthetic_mutation_error"
+    assert job.active_guard is None
+    assert providers["aws-direct"].calls == ["aws-direct"]
+    assert providers["yc-direct"].calls == []
