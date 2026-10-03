@@ -1,0 +1,44 @@
+---
+- name: Build the expected healthy container list
+  ansible.builtin.set_fact:
+    veilway_expected_healthy_containers: >-
+      {{
+        ['veilway-openvpn', 'veilway-unbound']
+        + (
+          ['veilway-openvpn-multihop', 'veilway-openvpn-transit']
+          if veilway_multihop_enabled and veilway_mode == 'yc-direct'
+          else []
+        )
+        + (
+          ['veilway-openvpn-transit', 'veilway-unbound-transit']
+          if veilway_multihop_enabled and veilway_mode == 'aws-direct'
+          else []
+        )
+      }}
+
+- name: Wait for the Veilway containers to become healthy
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - inspect
+      - --type
+      - container
+      - "{{ item }}"
+  loop: "{{ veilway_expected_healthy_containers }}"
+  register: veilway_container_health
+  changed_when: false
+  retries: 12
+  delay: 5
+  until: >-
+    veilway_container_health.rc == 0 and
+    (veilway_container_health.stdout | from_json | first).State.Health.Status == 'healthy'
+
+- name: Record the dedicated-host deployment marker
+  ansible.builtin.copy:
+    content: |
+      This dedicated VM is managed by the Veilway {{ veilway_mode }} deployment.
+      Do not reuse it for unrelated services.
+    dest: "{{ veilway_config_root }}/managed-by-veilway"
+    owner: root
+    group: root
+    mode: "0644"

@@ -1,0 +1,77 @@
+---
+- name: Start PostgreSQL before migrations
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - up
+      - --detach
+      - db
+  register: veilway_control_db_start
+  changed_when: "'Started' in veilway_control_db_start.stdout or 'Created' in veilway_control_db_start.stdout"
+
+- name: Apply database migrations
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - run
+      - --rm
+      - api
+      - alembic
+      - upgrade
+      - head
+  register: veilway_control_migrate
+  changed_when: "'Running upgrade' in veilway_control_migrate.stdout"
+
+- name: Synchronize the only administrator from protected stdin
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - run
+      - --rm
+      - --no-deps
+      - api
+      - veilway-control
+      - bootstrap-admin
+    stdin: >-
+      {{ {'login': veilway_control_admin_login,
+          'password': veilway_control_admin_password} | to_json }}
+  no_log: true
+  changed_when: true
+
+- name: Synchronize the two immutable VPN VM records from protected stdin
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - run
+      - --rm
+      - --no-deps
+      - api
+      - veilway-control
+      - sync-vms
+    stdin: >-
+      {{ {
+        'aws-direct': {
+          'instance_id': veilway_control_aws_direct_instance_id,
+          'region': veilway_control_aws_region,
+          'heartbeat_token': veilway_control_aws_heartbeat_token
+        },
+        'yc-direct': {
+          'instance_id': veilway_control_yc_direct_instance_id,
+          'region': veilway_control_yc_region,
+          'heartbeat_token': veilway_control_yc_heartbeat_token
+        }
+      } | to_json }}
+  no_log: true
+  changed_when: true

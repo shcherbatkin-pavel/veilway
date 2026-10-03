@@ -1,0 +1,62 @@
+---
+- name: Install the explicitly required host packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - docker.io
+      - docker-compose-v2
+      - nftables
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the fixed host group matching the OpenVPN container
+  ansible.builtin.group:
+    name: veilway
+    gid: "{{ veilway_openvpn_server_gid }}"
+    system: true
+    state: present
+
+- name: Create application and configuration directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ veilway_install_root }}"
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_install_root }}/image"
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_config_root }}"
+      group: veilway
+      mode: "0750"
+    - path: "{{ veilway_config_root }}/openvpn"
+      group: veilway
+      mode: "0750"
+    - path: "{{ veilway_config_root }}/openvpn/ccd"
+      group: veilway
+      mode: "0750"
+      multihop: true
+    - path: "{{ veilway_config_root }}/pki"
+      group: veilway
+      mode: "0750"
+    - path: "{{ veilway_config_root }}/pki/multihop-ingress"
+      group: veilway
+      mode: "0750"
+      multihop: true
+    - path: "{{ veilway_config_root }}/pki/transit-client"
+      group: veilway
+      mode: "0750"
+      multihop: true
+    - path: "{{ veilway_config_root }}/pki/transit-server"
+      group: veilway
+      mode: "0750"
+      multihop: true
+    - path: "{{ veilway_config_root }}/unbound"
+      group: root
+      mode: "0755"
+  when: not (item.multihop | default(false)) or veilway_multihop_enabled

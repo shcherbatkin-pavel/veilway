@@ -1,0 +1,123 @@
+---
+- name: Apply prerequisite service changes before Compose
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable Docker and nftables at boot
+  ansible.builtin.service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - docker
+    - nftables
+
+- name: Read the fail-closed Yandex multi-hop policy baseline
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop:
+    - [/usr/sbin/ip, rule, show]
+    - [/usr/sbin/ip, route, show, table, "{{ veilway_multihop_route_table_ipv4 }}"]
+    - [/usr/sbin/ip, -6, rule, show]
+    - [/usr/sbin/ip, -6, route, show, table, "{{ veilway_multihop_route_table_ipv6 }}"]
+  register: veilway_multihop_policy_baseline
+  changed_when: false
+  no_log: true
+  when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+- name: Restore missing fail-closed Yandex multi-hop policy entries
+  ansible.builtin.command:
+    argv: "{{ item.command }}"
+  loop:
+    - name: IPv4 source policy rule
+      present: >-
+        {{ 'from ' ~ veilway_multihop_ipv4_cidr ~ ' lookup ' ~
+        veilway_multihop_route_table_ipv4 in
+        veilway_multihop_policy_baseline.results[0].stdout }}
+      command:
+        - /usr/sbin/ip
+        - rule
+        - add
+        - priority
+        - "{{ veilway_multihop_route_priority }}"
+        - from
+        - "{{ veilway_multihop_ipv4_cidr }}"
+        - table
+        - "{{ veilway_multihop_route_table_ipv4 }}"
+    - name: IPv4 unreachable fallback
+      present: >-
+        {{ 'unreachable default' in
+        veilway_multihop_policy_baseline.results[1].stdout }}
+      command:
+        - /usr/sbin/ip
+        - route
+        - add
+        - unreachable
+        - default
+        - metric
+        - "42760"
+        - table
+        - "{{ veilway_multihop_route_table_ipv4 }}"
+    - name: IPv6 source policy rule
+      present: >-
+        {{ 'from ' ~ veilway_multihop_ipv6_cidr ~ ' lookup ' ~
+        veilway_multihop_route_table_ipv6 in
+        veilway_multihop_policy_baseline.results[2].stdout }}
+      command:
+        - /usr/sbin/ip
+        - -6
+        - rule
+        - add
+        - priority
+        - "{{ veilway_multihop_route_priority }}"
+        - from
+        - "{{ veilway_multihop_ipv6_cidr }}"
+        - table
+        - "{{ veilway_multihop_route_table_ipv6 }}"
+    - name: IPv6 unreachable fallback
+      present: >-
+        {{ 'unreachable default' in
+        veilway_multihop_policy_baseline.results[3].stdout }}
+      command:
+        - /usr/sbin/ip
+        - -6
+        - route
+        - add
+        - unreachable
+        - default
+        - metric
+        - "42760"
+        - table
+        - "{{ veilway_multihop_route_table_ipv6 }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: true
+  no_log: true
+  when:
+    - veilway_multihop_enabled and veilway_mode == 'yc-direct'
+    - not (item.present | bool)
+
+- name: Build and start the Veilway Compose stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ veilway_install_root }}"
+    project_name: veilway
+    state: present
+    build: "{{ 'always' if veilway_image_context.changed else 'policy' }}"
+    recreate: >-
+      {{ 'always' if (
+        veilway_public_pki_copy.changed or
+        veilway_private_pki_copy.changed or
+        veilway_yc_multihop_public_pki_copy.changed or
+        veilway_yc_multihop_private_pki_copy.changed or
+        veilway_aws_transit_public_pki_copy.changed or
+        veilway_aws_transit_private_pki_copy.changed or
+        veilway_openvpn_config.changed or
+        veilway_yc_multihop_configs.changed or
+        veilway_aws_transit_config.changed or
+        veilway_aws_transit_ccd.changed or
+        veilway_unbound_config.changed or
+        veilway_transit_unbound_config.changed or
+        veilway_image_context.changed or
+        veilway_compose_config.changed
+      ) else 'auto' }}
+    remove_orphans: true
+  register: veilway_compose_result

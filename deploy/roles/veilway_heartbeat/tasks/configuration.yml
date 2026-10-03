@@ -1,0 +1,33 @@
+---
+- name: Create the heartbeat configuration directory
+  ansible.builtin.file:
+    path: "{{ veilway_heartbeat_config_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Install the outbound-only heartbeat agent
+  ansible.builtin.copy:
+    src: veilway-heartbeat-agent
+    dest: /usr/local/sbin/veilway-heartbeat-agent
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the heartbeat configuration
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: "{{ veilway_heartbeat_config_root }}/config.json"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Install the heartbeat token
+  ansible.builtin.copy:
+    content: "{{ veilway_heartbeat_token }}\n"
+    dest: "{{ veilway_heartbeat_config_root }}/token"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true

@@ -1,0 +1,16 @@
+---
+- name: Start exactly the three control plane containers
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - up
+      - --detach
+      - --remove-orphans
+      - --force-recreate
+      - api
+      - web
+  register: veilway_control_start
+  changed_when: "'Started' in veilway_control_start.stdout or 'Created' in veilway_control_start.stdout"
