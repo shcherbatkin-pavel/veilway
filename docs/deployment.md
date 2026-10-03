@@ -190,6 +190,31 @@ letters or digits, with only single internal hyphens. For example:
 ./scripts/verify-client-profiles
 ```
 
+Client certificates default to 365 days. Add `--valid-for 1mo`, `3mo`, `6mo`,
+or `12mo` for calendar months; any positive integer number of months (`mo`)
+or minutes (`m`) is accepted. Calendar arithmetic uses UTC and clamps the day
+to the last day of the target month. Alternatively use
+`--expires-at '2026-10-03T08:30:00+03:00'`: an ISO 8601 timestamp with seconds
+and an explicit timezone. The options are mutually exclusive. Past dates and
+dates beyond CA expiry are rejected before key generation or CA database writes.
+The command prints the issued expiry in UTC and Moscow time. Python 3 is required.
+
+For a manual expiry test, use a fresh device identifier:
+
+```sh
+./scripts/veilway-pki profile create --device expiry-test --mode yc-aws-multihop --valid-for 10m
+```
+
+Enter the CA passphrase locally and import the generated profile through a
+trusted channel. With client and server clocks synchronized, confirm connection
+before the printed expiry; after expiry, disconnect and attempt a new connection.
+Certificate validation must reject the expired certificate. An existing session
+may continue until a later TLS check: immediate disconnection is not guaranteed.
+No server deployment or CRL update is required for certificate expiration.
+The profile validator also rejects expired profiles; keep this in mind when
+running a full validation after the test. Existing profiles keep their original
+expiry; issue a fresh identity to obtain a different lifetime.
+
 The validator continues to require the six baseline profiles and validates all
 additional profiles, including their unique certificates, private keys, and
 `tls-crypt-v2` keys. Additional identities remain operator-managed profiles;

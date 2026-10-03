@@ -36,6 +36,20 @@ Run `./scripts/check.sh` for local static checks and
 `./scripts/pki-smoke.py` exercises the six baseline identities, additional
 sanitized device identifiers, the transit identity, remote-update behavior,
 and revocation using temporary test-only key material.
+The check runner never starts containers or installs tooling. It validates
+shell/Python syntax, local expiry and parser contracts, Terraform and Ansible
+syntax when available, Compose exposure, frontend checks when
+local dependencies exist, and the Git ignore policy. Credential scanning reads
+only changed Git-visible regular files and prints filenames rather than values.
+
+PKI functions live in `scripts/lib/pki/`; source files only define functions.
+The `veilway-pki` CLI retains the protected storage paths, interactive CA
+passphrase and existing command contract. AWS diagnostics execute commands in
+the shell entrypoint and parse synthetic-testable input in `scripts/lib/`.
+
+Container smoke tests are separate operator-invoked commands. Backend tests use
+mocked providers and cannot restart real VMs. Refactoring these tools does not
+authorize deployment or any change to cloud resources.
 
 ## Safety status
 

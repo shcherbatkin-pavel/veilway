@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import sys
 from typing import Any
+
+from lib.operator_validation import ipv4_host_cidrs, rule_port
 
 
 EXPECTED_RESOURCES = {
@@ -16,15 +17,6 @@ EXPECTED_RESOURCES = {
     "yandex_vpc_security_group.vpn",
     "yandex_vpc_subnet.vpn",
 }
-
-
-def rule_port(rule: dict[str, Any]) -> int | None:
-    """Normalize both provider representations of a single port."""
-    if isinstance(rule.get("port"), int):
-        return rule["port"]
-    if rule.get("from_port") == rule.get("to_port"):
-        return rule.get("from_port")
-    return None
 
 
 def main() -> int:
@@ -83,14 +75,7 @@ def main() -> int:
     ssh_cidrs = (
         ssh_rules[0].get("v4_cidr_blocks") or [] if len(ssh_rules) == 1 else []
     )
-    try:
-        ssh_safe = len(ssh_cidrs) == 2 and all(
-            ipaddress.ip_network(cidr, strict=True).version == 4
-            and ipaddress.ip_network(cidr, strict=True).prefixlen == 32
-            for cidr in ssh_cidrs
-        )
-    except ValueError:
-        ssh_safe = False
+    ssh_safe = ipv4_host_cidrs(ssh_cidrs, 2)
 
     public_direct = (
         len(direct_rules) == 1

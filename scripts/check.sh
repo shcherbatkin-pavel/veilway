@@ -8,12 +8,22 @@ readonly REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 
 cd -- "${REPOSITORY_ROOT}"
 
+shell_files=(
+    scripts/acceptance-ubuntu-direct scripts/audit-vm.sh scripts/check.sh
+    scripts/container-smoke.sh scripts/diagnose-aws-container-client
+    scripts/diagnose-aws-data-channel scripts/test-control-plane.sh scripts/veilway-pki
+    scripts/verify-aws-host-key.sh scripts/verify-client-profiles deploy/image/wait-for-interface
+)
+mapfile -t pki_shell_files < <(rg --files scripts/lib/pki --glob '*.sh' | sort)
+shell_files+=("${pki_shell_files[@]}")
 printf '%s\n' '[1/9] Bash syntax'
-bash -n scripts/acceptance-ubuntu-direct scripts/audit-vm.sh scripts/check.sh scripts/container-smoke.sh scripts/diagnose-aws-container-client scripts/diagnose-aws-data-channel scripts/test-control-plane.sh scripts/veilway-pki scripts/verify-aws-host-key.sh scripts/verify-client-profiles deploy/image/wait-for-interface
+for shell_file in "${shell_files[@]}"; do
+    bash -n "${shell_file}"
+done
 
 if command -v -- shellcheck >/dev/null 2>&1; then
     printf '%s\n' '[2/9] ShellCheck'
-    shellcheck scripts/acceptance-ubuntu-direct scripts/audit-vm.sh scripts/check.sh scripts/container-smoke.sh scripts/diagnose-aws-container-client scripts/diagnose-aws-data-channel scripts/test-control-plane.sh scripts/veilway-pki scripts/verify-aws-host-key.sh scripts/verify-client-profiles deploy/image/wait-for-interface
+    shellcheck --external-sources --source-path=SCRIPTDIR "${shell_files[@]}"
 else
     printf '%s\n' '[2/9] ShellCheck skipped: command unavailable'
 fi
@@ -22,6 +32,10 @@ printf '%s\n' '[3/9] Python syntax and CIDR validation'
 python3 -m py_compile \
     scripts/control-postgres-smoke.py \
     scripts/pki-smoke.py \
+    scripts/pki-expiry.py \
+    scripts/test-pki-expiry.py \
+    scripts/test-operator-tools.py \
+    scripts/check-public-diff.py \
     scripts/render-inventory.py \
     scripts/review-aws-direct-plan.py \
     scripts/review-yandex-multihop-plan.py \
@@ -31,7 +45,10 @@ python3 -m py_compile \
     deploy/filter_plugins/veilway_network.py \
     deploy/roles/veilway_heartbeat/files/veilway-heartbeat-agent
 mapfile -t control_python_files < <(rg --files web/backend --glob '*.py' | sort)
-python3 -m py_compile "${control_python_files[@]}"
+mapfile -t operator_python_files < <(rg --files scripts/lib --glob '*.py' | sort)
+python3 -m py_compile "${control_python_files[@]}" "${operator_python_files[@]}"
+python3 scripts/test-pki-expiry.py
+python3 scripts/test-operator-tools.py
 valid_result="$(printf '%s\n' '{"vpc_cidr":"10.241.1.0/24","vpn_cidr":"10.242.10.0/24","future_multihop_cidr":"10.242.30.0/24","transit_cidr":"10.242.40.0/29","operator_cidrs_json":"[\"198.51.100.10/32\"]"}' | scripts/validate-network-plan.py)"
 [[ "${valid_result}" == *'"valid": "true"'* ]] || {
     printf '%s\n' 'CIDR validator rejected the known-good fixture.' >&2
@@ -113,7 +130,7 @@ test -f web/frontend/package-lock.json
 if [[ -d web/frontend/node_modules ]]; then
     npm --prefix web/frontend run typecheck
 else
-    printf '%s\n' 'Frontend typecheck skipped: node_modules is absent'
+    printf '%s\n' 'Frontend checks skipped: node_modules is absent'
 fi
 
 printf '%s\n' '[8/9] Sensitive-path ignore policy'
@@ -140,20 +157,9 @@ if git check-ignore --quiet --no-index -- .env.example; then
     exit 1
 fi
 
-printf '%s\n' '[9/9] Diff whitespace and credential-shaped content'
+printf '%s\n' '[9/9] Diff whitespace and changed public-file credential scan'
 git diff --check
-if rg --hidden --glob '!.git/**' --glob '!audit-results/**' --glob '!client-profiles/**' \
-    --glob '!secrets/**' \
-    --multiline --quiet \
-    -- '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----\n[A-Za-z0-9+/]{32}' .; then
-    printf '%s\n' 'Credential-shaped private key material found in public files.' >&2
-    exit 1
-fi
-if rg --hidden --glob '!.git/**' --glob '!audit-results/**' --glob '!client-profiles/**' \
-    --glob '!secrets/**' \
-    --quiet -- 'AKIA[0-9A-Z]{16}' .; then
-    printf '%s\n' 'Credential-shaped AWS access key found in public files.' >&2
-    exit 1
-fi
+python3 scripts/check-public-diff.py
 
+printf '%s\n' 'Container smoke tests are separate: scripts/test-control-plane.sh --build, scripts/pki-smoke.py, scripts/container-smoke.sh'
 printf '%s\n' "${PROGRAM_NAME}: all available static checks passed"

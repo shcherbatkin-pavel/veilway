@@ -7,10 +7,12 @@ import ipaddress
 import json
 import os
 from pathlib import Path
-import stat
+
 import subprocess
 import tempfile
 from typing import Any
+
+from lib.operator_validation import protected_file_mode, rule_port
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
@@ -28,7 +30,7 @@ class InventoryError(RuntimeError):
 def require_protected_file(path: Path) -> None:
     if not path.is_file() or path.is_symlink():
         raise InventoryError(f"missing regular protected file: {path.name}")
-    if stat.S_IMODE(path.stat().st_mode) != 0o600:
+    if protected_file_mode(path) != 0o600:
         raise InventoryError(f"protected file mode must be 0600: {path.name}")
 
 
@@ -141,14 +143,6 @@ def validate_ipv6_address(value: Any, label: str) -> str:
     if address.version != 6 or not address.is_global:
         raise InventoryError(f"{label} must be a global IPv6 address")
     return str(address)
-
-
-def rule_port(rule: dict[str, Any]) -> int | None:
-    if isinstance(rule.get("port"), int):
-        return rule["port"]
-    if rule.get("from_port") == rule.get("to_port"):
-        return rule.get("from_port")
-    return None
 
 
 def require_multihop_security_groups(
