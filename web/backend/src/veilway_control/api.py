@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import hmac
 import uuid
-from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from .services import RestartRejected, create_restart, list_vm_states
 from .config import Settings, get_settings
 from .database import get_db
 from .models import (
@@ -16,10 +15,8 @@ from .models import (
     Admin,
     AdminSession,
     RestartJob,
-    RestartTarget,
     VmHeartbeat,
     VpnVm,
-    as_utc,
     utcnow,
 )
 from .schemas import (
@@ -138,41 +135,15 @@ def list_vpn_vms(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> list[VmResponse]:
-    vms = db.scalars(
-        select(VpnVm)
-        .where(VpnVm.slug.in_(ALLOWED_VM_SLUGS))
-        .options(selectinload(VpnVm.heartbeat))
-        .order_by(VpnVm.restart_order)
-    ).all()
-    active_slugs = set(
-        db.scalars(
-            select(VpnVm.slug)
-            .join(RestartTarget, RestartTarget.vm_id == VpnVm.id)
-            .join(RestartJob, RestartJob.id == RestartTarget.job_id)
-            .where(RestartJob.active_guard == 1)
-        ).all()
-    )
-    stale_before = utcnow() - timedelta(seconds=settings.heartbeat_stale_seconds)
-    result: list[VmResponse] = []
-    for vm in vms:
-        heartbeat = vm.heartbeat
-        if vm.slug in active_slugs:
-            state = "restarting"
-        elif heartbeat is None:
-            state = "unknown"
-        elif as_utc(heartbeat.received_at) < stale_before or not heartbeat.healthy:
-            state = "degraded"
-        else:
-            state = "healthy"
-        result.append(
-            VmResponse(
-                slug=vm.slug,
-                provider=vm.provider,
-                state=state,
-                last_heartbeat_at=heartbeat.received_at if heartbeat else None,
-            )
+    return [
+        VmResponse(
+            slug=vm.slug,
+            provider=vm.provider,
+            state=state,
+            last_heartbeat_at=vm.heartbeat.received_at if vm.heartbeat else None,
         )
-    return result
+        for vm, state in list_vm_states(db, settings, now=utcnow())
+    ]
 
 
 @router.post(
@@ -186,61 +157,11 @@ def create_restart_job(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> RestartJobResponse:
-    vms = db.scalars(
-        select(VpnVm)
-        .where(VpnVm.slug.in_(payload.targets))
-        .options(selectinload(VpnVm.heartbeat))
-        .order_by(VpnVm.restart_order)
-    ).all()
-    if len(vms) != len(payload.targets):
-        raise HTTPException(status_code=400, detail="unknown restart target")
-    if any(vm.heartbeat is None for vm in vms):
-        raise HTTPException(status_code=409, detail="target has no heartbeat baseline")
-    stale_before = utcnow() - timedelta(seconds=settings.heartbeat_stale_seconds)
-    if any(
-        not vm.heartbeat.healthy
-        or as_utc(vm.heartbeat.received_at) < stale_before
-        for vm in vms
-        if vm.heartbeat is not None
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="target heartbeat is not fresh and healthy",
-        )
-
-    job = RestartJob(
-        admin_id=authenticated.admin.id,
-        status="queued",
-        active_guard=1,
-    )
     try:
-        db.add(job)
-        db.flush()
-        for position, vm in enumerate(vms, start=1):
-            assert vm.heartbeat is not None
-            db.add(
-                RestartTarget(
-                    job_id=job.id,
-                    vm_id=vm.id,
-                    position=position,
-                    status="queued",
-                    previous_boot_id=vm.heartbeat.boot_id,
-                )
-            )
-        db.commit()
-    except IntegrityError as error:
-        db.rollback()
-        raise HTTPException(
-            status_code=409, detail="another restart job is active"
-        ) from error
-    persisted = db.scalar(
-        select(RestartJob)
-        .where(RestartJob.id == job.id)
-        .options(selectinload(RestartJob.targets).selectinload(RestartTarget.vm))
-    )
-    assert persisted is not None
-    return serialize_job(persisted)
-
+        job = create_restart(db, settings, authenticated.admin.id, payload.targets, now=utcnow())
+    except RestartRejected as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    return serialize_job(job)
 
 @router.get("/restart-jobs", response_model=list[RestartJobResponse])
 def list_restart_jobs(

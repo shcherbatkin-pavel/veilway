@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from collections.abc import Callable
 from datetime import timedelta
 
@@ -50,10 +49,7 @@ class RestartWorker:
                 )
             ).all()
             for job in jobs:
-                job.status = "needs_review"
-                job.error_code = "backend_interrupted_dispatch"
-                job.finished_at = utcnow()
-                job.active_guard = None
+                self._finish_job(job, "needs_review", "backend_interrupted_dispatch")
                 for target in job.targets:
                     if target.status == "dispatching":
                         target.status = "needs_review"
@@ -104,12 +100,7 @@ class RestartWorker:
     def _dispatch(
         self, db: Session, job: RestartJob, target: RestartTarget
     ) -> None:
-        now = utcnow()
-        job.status = "dispatching"
-        job.started_at = job.started_at or now
-        target.status = "dispatching"
-        target.dispatched_at = now
-        db.commit()
+        self._mark_dispatching(db, job, target)
 
         try:
             receipt = self._provider(target.vm).reboot(target.vm)
@@ -118,19 +109,13 @@ class RestartWorker:
             db.refresh(target)
             target.status = "needs_review" if error.ambiguous else "failed"
             target.error_code = error.code
-            job.status = target.status
-            job.error_code = error.code
-            job.finished_at = utcnow()
-            job.active_guard = None
+            self._finish_job(job, target.status, error.code)
             db.commit()
             return
 
         db.refresh(job)
         db.refresh(target)
-        target.cloud_request_id = receipt.request_id
-        target.status = "waiting"
-        job.status = "waiting"
-        db.commit()
+        self._mark_waiting(db, job, target, receipt.request_id)
 
     def _wait_for_recovery(
         self, db: Session, job: RestartJob, target: RestartTarget
@@ -171,23 +156,37 @@ class RestartWorker:
             db.commit()
 
     @staticmethod
-    def _complete_job(db: Session, job: RestartJob) -> None:
-        job.status = "succeeded"
-        job.finished_at = utcnow()
-        job.active_guard = None
+    def _mark_dispatching(db: Session, job: RestartJob, target: RestartTarget) -> None:
+        now = utcnow()
+        job.status = "dispatching"
+        job.started_at = job.started_at or now
+        target.status = "dispatching"
+        target.dispatched_at = now
+        # Persist before the cloud call: an interrupted dispatch must never retry.
         db.commit()
 
     @staticmethod
-    def _fail_job(
-        db: Session,
-        job: RestartJob,
-        target: RestartTarget,
-        error_code: str,
-    ) -> None:
-        target.status = "failed"
-        target.error_code = error_code
-        job.status = "failed"
+    def _mark_waiting(db: Session, job: RestartJob, target: RestartTarget, request_id: str) -> None:
+        target.cloud_request_id = request_id
+        target.status = "waiting"
+        job.status = "waiting"
+        db.commit()
+
+    @staticmethod
+    def _finish_job(job: RestartJob, status: str, error_code: str | None = None) -> None:
+        job.status = status
         job.error_code = error_code
         job.finished_at = utcnow()
         job.active_guard = None
+
+    @classmethod
+    def _complete_job(cls, db: Session, job: RestartJob) -> None:
+        cls._finish_job(job, "succeeded")
+        db.commit()
+
+    @classmethod
+    def _fail_job(cls, db: Session, job: RestartJob, target: RestartTarget, error_code: str) -> None:
+        target.status = "failed"
+        target.error_code = error_code
+        cls._finish_job(job, "failed", error_code)
         db.commit()

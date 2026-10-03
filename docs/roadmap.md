@@ -44,14 +44,20 @@ ingress and AWS egress. Manual iPhone acceptance passed IPv4 and IPv6 on both
 Wi-Fi and mobile networks, including recovery after disconnect. Both deployed
 roles are idempotent and their read-only verifiers pass.
 
-## 5. Web UI
+## 5. Public restart control plane
 
-Implement the minimal single-user management interface and API, including
-secure client-profile creation, delivery, rotation, and revocation. Bind the UI
-to a non-public interface so it is reachable only through an operator-created
-SSH tunnel. Completion requires authentication, input validation, audit-safe
-logging, and confirmation that no management port or credential material is
-publicly exposed.
+The implemented first web phase is a public, authenticated single-operator
+restart dashboard for only `aws-direct` and `yc-direct`, described in ADR 0004
+and the control-plane guide. It provides outbound heartbeats and sequential
+restart jobs; a combined job waits for AWS recovery before restarting Yandex.
+Authentication, CSRF protection, the two-node allowlist, audit-safe responses,
+and handling ambiguous mutations are covered by local tests. Live acceptance
+and each real restart remain separate, explicit operator actions.
+
+Application users, client-profile delivery, rotation, revocation and PKI are
+outside this web phase. Any future web management of profiles requires its own
+design and security review; the existing local operator tools remain the
+supported interface.
 
 ## 6. Hardening and operations
 
