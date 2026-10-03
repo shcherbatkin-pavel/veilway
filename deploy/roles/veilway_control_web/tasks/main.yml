@@ -221,6 +221,7 @@
     - package-lock.json
     - package.json
     - src/
+    - tests/
     - tsconfig.app.json
     - tsconfig.json
     - vite.config.ts
