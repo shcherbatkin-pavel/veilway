@@ -1,0 +1,117 @@
+---
+- name: Create web control plane directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ veilway_control_install_root }}"
+      owner: root
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_control_install_root }}/app"
+      owner: root
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_control_install_root }}/app/backend"
+      owner: root
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_control_install_root }}/app/frontend"
+      owner: root
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_control_secret_root }}"
+      owner: root
+      group: root
+      mode: "0700"
+    - path: "{{ veilway_control_data_root }}/postgres"
+      owner: "70"
+      group: "70"
+      mode: "0700"
+    - path: "{{ veilway_control_data_root }}/caddy-data"
+      owner: "10001"
+      group: "10001"
+      mode: "0700"
+    - path: "{{ veilway_control_data_root }}/caddy-config"
+      owner: "10001"
+      group: "10001"
+      mode: "0700"
+    - path: "{{ veilway_control_runtime_root }}"
+      owner: "10001"
+      group: "10001"
+      mode: "0700"
+
+- name: Copy the control plane Compose manifest
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../web/compose.yaml"
+    dest: "{{ veilway_control_install_root }}/app/compose.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Copy only allowlisted backend build inputs
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../web/backend/{{ item }}"
+    dest: "{{ veilway_control_install_root }}/app/backend/{{ item }}"
+    owner: root
+    group: root
+    directory_mode: "0755"
+    mode: preserve
+  loop:
+    - Dockerfile
+    - alembic.ini
+    - container-entrypoint.py
+    - migrations/
+    - pyproject.toml
+    - src/
+
+- name: Copy only allowlisted frontend build inputs
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../web/frontend/{{ item }}"
+    dest: "{{ veilway_control_install_root }}/app/frontend/{{ item }}"
+    owner: root
+    group: root
+    directory_mode: "0755"
+    mode: preserve
+  loop:
+    - Caddyfile
+    - Dockerfile
+    - index.html
+    - package-lock.json
+    - package.json
+    - src/
+    - tests/
+    - tsconfig.app.json
+    - tsconfig.json
+    - vite.config.ts
+
+- name: Install root-only runtime secrets
+  ansible.builtin.copy:
+    content: "{{ item.value }}\n"
+    dest: "{{ veilway_control_secret_root }}/{{ item.name }}"
+    owner: root
+    group: root
+    mode: "0400"
+  loop:
+    - name: postgres_password
+      value: "{{ veilway_control_postgres_password }}"
+    - name: aws_access_key_id
+      value: "{{ veilway_control_aws_access_key_id }}"
+    - name: aws_secret_access_key
+      value: "{{ veilway_control_aws_secret_access_key }}"
+  no_log: true
+
+- name: Build the web and API application images
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - build
+      - --pull
+  register: veilway_control_build
+  changed_when: true

@@ -1,0 +1,65 @@
+---
+- name: Remove endpoint-only multi-hop files after an explicit disable
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ veilway_config_root }}/openvpn/multihop-server.conf"
+    - "{{ veilway_config_root }}/openvpn/transit-client.conf"
+    - "{{ veilway_config_root }}/openvpn/transit-server.conf"
+    - "{{ veilway_config_root }}/openvpn/transit-route-up"
+    - "{{ veilway_config_root }}/openvpn/transit-route-down"
+    - "{{ veilway_config_root }}/openvpn/ccd"
+    - "{{ veilway_config_root }}/unbound/transit.conf"
+    - "{{ veilway_config_root }}/pki/multihop-ingress"
+    - "{{ veilway_config_root }}/pki/transit-client"
+    - "{{ veilway_config_root }}/pki/transit-server"
+  when: not veilway_multihop_enabled
+
+- name: Remove an explicitly disabled Yandex multi-hop source rule
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop:
+    - >-
+      {{ ['/usr/sbin/ip', 'rule', 'del', 'priority',
+      veilway_multihop_route_priority | string, 'table',
+      veilway_multihop_route_table_ipv4 | string] }}
+    - >-
+      {{ ['/usr/sbin/ip', '-6', 'rule', 'del', 'priority',
+      veilway_multihop_route_priority | string, 'table',
+      veilway_multihop_route_table_ipv6 | string] }}
+  register: veilway_disabled_multihop_rule_removal
+  changed_when: veilway_disabled_multihop_rule_removal.rc == 0
+  failed_when: veilway_disabled_multihop_rule_removal.rc not in [0, 2]
+  no_log: true
+  when:
+    - not veilway_multihop_enabled
+    - veilway_mode == 'yc-direct'
+
+- name: Read explicitly disabled Yandex multi-hop policy tables
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop:
+    - [/usr/sbin/ip, route, show, table, "{{ veilway_multihop_route_table_ipv4 }}"]
+    - [/usr/sbin/ip, -6, route, show, table, "{{ veilway_multihop_route_table_ipv6 }}"]
+  register: veilway_disabled_multihop_tables
+  changed_when: false
+  failed_when: veilway_disabled_multihop_tables.rc not in [0, 2]
+  no_log: true
+  when:
+    - not veilway_multihop_enabled
+    - veilway_mode == 'yc-direct'
+
+- name: Flush explicitly disabled Yandex multi-hop policy tables
+  ansible.builtin.command:
+    argv: "{{ item.command }}"
+  loop:
+    - command: [/usr/sbin/ip, route, flush, table, "{{ veilway_multihop_route_table_ipv4 }}"]
+      populated: "{{ veilway_disabled_multihop_tables.results[0].stdout | trim | length > 0 }}"
+    - command: [/usr/sbin/ip, -6, route, flush, table, "{{ veilway_multihop_route_table_ipv6 }}"]
+      populated: "{{ veilway_disabled_multihop_tables.results[1].stdout | trim | length > 0 }}"
+  when:
+    - not veilway_multihop_enabled
+    - veilway_mode == 'yc-direct'
+    - item.populated | bool
+  no_log: true

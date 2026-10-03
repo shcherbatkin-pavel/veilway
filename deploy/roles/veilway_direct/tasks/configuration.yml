@@ -1,0 +1,98 @@
+---
+- name: Install the OpenVPN server configuration
+  ansible.builtin.template:
+    src: openvpn-server.conf.j2
+    dest: "{{ veilway_config_root }}/openvpn/server.conf"
+    owner: root
+    group: veilway
+    mode: "0640"
+  register: veilway_openvpn_config
+
+- name: Install the Yandex multi-hop OpenVPN configurations
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ veilway_config_root }}/openvpn/{{ item.dest }}"
+    owner: root
+    group: veilway
+    mode: "{{ item.mode }}"
+  register: veilway_yc_multihop_configs
+  loop:
+    - src: openvpn-multihop-server.conf.j2
+      dest: multihop-server.conf
+      mode: "0640"
+    - src: openvpn-transit-client.conf.j2
+      dest: transit-client.conf
+      mode: "0640"
+    - src: transit-route-up.j2
+      dest: transit-route-up
+      mode: "0750"
+    - src: transit-route-down.j2
+      dest: transit-route-down
+      mode: "0750"
+  when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+- name: Install the AWS transit OpenVPN server configuration
+  ansible.builtin.template:
+    src: openvpn-transit-server.conf.j2
+    dest: "{{ veilway_config_root }}/openvpn/transit-server.conf"
+    owner: root
+    group: veilway
+    mode: "0640"
+  register: veilway_aws_transit_config
+  when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+
+- name: Install the exclusive AWS transit client route
+  ansible.builtin.template:
+    src: yc-transit.ccd.j2
+    dest: "{{ veilway_config_root }}/openvpn/ccd/yc-transit"
+    owner: root
+    group: veilway
+    mode: "0640"
+  register: veilway_aws_transit_ccd
+  when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+
+- name: Install the Unbound configuration
+  ansible.builtin.template:
+    src: unbound.conf.j2
+    dest: "{{ veilway_config_root }}/unbound/unbound.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  register: veilway_unbound_config
+
+- name: Install the AWS transit-only Unbound configuration
+  ansible.builtin.template:
+    src: unbound-transit.conf.j2
+    dest: "{{ veilway_config_root }}/unbound/transit.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  register: veilway_transit_unbound_config
+  when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+
+- name: Copy the minimal container build context
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/image/"
+    dest: "{{ veilway_install_root }}/image/"
+    owner: root
+    group: root
+    mode: preserve
+  register: veilway_image_context
+
+- name: Install the Docker Compose definition
+  ansible.builtin.template:
+    src: compose.yaml.j2
+    dest: "{{ veilway_install_root }}/compose.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+  register: veilway_compose_config
+
+- name: Install the complete nftables ruleset
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload Veilway firewall

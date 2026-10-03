@@ -1,0 +1,111 @@
+---
+- name: Require the dedicated persistent data disk
+  ansible.builtin.stat:
+    path: "{{ veilway_control_data_device }}"
+  register: veilway_control_data_device_stat
+
+- name: Refuse deployment without the exact dedicated data disk
+  ansible.builtin.assert:
+    that:
+      - veilway_control_data_device_stat.stat.exists
+    fail_msg: >-
+      The Terraform-managed data disk is absent; PostgreSQL must not use the
+      web VM boot disk.
+
+- name: Read the dedicated data disk filesystem type
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - --output
+      - value
+      - --match-tag
+      - TYPE
+      - "{{ veilway_control_data_device }}"
+  register: veilway_control_data_filesystem
+  changed_when: false
+  failed_when: veilway_control_data_filesystem.rc not in [0, 2]
+
+- name: Refuse to overwrite an unexpected data disk filesystem
+  ansible.builtin.assert:
+    that:
+      - veilway_control_data_filesystem.stdout in ['', 'ext4']
+    fail_msg: The dedicated data disk has an unexpected filesystem.
+
+- name: Create ext4 only on the empty dedicated data disk
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/mkfs.ext4
+      - -F
+      - -L
+      - "{{ veilway_control_data_label }}"
+      - "{{ veilway_control_data_device }}"
+  when: veilway_control_data_filesystem.stdout == ''
+  changed_when: true
+
+- name: Read the dedicated data disk label after filesystem initialization
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - -s
+      - LABEL
+      - -o
+      - value
+      - "{{ veilway_control_data_device }}"
+  register: veilway_control_data_current_label
+  changed_when: false
+  failed_when: veilway_control_data_current_label.rc not in [0, 2]
+
+- name: Refuse to relabel an unexpected ext4 data disk
+  ansible.builtin.assert:
+    that:
+      - >-
+        veilway_control_data_current_label.stdout in
+        [veilway_control_data_label, 'veilway-control-']
+    fail_msg: The dedicated ext4 data disk has an unexpected label.
+
+- name: Repair the label truncated by the previous overlong ext4 label
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/e2label
+      - "{{ veilway_control_data_device }}"
+      - "{{ veilway_control_data_label }}"
+  when: veilway_control_data_current_label.stdout == 'veilway-control-'
+  changed_when: true
+
+- name: Create the persistent data mountpoint
+  ansible.builtin.file:
+    path: "{{ veilway_control_data_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Persist the dedicated data disk mount
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: '^LABEL=veilway-(control-data|data)\s+'
+    line: >-
+      LABEL={{ veilway_control_data_label }} {{ veilway_control_data_root }} ext4
+      defaults,nosuid,nodev 0 2
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Check whether the dedicated data disk is mounted
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/mountpoint
+      - --quiet
+      - "{{ veilway_control_data_root }}"
+  register: veilway_control_data_mounted
+  changed_when: false
+  # util-linux mountpoint returns 32 when the path is valid but not mounted.
+  failed_when: veilway_control_data_mounted.rc not in [0, 32]
+
+- name: Mount the dedicated persistent data disk
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/mount
+      - "{{ veilway_control_data_root }}"
+  when: veilway_control_data_mounted.rc == 32
+  changed_when: true

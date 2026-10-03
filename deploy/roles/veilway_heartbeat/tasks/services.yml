@@ -1,0 +1,23 @@
+---
+- name: Install the heartbeat systemd service
+  ansible.builtin.template:
+    src: veilway-heartbeat.service.j2
+    dest: /etc/systemd/system/veilway-heartbeat.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the heartbeat systemd timer
+  ansible.builtin.template:
+    src: veilway-heartbeat.timer.j2
+    dest: /etc/systemd/system/veilway-heartbeat.timer
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable and start only the heartbeat timer
+  ansible.builtin.systemd_service:
+    name: veilway-heartbeat.timer
+    enabled: true
+    state: started
+    daemon_reload: true

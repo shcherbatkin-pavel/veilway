@@ -1,0 +1,95 @@
+---
+- name: Copy public PKI material
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ veilway_config_root }}/pki/{{ item.dest }}"
+    owner: root
+    group: veilway
+    mode: "0644"
+  no_log: true
+  register: veilway_public_pki_copy
+  loop:
+    - src: "{{ veilway_pki_root }}/ca/ca.crt"
+      dest: ca.crt
+    - src: "{{ veilway_pki_root }}/crl.pem"
+      dest: crl.pem
+    - src: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/server.crt"
+      dest: server.crt
+
+- name: Copy endpoint private key material
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ veilway_config_root }}/pki/{{ item.dest }}"
+    owner: root
+    group: veilway
+    mode: "0640"
+  no_log: true
+  register: veilway_private_pki_copy
+  loop:
+    - src: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/server.key"
+      dest: server.key
+    - src: "{{ veilway_pki_root }}/endpoints/{{ veilway_mode }}/tls-crypt-v2-server.key"
+      dest: tls-crypt-v2-server.key
+
+- name: Copy public multi-hop PKI material on Yandex
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ veilway_config_root }}/pki/{{ item.dest }}"
+    owner: root
+    group: veilway
+    mode: "0644"
+  no_log: true
+  register: veilway_yc_multihop_public_pki_copy
+  loop:
+    - src: "{{ veilway_pki_root }}/endpoints/yc-multihop-ingress/server.crt"
+      dest: multihop-ingress/server.crt
+    - src: "{{ veilway_pki_root }}/endpoints/yc-transit/client.crt"
+      dest: transit-client/client.crt
+  when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+- name: Copy private multi-hop PKI material on Yandex
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ veilway_config_root }}/pki/{{ item.dest }}"
+    owner: root
+    group: veilway
+    mode: "0640"
+  no_log: true
+  register: veilway_yc_multihop_private_pki_copy
+  loop:
+    - src: "{{ veilway_pki_root }}/endpoints/yc-multihop-ingress/server.key"
+      dest: multihop-ingress/server.key
+    - src: "{{ veilway_pki_root }}/endpoints/yc-multihop-ingress/tls-crypt-v2-server.key"
+      dest: multihop-ingress/tls-crypt-v2-server.key
+    - src: "{{ veilway_pki_root }}/endpoints/yc-transit/client.key"
+      dest: transit-client/client.key
+    - src: "{{ veilway_pki_root }}/endpoints/yc-transit/tls-crypt-v2-client.key"
+      dest: transit-client/tls-crypt-v2-client.key
+  when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+- name: Copy public transit-server PKI material on AWS
+  ansible.builtin.copy:
+    src: "{{ veilway_pki_root }}/endpoints/aws-transit/server.crt"
+    dest: "{{ veilway_config_root }}/pki/transit-server/server.crt"
+    owner: root
+    group: veilway
+    mode: "0644"
+  no_log: true
+  register: veilway_aws_transit_public_pki_copy
+  when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+
+- name: Copy private transit-server PKI material on AWS
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ veilway_config_root }}/pki/transit-server/{{ item.dest }}"
+    owner: root
+    group: veilway
+    mode: "0640"
+  no_log: true
+  register: veilway_aws_transit_private_pki_copy
+  loop:
+    - src: "{{ veilway_pki_root }}/endpoints/aws-transit/server.key"
+      dest: server.key
+    - src: "{{ veilway_pki_root }}/endpoints/aws-transit/tls-crypt-v2-server.key"
+      dest: tls-crypt-v2-server.key
+  when: veilway_multihop_enabled and veilway_mode == 'aws-direct'

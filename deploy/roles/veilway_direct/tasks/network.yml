@@ -1,0 +1,76 @@
+---
+- name: Disable Docker firewall management on the dedicated host
+  ansible.builtin.template:
+    src: docker-daemon.json.j2
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Docker
+
+- name: Read effective Netplan configuration for IPv6-enabled nodes
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/netplan
+      - get
+  register: veilway_netplan_configuration
+  changed_when: false
+  no_log: true
+  when: veilway_enable_ipv6
+
+- name: Initialize matching cloud-interface Netplan definitions
+  ansible.builtin.set_fact:
+    veilway_netplan_cloud_definitions: []
+  no_log: true
+  when: veilway_enable_ipv6
+
+- name: Select matching cloud-interface Netplan definitions
+  ansible.builtin.set_fact:
+    veilway_netplan_cloud_definitions: >-
+      {{ veilway_netplan_cloud_definitions + [item.key] }}
+  loop: >-
+    {{ ((veilway_netplan_configuration.stdout | from_yaml)
+    .get('network', {}).get('ethernets', {})) | dict2items }}
+  no_log: true
+  when:
+    - veilway_enable_ipv6
+    - >-
+      item.key == ansible_facts['default_ipv4']['interface'] or
+      item.value.get('set-name', '') ==
+      ansible_facts['default_ipv4']['interface']
+
+- name: Require exactly one cloud-interface Netplan definition
+  ansible.builtin.assert:
+    that:
+      - veilway_netplan_cloud_definitions | length == 1
+    quiet: true
+  no_log: true
+  when: veilway_enable_ipv6
+
+- name: Select the cloud-interface Netplan definition without displaying it
+  ansible.builtin.set_fact:
+    veilway_netplan_cloud_definition: >-
+      {{ veilway_netplan_cloud_definitions | first }}
+  no_log: true
+  when: veilway_enable_ipv6
+
+- name: Install the AWS IPv6 Netplan overlay
+  ansible.builtin.template:
+    src: 90-veilway-ipv6.yaml.j2
+    dest: /etc/netplan/90-veilway-ipv6.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  notify:
+    - Apply Veilway netplan
+    - Apply Veilway sysctl
+  when: veilway_enable_ipv6
+
+- name: Install explicit Veilway sysctl settings
+  ansible.builtin.template:
+    src: 90-veilway.conf.j2
+    dest: /etc/sysctl.d/90-veilway.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Apply Veilway sysctl
