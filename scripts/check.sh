@@ -129,6 +129,7 @@ printf '%s\n' '[7/9] Frontend build inputs'
 test -f web/frontend/package-lock.json
 if [[ -d web/frontend/node_modules ]]; then
     npm --prefix web/frontend run typecheck
+    npm --prefix web/frontend run test
 else
     printf '%s\n' 'Frontend checks skipped: node_modules is absent'
 fi

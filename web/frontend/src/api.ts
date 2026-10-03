@@ -73,8 +73,8 @@ export const api = {
   session: () => request<Session>("/api/v1/auth/session"),
   logout: (csrf: string) =>
     request<void>("/api/v1/auth/logout", { method: "POST" }, csrf),
-  vms: () => request<VpnVm[]>("/api/v1/vpn-vms"),
-  jobs: () => request<RestartJob[]>("/api/v1/restart-jobs"),
+  vms: (signal?: AbortSignal) => request<VpnVm[]>("/api/v1/vpn-vms", { signal }),
+  jobs: (signal?: AbortSignal) => request<RestartJob[]>("/api/v1/restart-jobs", { signal }),
   createJob: (targets: VmSlug[], csrf: string) =>
     request<RestartJob>(
       "/api/v1/restart-jobs",

@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc -b && vite build",
     "dev": "vite",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "test": "node tests/run.mjs"
   },
   "dependencies": {
     "react": "19.0.0",

@@ -4,7 +4,8 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY tsconfig.json tsconfig.app.json vite.config.ts index.html ./
 COPY src ./src
-RUN npm run build
+COPY tests ./tests
+RUN npm run test && npm run build
 
 FROM caddy:2.9.1-alpine
 COPY Caddyfile /etc/caddy/Caddyfile
