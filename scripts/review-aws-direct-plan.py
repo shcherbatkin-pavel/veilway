@@ -8,6 +8,8 @@ import json
 import sys
 from typing import Any
 
+from lib.operator_validation import ipv4_host_cidrs
+
 
 EXPECTED_RESOURCES = {
     "aws_eip.vpn",
@@ -107,14 +109,7 @@ def main() -> int:
     ]
 
     ssh_cidrs = ssh_rules[0].get("cidr_blocks") or [] if len(ssh_rules) == 1 else []
-    try:
-        ssh_cidrs_are_hosts = len(ssh_cidrs) == 2 and all(
-            ipaddress.ip_network(cidr, strict=True).version == 4
-            and ipaddress.ip_network(cidr, strict=True).prefixlen == 32
-            for cidr in ssh_cidrs
-        )
-    except ValueError:
-        ssh_cidrs_are_hosts = False
+    ssh_cidrs_are_hosts = ipv4_host_cidrs(ssh_cidrs, 2)
 
     ssh_safe = (
         len(ssh_rules) == 1

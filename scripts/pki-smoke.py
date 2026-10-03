@@ -2,6 +2,7 @@
 """Exercise the operator PKI lifecycle entirely in a temporary repository."""
 
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -48,6 +49,7 @@ def prepare_test_repository(root):
     for relative in (
         ".gitignore",
         "scripts/veilway-pki",
+        "scripts/pki-expiry.py",
         "scripts/verify-client-profiles",
         "pki/openssl-ca.cnf",
         "operator-config/endpoints.conf.example",
@@ -56,6 +58,8 @@ def prepare_test_repository(root):
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+
+    shutil.copytree(SOURCE_ROOT / "scripts/lib/pki", root / "scripts/lib/pki")
 
     subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)
 
@@ -275,6 +279,39 @@ def main():
         for mode in SERVER_MODES:
             run_cli(root, passphrase, "server", "create", "--mode", mode)
         run_cli(root, passphrase, "transit", "create")
+        from datetime import datetime, timedelta, timezone
+        expiry_spec = importlib.util.spec_from_file_location("expiry", root / "scripts/pki-expiry.py")
+        expiry_module = importlib.util.module_from_spec(expiry_spec)
+        expiry_spec.loader.exec_module(expiry_module)
+        for index, options in enumerate((
+            (), ("--valid-for", "1mo"), ("--valid-for", "3mo"),
+            ("--valid-for", "6mo"), ("--valid-for", "12mo"),
+            ("--valid-for", "10m"),
+            ("--expires-at", (datetime.now(timezone(timedelta(hours=3))) + timedelta(minutes=10)).replace(microsecond=0).isoformat()),
+        )):
+            before_issue = datetime.now(timezone.utc)
+            run_cli(root, passphrase, "profile", "create", "--device", f"expiry-{index}", "--mode", "yc-direct", *options)
+            after_issue = datetime.now(timezone.utc)
+            cert = root / "secrets/pki/clients" / f"expiry-{index}-yc-direct/client.crt"
+            dates = subprocess.check_output(["openssl", "x509", "-in", str(cert), "-noout", "-dates"], text=True).splitlines()
+            start, end = [datetime.strptime(line.split("=", 1)[1], "%b %d %H:%M:%S %Y GMT").replace(tzinfo=timezone.utc) for line in dates]
+            kwargs = {options[0][2:].replace("-", "_"): options[1]} if options else {}
+            if not expiry_module.calculate(before_issue, **kwargs) <= end <= expiry_module.calculate(after_issue, **kwargs):
+                raise RuntimeError("issued expiry does not match requested lifetime")
+            if index == 0 and abs((end - start).total_seconds() - 365 * 86400) > 10:
+                raise RuntimeError("default expiry changed")
+            for instant, accepted in ((end - timedelta(seconds=1), True), (end + timedelta(seconds=1), False)):
+                result = subprocess.run(["openssl", "verify", "-attime", str(int(instant.timestamp())), "-CAfile", str(root / "secrets/pki/ca/ca.crt"), str(cert)], capture_output=True, text=True)
+                if (result.returncode == 0) != accepted or (not accepted and "certificate has expired" not in result.stdout + result.stderr):
+                    raise RuntimeError("certificate expiry verification failed")
+        ca = root / "secrets/pki/ca"
+        before = {name: (ca / name).read_bytes() for name in ("index.txt", "serial")}
+        for options in (("--valid-for", "0m"), ("--valid-for", "999mo"), ("--expires-at", "2000-01-01T00:00:00Z"), ("--valid-for", "5m", "--expires-at", "2000-01-01T00:00:00Z")):
+            run_cli_expect_failure(root, "profile", "create", "--device", "invalid-expiry", "--mode", "yc-direct", *options)
+            if any((ca / name).read_bytes() != value for name, value in before.items()):
+                raise RuntimeError("invalid expiry changed CA database")
+            if (root / "secrets/pki/clients/invalid-expiry-yc-direct").exists():
+                raise RuntimeError("invalid expiry created client material")
         for invalid_device in (
             "",
             "../escape",

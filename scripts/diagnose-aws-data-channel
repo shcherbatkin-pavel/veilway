@@ -76,74 +76,22 @@ read_endpoint() {
 }
 
 validate_ipv4() {
-    python3 -c '
-import ipaddress
-import sys
-
-try:
-    address = ipaddress.ip_address(sys.stdin.read().strip())
-except ValueError:
-    raise SystemExit(1)
-raise SystemExit(0 if address.version == 4 else 1)
-'
+    python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" validate_ipv4
 }
 
 active_tunnel_count() {
     /usr/sbin/ip --json --details link show up |
-        python3 -c '
-import json
-import sys
-
-links = json.load(sys.stdin)
-count = 0
-for link in links:
-    name = link.get("ifname", "")
-    kind = link.get("linkinfo", {}).get("info_kind", "")
-    if kind in {"tun", "wireguard"} or name.startswith(("tun", "tap", "wg")):
-        count += 1
-print(count)
-'
+        python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" active_tunnel_count
 }
 
 active_tunnel_interface() {
     /usr/sbin/ip --json --details link show up |
-        python3 -c '
-import json
-import sys
-
-links = json.load(sys.stdin)
-matches = []
-for link in links:
-    name = link.get("ifname", "")
-    kind = link.get("linkinfo", {}).get("info_kind", "")
-    if kind in {"tun", "wireguard"} or name.startswith(("tun", "tap", "wg")):
-        matches.append(name)
-if len(matches) != 1 or not matches[0]:
-    raise SystemExit(1)
-print(matches[0])
-'
+        python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" active_tunnel_interface
 }
 
 vpn_interface_for_cidr() {
     /usr/sbin/ip -4 --json address show up |
-        python3 -c '
-import ipaddress
-import json
-import sys
-
-network = ipaddress.ip_network(sys.argv[1])
-links = json.load(sys.stdin)
-matches = set()
-for link in links:
-    for address in link.get("addr_info", []):
-        if address.get("family") != "inet" or not address.get("local"):
-            continue
-        if ipaddress.ip_address(address["local"]) in network:
-            matches.add(link.get("ifname", ""))
-if len(matches) != 1 or "" in matches:
-    raise SystemExit(1)
-print(matches.pop())
-' "${VPN_CIDR}"
+        python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" vpn_interface_for_cidr "${VPN_CIDR}"
 }
 
 read_local_counters() {
@@ -160,24 +108,7 @@ client_data_path() {
 
     link_json="$(/usr/sbin/ip --json --details link show dev "${interface_name}")" \
         || return 1
-    python3 -c '
-import json
-import sys
-
-try:
-    links = json.load(sys.stdin)
-except (json.JSONDecodeError, TypeError):
-    raise SystemExit(1)
-if len(links) != 1:
-    raise SystemExit(1)
-kind = links[0].get("linkinfo", {}).get("info_kind", "")
-if kind in {"ovpn", "ovpn-dco"}:
-    print("dco")
-elif kind == "tun" or sys.argv[1] == "classic":
-    print("classic-tun")
-else:
-    print("unknown")
-' "$(
+    python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" client_data_path "$(
         if [[ -r "/sys/class/net/${interface_name}/tun_flags" ]]; then
             printf '%s\n' 'classic'
         else
@@ -190,87 +121,21 @@ route_interface_for_destination() {
     local destination="$1"
 
     /usr/sbin/ip -4 --json route get "${destination}" |
-        python3 -c '
-import json
-import sys
-
-try:
-    routes = json.load(sys.stdin)
-except (json.JSONDecodeError, TypeError):
-    raise SystemExit(1)
-if len(routes) != 1 or not routes[0].get("dev"):
-    raise SystemExit(1)
-print(routes[0]["dev"])
-'
+        python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" route_interface_for_destination
 }
 
 route_source_for_destination() {
     local destination="$1"
 
     /usr/sbin/ip -4 --json route get "${destination}" |
-        python3 -c '
-import ipaddress
-import json
-import sys
-
-try:
-    routes = json.load(sys.stdin)
-except (json.JSONDecodeError, TypeError):
-    raise SystemExit(1)
-if len(routes) != 1 or not routes[0].get("prefsrc"):
-    raise SystemExit(1)
-try:
-    source = ipaddress.ip_address(routes[0]["prefsrc"])
-except ValueError:
-    raise SystemExit(1)
-if source.version != 4:
-    raise SystemExit(1)
-print(source)
-'
+        python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" route_source_for_destination
 }
 
 route_fingerprint_for_destination() {
     local destination="$1"
 
     /usr/sbin/ip -4 --json route get "${destination}" |
-        python3 -c '
-import ipaddress
-import json
-import sys
-
-try:
-    routes = json.load(sys.stdin)
-except (json.JSONDecodeError, TypeError):
-    raise SystemExit(1)
-if len(routes) != 1:
-    raise SystemExit(1)
-route = routes[0]
-device = route.get("dev", "")
-source_text = route.get("prefsrc", "")
-if not device or not source_text:
-    raise SystemExit(1)
-try:
-    source = ipaddress.ip_address(source_text)
-except ValueError:
-    raise SystemExit(1)
-if source.version != 4:
-    raise SystemExit(1)
-gateway_text = route.get("gateway", "")
-if gateway_text:
-    try:
-        gateway = ipaddress.ip_address(gateway_text)
-    except ValueError:
-        raise SystemExit(1)
-    if gateway.version != 4:
-        raise SystemExit(1)
-table = route.get("table", "main")
-print(json.dumps({
-    "dev": device,
-    "gateway": gateway_text,
-    "prefsrc": source_text,
-    "table": table,
-}, sort_keys=True, separators=(",", ":")))
-'
+        python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" route_fingerprint_for_destination
 }
 
 route_source_belongs_to_interface() {
@@ -278,25 +143,7 @@ route_source_belongs_to_interface() {
     local interface_name="$2"
 
     /usr/sbin/ip -4 --json address show dev "${interface_name}" |
-        python3 -c '
-import ipaddress
-import json
-import sys
-
-source = ipaddress.ip_address(sys.argv[1])
-vpn_network = ipaddress.ip_network(sys.argv[2])
-try:
-    links = json.load(sys.stdin)
-except (json.JSONDecodeError, TypeError):
-    raise SystemExit(1)
-local_addresses = {
-    ipaddress.ip_address(address["local"])
-    for link in links
-    for address in link.get("addr_info", [])
-    if address.get("family") == "inet" and address.get("local")
-}
-raise SystemExit(0 if source in local_addresses and source not in vpn_network else 1)
-' "${route_source}" "${VPN_CIDR}"
+        python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" route_source_belongs_to_interface "${route_source}" "${VPN_CIDR}"
 }
 
 openvpn_socket_source_status() {
@@ -304,62 +151,13 @@ openvpn_socket_source_status() {
     local expected_source="$2"
 
     /usr/bin/ss -H -u -n state connected |
-        python3 -c '
-import ipaddress
-import sys
-
-endpoint = ipaddress.ip_address(sys.argv[1])
-expected_source = ipaddress.ip_address(sys.argv[2])
-expected_port = int(sys.argv[3])
-
-def split_socket(value):
-    host, separator, port = value.rpartition(":")
-    if not separator or not port.isdigit():
-        return None
-    try:
-        return ipaddress.ip_address(host.strip("[]")), int(port)
-    except ValueError:
-        return None
-
-sources = []
-for line in sys.stdin:
-    fields = line.split()
-    if len(fields) < 5:
-        continue
-    local_socket = split_socket(fields[-2])
-    peer_socket = split_socket(fields[-1])
-    if local_socket is None or peer_socket != (endpoint, expected_port):
-        continue
-    sources.append(local_socket[0])
-if not sources:
-    print("unavailable")
-elif all(source == expected_source for source in sources):
-    print("passed")
-else:
-    print("mismatch")
-' "${endpoint}" "${expected_source}" "${AWS_OPENVPN_PORT}"
+        python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" openvpn_socket_source_status "${endpoint}" "${expected_source}" "${AWS_OPENVPN_PORT}"
 }
 
 udp_out_datagrams() {
-    python3 -c '
-from pathlib import Path
-
-lines = Path("/proc/net/snmp").read_text(encoding="ascii").splitlines()
-for index in range(len(lines) - 1):
-    if not lines[index].startswith("Udp:") or not lines[index + 1].startswith("Udp:"):
-        continue
-    names = lines[index].split()[1:]
-    values = lines[index + 1].split()[1:]
-    fields = dict(zip(names, values, strict=True))
-    value = fields.get("OutDatagrams", "")
-    if not value.isdigit():
-        raise SystemExit(1)
-    print(value)
-    raise SystemExit(0)
-raise SystemExit(1)
-'
+    /usr/bin/cat /proc/net/snmp |
+        python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" udp_out_datagrams
 }
-
 read_server_counters() {
     local endpoint="$1"
     local output
@@ -418,30 +216,7 @@ parse_server_openvpn_ingress_counter() {
         openvpn_ingress|openvpn_ingress_raw) ;;
         *) return 1 ;;
     esac
-    python3 -c '
-import json
-import sys
-
-try:
-    document = json.load(sys.stdin)
-except (json.JSONDecodeError, TypeError):
-    raise SystemExit(1)
-matches = []
-for item in document.get("nftables", []):
-    counter = item.get("counter")
-    if not isinstance(counter, dict):
-        continue
-    if (
-        counter.get("family") == "inet"
-        and counter.get("table") == "veilway_filter"
-        and counter.get("name") == sys.argv[1]
-        and isinstance(counter.get("packets"), int)
-    ):
-        matches.append(counter["packets"])
-if len(matches) != 1:
-    raise SystemExit(1)
-print(matches[0])
-' "${counter_name}"
+    python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" parse_server_openvpn_ingress_counter "${counter_name}"
 }
 
 parse_counters() {
@@ -482,30 +257,10 @@ write_state() {
     local temporary_state
 
     temporary_state="$(mktemp -- "${STATE_FILE}.tmp.XXXXXX")" || return 1
-    if ! python3 -c '
-import json
-from pathlib import Path
-import sys
-
-output = Path(sys.argv[1])
-document = {
-    "phase": sys.argv[2],
-    "server_rx_before": int(sys.argv[3]),
-    "server_tx_before": int(sys.argv[4]),
-    "ingress_before": int(sys.argv[5]),
-    "raw_ingress_before": int(sys.argv[6]),
-    "client_tx_delta": int(sys.argv[7]),
-    "udp_delta": int(sys.argv[8]),
-    "client_rx_delta": int(sys.argv[9]),
-    "ping_succeeded": sys.argv[10] == "true",
-    "outer_route_bypassed": sys.argv[11] == "true",
-    "data_path": sys.argv[12],
-}
-output.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
-' "${temporary_state}" "${phase}" "${server_rx_before}" \
+    if ! python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" write_state "${phase}" "${server_rx_before}" \
         "${server_tx_before}" "${ingress_before}" "${raw_ingress_before}" \
         "${client_tx_delta}" "${udp_delta}" "${client_rx_delta}" \
-        "${ping_succeeded}" "${outer_route_bypassed}" "${data_path}"; then
+        "${ping_succeeded}" "${outer_route_bypassed}" "${data_path}" > "${temporary_state}"; then
         rm -f -- "${temporary_state}"
         return 1
     fi
@@ -517,60 +272,8 @@ output.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
 }
 
 read_state() {
-    python3 -c '
-import json
-from pathlib import Path
-import sys
-
-expected = {
-    "phase",
-    "server_rx_before",
-    "server_tx_before",
-    "ingress_before",
-    "raw_ingress_before",
-    "client_tx_delta",
-    "udp_delta",
-    "client_rx_delta",
-    "ping_succeeded",
-    "outer_route_bypassed",
-    "data_path",
-}
-try:
-    document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError):
-    raise SystemExit(1)
-if not isinstance(document, dict) or set(document) != expected:
-    raise SystemExit(1)
-if document["phase"] not in {"prepared", "probed"}:
-    raise SystemExit(1)
-for name in (
-    "server_rx_before",
-    "server_tx_before",
-    "ingress_before",
-    "raw_ingress_before",
-    "client_tx_delta",
-    "udp_delta",
-    "client_rx_delta",
-):
-    if not isinstance(document[name], int) or document[name] < 0:
-        raise SystemExit(1)
-for name in ("ping_succeeded", "outer_route_bypassed"):
-    if not isinstance(document[name], bool):
-        raise SystemExit(1)
-if document["data_path"] not in {"pending", "dco", "classic-tun", "unknown"}:
-    raise SystemExit(1)
-print(document["phase"])
-print(document["server_rx_before"])
-print(document["server_tx_before"])
-print(document["ingress_before"])
-print(document["raw_ingress_before"])
-print(document["client_tx_delta"])
-print(document["udp_delta"])
-print(document["client_rx_delta"])
-print(str(document["ping_succeeded"]).lower())
-print(str(document["outer_route_bypassed"]).lower())
-print(document["data_path"])
-' "${STATE_FILE}"
+    /usr/bin/cat -- "${STATE_FILE}" |
+        python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" read_state
 }
 
 load_state_values() {

@@ -7,10 +7,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import stat
 import subprocess
 import sys
 from pathlib import Path
+
+from lib.operator_validation import protected_file_mode
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
@@ -56,7 +57,7 @@ def parse_value(raw: str, line_number: int) -> str:
 
 
 def load_environment(path: Path) -> dict[str, str]:
-    mode = stat.S_IMODE(path.stat().st_mode)
+    mode = protected_file_mode(path)
     if mode != 0o600:
         raise ValueError(f"{path} must have mode 0600, current mode is {mode:04o}")
     ignored = subprocess.run(
