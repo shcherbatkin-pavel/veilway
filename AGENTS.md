@@ -39,3 +39,19 @@ is not a credential by itself.
 - Search changed files for credential-like values and remove or redact them.
 - Document security-impacting behavior and manual operator actions.
 
+## Pull request merges
+
+The GitHub ruleset `Main branch protection` requires changes to `main` to go
+through a pull request and allows only squash merge. This restriction applies
+regardless of the repository's general merge-method settings or the API used.
+
+- Use squash merge for every pull request into `main`.
+- Resolve all code review conversations and complete the project's local
+  checks before merging.
+- Never force-push to the protected `main` branch.
+- Merge dependent pull requests in order. After merging the preceding pull
+  request, rebase only the next pull request's own changes onto the updated
+  `main`, verify that its file contents are unchanged, and retarget it to
+  `main` before merging.
+- When updating your own working branch after rebasing, use
+  `--force-with-lease` only if that branch's rulesets allow force pushes.

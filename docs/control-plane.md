@@ -1,26 +1,146 @@
 # Restart control plane operator guide
 
-The implementation under `web/` is intentionally limited to restarting
-`aws-direct` and `yc-direct`. None of the commands in this guide are run by the
+The implementation under `web/` provides Google sign-in, ADMIN/USER sessions,
+and administrative restart control for `aws-direct` and `yc-direct`.
+The isolated PKI and public profile API are implemented in stages 3–4;
+Signed [CRL delivery](crl-delivery.md) is implemented; [the browser cabinet](profile-panel.md) is implemented. None of the commands in this guide are run by the
 repository or test suite automatically.
+
+For the current release use [profile rollout, handover and recovery](profile-rollout.md)
+and [ADR 0005](adr/0005-google-profiles-and-server-pki.md). Historical stage
+descriptions below do not authorize reverting to password login or local CA writes.
 
 ## Components and API
 
-The steady state is three containers:
+The steady state is four containers, including the network-isolated PKI:
 
 ```text
 Internet -> Caddy + React -> Unix socket -> FastAPI -> PostgreSQL
                                            |       -> AWS EC2 API
+                                           |       -> private Unix socket -> PKI
                                            `-------> Yandex Compute API
 VPN nodes ------------ outbound heartbeat --------> FastAPI
 ```
 
 The versioned API provides login, session and logout endpoints, the two-VM
 status list, restart job creation/history/detail, and authenticated agent
-heartbeats. The schema contains only `Admin`, `AdminSession`, `VpnVm`,
-`VmHeartbeat`, `RestartJob`, and `RestartTarget`. Responses never include
+heartbeats. The schema contains `User`, `UserSession`, `VpnVm`,
+`VmHeartbeat`, `RestartJob`, `RestartTarget`, `VpnProfile`, `ProfileJob`,
+`OAuthLoginAttempt`, and `GoogleAdminBinding`.
+Profile models store metadata only; the PKI keeps private material in exclusive
+storage. The [profile API](profile-api.md) connects it to PostgreSQL jobs;
+[CRL delivery](crl-delivery.md) is implemented; deployment and real-node acceptance require separate exact approval.
+Responses never include
 instance IDs, IP addresses, heartbeat tokens, credentials or cloud request
 IDs.
+
+### User model foundation (stage 1)
+
+This section describes migration 0002. Stage 2 below supersedes its password
+login behavior; the current backend has no password login endpoint.
+
+Migration `0002_users_and_profiles` renames the legacy administrator/session
+tables and restart-author column in place. It preserves UUIDs, password hashes,
+session hashes and restart history. Existing identities become active `ADMIN`
+users with no Google subject or email; new identities default to `USER`.
+Google identities are unique by subject, never automatically matched to a
+legacy login or an email alone. Google sign-in is not enabled by this stage.
+
+Password login, session and logout remain available. VM status and all restart
+endpoints require `ADMIN`; mutations also require CSRF. Role and active status
+are checked against the database on every request. There is no public role
+mutation endpoint. Shared profile queries filter by owner in SQL for `USER`
+and return `404` for inaccessible or absent profiles; the public profile API
+will be added in stage 4.
+
+The `bootstrap-admin` CLI remains restricted to legacy identities. Changing
+the operator login disables previous legacy identities instead of deleting
+historical job authors. Credential changes revoke legacy sessions while
+preserving Google users and their sessions. Routine redeployment with unchanged
+credentials preserves sessions.
+
+Applying the migration to an existing installation is a separately approved
+operator action. Before applying, back up the database and deploy the matching
+backend code with the migration. Downgrade to the old schema is allowed only
+while all users are active legacy administrators and the profile tables are
+empty; otherwise it fails without deleting data or reactivating disabled
+credentials. Later rollback requires an operator migration that preserves
+identities, profiles and revocations.
+
+Backend tests use SQLite with foreign keys enabled. Migration tests additionally
+require an explicitly supplied `VEILWAY_TEST_POSTGRES_URL` pointing only at a
+disposable local PostgreSQL 17 database. Each test creates and removes its own
+schema; never supply a production database URL. Without that test URL the
+migration tests are reported as skipped, not passed.
+
+### Google registration and sign-in (stage 2)
+
+The browser navigates to `GET /api/v1/auth/google/start`, then Google returns
+to `GET /api/v1/auth/google/callback`. The server exchanges the authorization
+code, validates the ID token using pinned PyJWT with Google's fixed HTTPS JWKS
+endpoint, and redirects to `/` with a new server-side session. It requests only
+`openid email`, never Gmail/Drive access or offline access. See
+[Google OIDC](https://developers.google.com/identity/openid-connect/openid-connect).
+
+Login attempts last at most ten minutes. PostgreSQL stores only state, nonce
+and browser-cookie hashes; callback consumes an attempt atomically before
+exchanging the code. OAuth uses a separate Secure, HttpOnly, `SameSite=Lax`
+`__Host-veilway_oauth` cookie; the session remains Secure, HttpOnly and
+`SameSite=Strict`. Invalid, expired, duplicate or replayed callbacks fail with
+a fixed error redirect. Google access/refresh/ID tokens are not persisted.
+
+First login creates a Google identity by `sub`. The configured administrator
+email must be verified and Google-authoritative (Gmail or the matching Workspace
+hosted domain); arbitrary third-party email ownership is insufficient for
+admin bootstrap. See [Google's email authority guidance](https://developers.google.com/identity/sign-in/web/backend-auth).
+The singleton database binding is locked during account resolution and pins
+ADMIN to the first matching Google identity. All other identities receive USER,
+even if their email later matches the configured admin address. A bound account
+retains its identity and role when its verified email changes; editing the
+configuration alone does not transfer admin rights. Administrator replacement
+requires a separately designed operator procedure; there is no public role API.
+
+`GET /api/v1/auth/session` returns `user_id`, `email`, `role`, and `csrf_token`
+with `Cache-Control: no-store`. Logout requires CSRF. USER sees an account
+screen and does not load infrastructure APIs; ADMIN retains the dashboard.
+The [profile cabinet](profile-panel.md) is implemented in stage 6.
+
+Migration `0003_google_sign_in` invalidates all prior sessions, disables legacy
+password identities and resets any preexisting Google roles to USER. Legacy
+UUIDs, password hashes and restart authors remain in the database. The old
+`POST /api/v1/auth/login` endpoint is removed; the legacy `bootstrap-admin`
+CLI is not used by deployment and cannot grant access through Google. Downgrade
+does not restore sessions or reactivate passwords; once the admin is bound,
+downgrade refuses to discard the binding.
+
+Caddy skips OAuth access logs; both access and runtime error logs omit request objects.
+The backend entrypoint already disables Uvicorn access logging. Do not enable
+raw request, token-response or debug-body logging for authentication.
+
+#### Prepare Google inputs before an approved deployment
+
+1. After explicit approval, create a Google OAuth client of type **Web
+   application** and configure its consent screen/audience. Set the authorized
+   redirect URI to `https://veilway.ru/api/v1/auth/google/callback` exactly.
+   Make its audience available to intended users before live registration
+   acceptance. Basic identity scopes have an exception to the Testing allowlist;
+   do not treat it as access control. See the current [rollout guide](profile-rollout.md).
+2. Update the protected local `.env` to the current `.env.example` contract:
+   replace `ADMIN_LOGIN`/`ADMIN_PASSWORD` with `GOOGLE_CLIENT_ID`,
+   `GOOGLE_CLIENT_SECRET`, and `ADMIN_GOOGLE_EMAIL`. Use the operator's actual
+   Google email privately; matching is case-insensitive, without Gmail dot or
+   plus-alias rewriting. Retain the other infrastructure inputs.
+3. The deployment wrapper validates without contacting hosts unless `--apply`
+   is passed. After separately approved deployment, three additional root-only
+   runtime files are installed: `google_client_id`, `google_client_secret`,
+   `admin_google_email`. Compose passes file paths only; the entrypoint loads
+   them into sealed descriptors before dropping privileges.
+4. Back up the database and review migration 0003 before applying it with the
+   matching backend/frontend images. Switching logs everyone out. Verify the
+   operator's first Google login yields ADMIN and another account yields USER.
+   Verify legacy password login fails and history remains readable by ADMIN.
+
+No Google project, real secret, host or deployment is changed by local tests.
 
 ## 1. Provision in separately approved stages
 
@@ -83,10 +203,18 @@ python3 scripts/deploy-web-control.py heartbeat --apply
 ```
 
 The web role formats only the Terraform-attached empty `virtio-data` disk,
-mounts it at `/srv/veilway-control`, installs three root-owned `0400` runtime
-secret files, runs Alembic, synchronizes the administrator and the exact two VM
-records through protected stdin, and starts the three containers. It never
+mounts it at `/srv/veilway-control`, installs six root-owned `0400` application
+secret/input files, runs Alembic, synchronizes the exact two VM
+records through protected stdin, and starts the four containers. The two PKI-only
+runtime inputs use root-owned `0600` files. PKI requires a separately approved
+manual import before it can serve; see [PKI service](pki-service.md). It never
 copies the complete `.env`.
+
+On upgrade the role first stops existing API/web and, if present, PKI before
+replacing application code or migrating. This supports both the original
+three-container panel and the current four-container panel. Take the approved
+coherent backup first. The deployed project `.env` stores only path interpolation,
+not credentials. Follow the [ordered rollout](profile-rollout.md) for CA/agent cutover.
 
 The PostgreSQL password initializes the database cluster and must remain
 unchanged during routine redeployments. Rotating it requires a separate,

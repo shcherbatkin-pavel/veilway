@@ -46,12 +46,19 @@ services:
       VEILWAY_DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
       VEILWAY_AWS_ACCESS_KEY_ID_FILE: /run/secrets/aws_access_key_id
       VEILWAY_AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/aws_secret_access_key
+      VEILWAY_GOOGLE_CLIENT_ID_FILE: /run/secrets/google_client_id
+      VEILWAY_GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google_client_secret
+      VEILWAY_ADMIN_GOOGLE_EMAIL_FILE: /run/secrets/admin_google_email
     secrets:
       - postgres_password
       - aws_access_key_id
       - aws_secret_access_key
+      - google_client_id
+      - google_client_secret
+      - admin_google_email
     volumes:
       - ${VEILWAY_RUNTIME_ROOT:-/run/veilway-control}:/run/veilway
+      - ${VEILWAY_PKI_RUNTIME_ROOT:-/run/veilway-pki}:/run/veilway-pki:ro
     networks:
       - control
       - data
@@ -72,6 +79,33 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+
+  pki:
+    image: veilway-control-pki:0.1.0
+    build:
+      context: pki
+    restart: unless-stopped
+    network_mode: none
+    secrets:
+      - pki_ca_passphrase
+      - pki_endpoints
+    volumes:
+      - ${VEILWAY_DATA_ROOT:-/srv/veilway-control}/pki:/var/lib/veilway-pki
+      - ${VEILWAY_PKI_RUNTIME_ROOT:-/run/veilway-pki}:/run/veilway-pki
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=0700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+    logging:
+      options:
+        max-size: 1m
+        max-file: "2"
 
   web:
     image: veilway-control-web:0.1.0
@@ -110,9 +144,19 @@ networks:
     internal: true
 
 secrets:
+  pki_ca_passphrase:
+    file: ${VEILWAY_SECRET_ROOT:-/etc/veilway-control/secrets}/pki_ca_passphrase
+  pki_endpoints:
+    file: ${VEILWAY_SECRET_ROOT:-/etc/veilway-control/secrets}/pki_endpoints
   postgres_password:
     file: ${VEILWAY_SECRET_ROOT:-/etc/veilway-control/secrets}/postgres_password
   aws_access_key_id:
     file: ${VEILWAY_SECRET_ROOT:-/etc/veilway-control/secrets}/aws_access_key_id
   aws_secret_access_key:
     file: ${VEILWAY_SECRET_ROOT:-/etc/veilway-control/secrets}/aws_secret_access_key
+  google_client_id:
+    file: ${VEILWAY_SECRET_ROOT:-/etc/veilway-control/secrets}/google_client_id
+  google_client_secret:
+    file: ${VEILWAY_SECRET_ROOT:-/etc/veilway-control/secrets}/google_client_secret
+  admin_google_email:
+    file: ${VEILWAY_SECRET_ROOT:-/etc/veilway-control/secrets}/admin_google_email

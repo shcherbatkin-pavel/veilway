@@ -1,5 +1,5 @@
 ---
-- name: Start exactly the three control plane containers
+- name: Start the four control plane containers
   ansible.builtin.command:
     argv:
       - /usr/bin/docker
@@ -12,5 +12,6 @@
       - --force-recreate
       - api
       - web
+      - pki
   register: veilway_control_start
   changed_when: "'Started' in veilway_control_start.stdout or 'Created' in veilway_control_start.stdout"

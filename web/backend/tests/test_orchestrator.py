@@ -40,7 +40,7 @@ class FakeProvider:
 
 def create_job(db_factory, ids, slugs=("aws-direct", "yc-direct")) -> None:
     with db_factory() as db:
-        job = RestartJob(admin_id=ids["admin_id"], status="queued", active_guard=1)
+        job = RestartJob(user_id=ids["user_id"], status="queued", active_guard=1)
         db.add(job)
         db.flush()
         for position, slug in enumerate(slugs, start=1):

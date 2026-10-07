@@ -41,6 +41,9 @@ services:
     volumes:
       - {{ veilway_config_root }}/openvpn/server.conf:/etc/openvpn/server.conf:ro
       - {{ veilway_config_root }}/pki:/etc/veilway/pki:ro
+{% if veilway_crl_agent_managed %}
+      - /var/lib/veilway-crl:/etc/veilway/crl:ro
+{% endif %}
     logging:
       driver: local
       options:
@@ -140,6 +143,9 @@ services:
     volumes:
       - {{ veilway_config_root }}/openvpn/multihop-server.conf:/etc/openvpn/multihop-server.conf:ro
       - {{ veilway_config_root }}/pki:/etc/veilway/pki:ro
+{% if veilway_crl_agent_managed %}
+      - /var/lib/veilway-crl:/etc/veilway/crl:ro
+{% endif %}
     logging:
       driver: local
       options:
@@ -185,6 +191,9 @@ services:
       - {{ veilway_config_root }}/openvpn/transit-route-up:/etc/openvpn/transit-route-up:ro
       - {{ veilway_config_root }}/openvpn/transit-route-down:/etc/openvpn/transit-route-down:ro
       - {{ veilway_config_root }}/pki:/etc/veilway/pki:ro
+{% if veilway_crl_agent_managed %}
+      - /var/lib/veilway-crl:/etc/veilway/crl:ro
+{% endif %}
     logging:
       driver: local
       options:
@@ -234,6 +243,9 @@ services:
       - {{ veilway_config_root }}/openvpn/transit-server.conf:/etc/openvpn/transit-server.conf:ro
       - {{ veilway_config_root }}/openvpn/ccd:/etc/openvpn/ccd:ro
       - {{ veilway_config_root }}/pki:/etc/veilway/pki:ro
+{% if veilway_crl_agent_managed %}
+      - /var/lib/veilway-crl:/etc/veilway/crl:ro
+{% endif %}
     logging:
       driver: local
       options:

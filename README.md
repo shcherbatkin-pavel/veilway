@@ -1,16 +1,21 @@
 # Veilway
 
 Veilway is a self-hosted VPN service with Direct and fail-closed multi-hop
-routing and a minimal public restart control plane.
+routing and a public profile/restart control plane.
 
 The prototype has one operator and a baseline client set consisting of an
 Ubuntu laptop and an iPhone. The operator can explicitly provision additional
-device profiles without creating application users or tenant accounts. It
+device profiles through the server PKI after the approved handover; local PKI
+tools are limited to bootstrap before that handover. The web application provides
+Google registration/sign-in with ADMIN and USER roles. Veilway
 deploys OpenVPN 2.6 containers to new, dedicated Ubuntu 24.04 LTS virtual
 machines in Yandex Cloud and AWS. The implemented modes provide direct internet
 access through either provider and a Yandex-ingress, AWS-egress multi-hop path.
-The first web phase manages only restart operations for the two dedicated VPN
-VMs; registration, profiles and PKI remain outside it.
+The web application manages restart operations for the two dedicated VPN VMs
+for ADMIN. The profile API supports issuing profiles, assigning USER owners,
+repeatable owner-only downloads and local revocation through an isolated PKI.
+Signed CRL delivery and the [browser profile cabinet](docs/profile-panel.md) are implemented in the
+[profile management plan](docs/profile-management-plan.md).
 
 ## Current iteration
 
@@ -27,7 +32,14 @@ unchanged.
 - [Rejected AWS UDP/443 trial ADR](docs/adr/0002-aws-direct-udp-443.md)
 - [Fail-closed multi-hop ADR](docs/adr/0003-yc-aws-fail-closed-multihop.md)
 - [Public restart control plane ADR](docs/adr/0004-public-restart-control-plane.md)
+- [Google identities and authoritative server PKI ADR](docs/adr/0005-google-profiles-and-server-pki.md)
+- [Migration of existing VPN profiles without reissuing](docs/legacy-profile-migration.md)
+- [Profile panel rollout, backup and recovery](docs/profile-rollout.md)
+- [Security and live acceptance](docs/profile-security-acceptance.md)
 - [Restart control plane guide](docs/control-plane.md)
+- [Isolated PKI service and manual import](docs/pki-service.md)
+- [Profile API and durable PKI jobs](docs/profile-api.md)
+- [Google sign-in and profile management plan](docs/profile-management-plan.md)
 - [Deployment guide](docs/deployment.md)
 - [Safe VM audit guide](docs/audit.md)
 
@@ -51,6 +63,9 @@ Container smoke tests are separate operator-invoked commands. Backend tests use
 mocked providers and cannot restart real VMs. Refactoring these tools does not
 authorize deployment or any change to cloud resources.
 
+`./scripts/test-pki-service.sh --build` tests the autonomous PKI with temporary
+synthetic material, concurrent/replayed jobs, crash recovery and UID isolation.
+
 ## Safety status
 
 The repository does not contain cloud credentials, Terraform state, PKI private
@@ -69,3 +84,5 @@ published, or attached to a public issue or pull request.
 ## License
 
 Veilway is licensed under the [MIT License](LICENSE).
+
+Signed CRL delivery and dedicated-node cutover: [docs/crl-delivery.md](docs/crl-delivery.md).

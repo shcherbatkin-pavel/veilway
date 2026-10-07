@@ -6,6 +6,7 @@ export function useDashboardPolling(onLogout: () => void) {
   const [vms, setVms] = useState<VpnVm[]>([]);
   const [jobs, setJobs] = useState<RestartJob[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const logout = useRef(onLogout);
   logout.current = onLogout;
   const poller = useRef<ReturnType<typeof createPoller<[VpnVm[], RestartJob[]]>> | null>(null);
@@ -20,11 +21,13 @@ export function useDashboardPolling(onLogout: () => void) {
         return [vmResult.value, jobResult.value];
       },
       ([nextVms, nextJobs]) => {
+        setLoading(false);
         setVms(nextVms);
         setJobs(nextJobs);
         setError("");
       },
       (reason) => {
+        setLoading(false);
         if (reason instanceof ApiError && reason.status === 401) logout.current();
         else setError("Не удалось обновить состояние");
       },
@@ -38,5 +41,5 @@ export function useDashboardPolling(onLogout: () => void) {
   }, []);
 
   const refresh = useCallback(() => poller.current?.refresh() ?? Promise.resolve(), []);
-  return { vms, jobs, error, refresh };
+  return { vms, jobs, error, loading, refresh };
 }

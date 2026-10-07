@@ -122,6 +122,11 @@ approved. Re-run a normal plan in each root afterward and require `No changes`.
 
 ## 3. Prepare PKI and local configuration
 
+The local PKI commands below are for bootstrap before server handover. After
+handover, use [profile rollout and recovery](profile-rollout.md); the local CLI
+is blocked by `.server-managed`. Keep managed CRL inventory enabled: general
+node deployment must not copy the old local CRL or reopen a workstation signer.
+
 Build the pinned application image locally:
 
 ```sh

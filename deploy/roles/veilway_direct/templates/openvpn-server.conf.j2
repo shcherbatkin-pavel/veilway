@@ -11,7 +11,7 @@ server-ipv6 {{ veilway_vpn_ipv6_cidr }}
 ca /etc/veilway/pki/ca.crt
 cert /etc/veilway/pki/server.crt
 key /etc/veilway/pki/server.key
-crl-verify /etc/veilway/pki/crl.pem
+crl-verify {{ "/etc/veilway/crl/crl.pem" if veilway_crl_agent_managed else "/etc/veilway/pki/crl.pem" }}
 tls-crypt-v2 /etc/veilway/pki/tls-crypt-v2-server.key force-cookie
 verify-client-cert require
 remote-cert-tls client

@@ -7,17 +7,25 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from urllib.parse import parse_qs, urlsplit
+
+from oidc_helpers import FakeGoogleClient, TestSettings
 
 from veilway_control.api import create_restart_job, router
 from veilway_control.config import Settings, get_settings
 from veilway_control.database import get_db
-from veilway_control.models import Admin, AdminSession, VmHeartbeat, utcnow
+from veilway_control.models import User, UserSession, VmHeartbeat, utcnow
 from veilway_control.schemas import RestartCreateRequest
-from veilway_control.security import AuthenticatedAdmin
+from veilway_control.security import AuthenticatedUser
+from veilway_control.oidc import get_google_client
+from veilway_control.headers import ApiNoStoreMiddleware, safe_validation_error
+from fastapi.exceptions import RequestValidationError
 
 
-def build_client(db_factory) -> TestClient:
+def build_client(db_factory, *, settings=None, oidc_client=None) -> TestClient:
     app = FastAPI()
+    app.add_middleware(ApiNoStoreMiddleware)
+    app.add_exception_handler(RequestValidationError, safe_validation_error)
     app.include_router(router)
 
     def database_override():
@@ -25,20 +33,27 @@ def build_client(db_factory) -> TestClient:
             yield db
 
     app.dependency_overrides[get_db] = database_override
-    app.dependency_overrides[get_settings] = lambda: Settings(public_host="testserver")
+    app.dependency_overrides[get_settings] = lambda: settings or TestSettings(public_host="testserver")
+    app.dependency_overrides[get_google_client] = lambda: oidc_client or provider
+    provider = FakeGoogleClient()
     return TestClient(app, base_url="https://testserver")
 
 
 def login(client: TestClient) -> str:
-    response = client.post(
-        "/api/v1/auth/login",
-        json={"login": "operator", "password": "correct horse battery staple"},
+    start = client.get("/api/v1/auth/google/start", follow_redirects=False)
+    assert start.status_code == 303
+    state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+    response = client.get(
+        "/api/v1/auth/google/callback", params={"state": state, "code": "test-code"},
+        follow_redirects=False,
     )
-    assert response.status_code == 200
-    assert "Secure" in response.headers["set-cookie"]
-    assert "HttpOnly" in response.headers["set-cookie"]
-    assert "SameSite=strict" in response.headers["set-cookie"]
-    return response.json()["csrf_token"]
+    assert response.status_code == 303 and response.headers["location"] == "/"
+    cookies = response.headers.get_list("set-cookie")
+    session = next(cookie for cookie in cookies if cookie.startswith("__Host-veilway_session="))
+    assert "Secure" in session and "HttpOnly" in session and "SameSite=strict" in session
+    current = client.get("/api/v1/auth/session")
+    assert current.status_code == 200
+    return current.json()["csrf_token"]
 
 
 def test_login_session_csrf_and_logout(db_factory, seed_control_data) -> None:
@@ -48,7 +63,7 @@ def test_login_session_csrf_and_logout(db_factory, seed_control_data) -> None:
             "/api/v1/auth/login",
             json={"login": "operator", "password": "wrong"},
         )
-        assert invalid.status_code == 401
+        assert invalid.status_code == 404
 
         login(client)
         current = client.get("/api/v1/auth/session")
@@ -153,15 +168,15 @@ def test_restart_requires_fresh_healthy_heartbeat(
 ) -> None:
     seed_control_data()
     with db_factory() as db:
-        admin = db.scalar(select(Admin))
+        admin = db.scalar(select(User))
         heartbeat = db.scalars(select(VmHeartbeat)).first()
         assert admin is not None
         assert heartbeat is not None
         heartbeat.healthy = False
         db.commit()
-        authenticated = AuthenticatedAdmin(
-            admin=admin,
-            session=cast(AdminSession, None),
+        authenticated = AuthenticatedUser(
+            user=admin,
+            session=cast(UserSession, None),
         )
         with pytest.raises(HTTPException) as unhealthy:
             create_restart_job(

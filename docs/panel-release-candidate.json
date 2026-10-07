@@ -1,0 +1,1371 @@
+{
+  "schema_version": 1,
+  "candidate": "panel-profiles-2026-10-07",
+  "base_commit": "fc6a3c9dc76a5c881eec9231d1e4ee08f98124f0",
+  "published": false,
+  "entries_sha256": "5686167190cff5af3cad2ecd6165e1902e9cf5d1a95d2aa8ebb4b1c7dcf075ec",
+  "panel_runtime_sha256": "b41631f4c9a36f4b249ef48a5b1c9cae7020883da39dad6459a0e9501abb7529",
+  "excluded_reports": [
+    "docs/panel-release-candidate.json",
+    "docs/panel-release-candidate.md"
+  ],
+  "selection": "Git-visible regular files under web/, deploy/, scripts/, docs/ plus README.md, AGENTS.md and .env.example; no ignored inputs; report and manifest excluded.",
+  "files": [
+    {
+      "path": ".env.example",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "8e22f9dccec660956f359938dc3e1698cae4fb388236a8e32334744cb3fe9f20"
+    },
+    {
+      "path": "AGENTS.md",
+      "group": "contributor_policy",
+      "mode": "0664",
+      "sha256": "8157a778c642435549cf6acb7703104e6e2d98a97d8f2d94e3c12d83d6e9448f"
+    },
+    {
+      "path": "README.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "d860c55ca2a7a315a32774e642b7cbcbc434db4fc40634075bead3699610b196"
+    },
+    {
+      "path": "deploy/ansible.cfg",
+      "group": "panel_deployment",
+      "mode": "0664",
+      "sha256": "7dcc47f338e19f08dede9b0592ca4ceb35dbbfd1095a304731119192608b12ec"
+    },
+    {
+      "path": "deploy/control-inventory.example.yml",
+      "group": "panel_deployment",
+      "mode": "0664",
+      "sha256": "f4c001223737364101fee83f18e0000b2a2f260128115cb1a7977b67de5fbc90"
+    },
+    {
+      "path": "deploy/control-web.yml",
+      "group": "panel_deployment",
+      "mode": "0664",
+      "sha256": "08a8622920982d30e4d268cd31b04ad35402699ed5bc6f3255062a9fd5372258"
+    },
+    {
+      "path": "deploy/crl-agents.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "96a693848b1ab2c49487c60038d3095b0f2ea82f9929a32179aebcdea572174b"
+    },
+    {
+      "path": "deploy/diagnose-egress.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "4fe204be1815512d877df408b5b8ee818800ca6eb1b0ca3b59e92ba4d641ed6f"
+    },
+    {
+      "path": "deploy/diagnose-openvpn-session.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "54192be707daa0d141c11ab1374572897846e33c9243e9d9a0d7e5e7a21754fe"
+    },
+    {
+      "path": "deploy/filter_plugins/veilway_network.py",
+      "group": "panel_deployment",
+      "mode": "0664",
+      "sha256": "23d3200fca4c2c428514a4a77221a28c21248b3d86a8fe9e30c350a08dc19326"
+    },
+    {
+      "path": "deploy/group_vars/direct_vpn.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "a7382f11a5fea91ac4c008717aa406585e287aaa94f0bd7c4b315ea00547d2e4"
+    },
+    {
+      "path": "deploy/heartbeat.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "e886927fbacc8fe7aaf95f29be9dbeb175b7b2b246031541b08e1749dcd9db36"
+    },
+    {
+      "path": "deploy/image/.dockerignore",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "99099f562165099219caef55497979fe7977e43473f8115355754ee4584163ce"
+    },
+    {
+      "path": "deploy/image/Dockerfile",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "6e5e7bfa9f70c846edebd6018b55bb4cc47e69647e333bf2391c2450fc381243"
+    },
+    {
+      "path": "deploy/image/wait-for-interface",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "89103ac1d182caf81ccf666619d1075b01ee0aeac3343baeabd35442fb0b1b36"
+    },
+    {
+      "path": "deploy/inventory.example.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "3060e6ac2190640b7a935da5a97b89d0345d4d97c3cfee429b0b68e94c49de5e"
+    },
+    {
+      "path": "deploy/preflight.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "9cc2209dad740e462d868eb63c841a399bf6a9d9a6c2dc344a009be3d0700cff"
+    },
+    {
+      "path": "deploy/requirements.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "be8fdec2b5cef8474212f2f1be52cb45f82b53ed0707bf94f25609314ca94d9e"
+    },
+    {
+      "path": "deploy/roles/veilway_control_web/defaults/main.yml",
+      "group": "panel_deployment",
+      "mode": "0664",
+      "sha256": "faa2174bf96feffb6e749c9dfaaddeeba738ade09ba9f5101892563a45931278"
+    },
+    {
+      "path": "deploy/roles/veilway_control_web/tasks/application.yml",
+      "group": "panel_deployment",
+      "mode": "0664",
+      "sha256": "697e0244ddefd0ab5614edbf203c419e350394d79c973b6d20553dbd1d991e72"
+    },
+    {
+      "path": "deploy/roles/veilway_control_web/tasks/database.yml",
+      "group": "panel_deployment",
+      "mode": "0664",
+      "sha256": "f5390eca2db648710890b29fdcb2398a1fb5ffd8da4b59e2de99e6907c0c0d42"
+    },
+    {
+      "path": "deploy/roles/veilway_control_web/tasks/host.yml",
+      "group": "panel_deployment",
+      "mode": "0664",
+      "sha256": "d49320e8b38b8af9cbba768afa37b25de92247dc90bfae4876b174c45ed78a09"
+    },
+    {
+      "path": "deploy/roles/veilway_control_web/tasks/main.yml",
+      "group": "panel_deployment",
+      "mode": "0664",
+      "sha256": "ba225bc571ac1958cedf7e3f93aecc6bba72e2ec5331a09d980601687a513ad2"
+    },
+    {
+      "path": "deploy/roles/veilway_control_web/tasks/services.yml",
+      "group": "panel_deployment",
+      "mode": "0664",
+      "sha256": "b441f0f4408f27a456519ccb9d622cd30edadce90129a379cdf124f408616ea1"
+    },
+    {
+      "path": "deploy/roles/veilway_control_web/tasks/storage.yml",
+      "group": "panel_deployment",
+      "mode": "0664",
+      "sha256": "9454c72ad8490431ce1a2f7aa660617a4cef6fa4ecfed0971d55d0106093af9b"
+    },
+    {
+      "path": "deploy/roles/veilway_crl_agent/defaults/main.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "d7b82526e47f984c5ca3267041d2f60504eb8e4da59ce537f362e0c8388ebad1"
+    },
+    {
+      "path": "deploy/roles/veilway_crl_agent/files/veilway-crl-agent",
+      "group": "node_and_support_deployment",
+      "mode": "0755",
+      "sha256": "26939127a3c380576e8d6a3df0f0d828fba2c55a1090ee8ac891d141ea1335cc"
+    },
+    {
+      "path": "deploy/roles/veilway_crl_agent/tasks/main.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "ce14f76e25a4f47473251817ac9b0fd4e75f9fb4975241c3911642b8ec6e455c"
+    },
+    {
+      "path": "deploy/roles/veilway_crl_agent/templates/veilway-crl-agent.service.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "9858970241f5089e598e1cffc36433ccf546e7aaba5826903ee3f91cb145b511"
+    },
+    {
+      "path": "deploy/roles/veilway_crl_agent/templates/veilway-crl-agent.timer.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "1a755c25c0b1bc5c9f5f1a5e3d33918f47171ace6c225a4e7436de54a27f0fca"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/defaults/main.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "e2a0d5e40f3ef2b63f33ebe1d1cb615975d4bf0c344530ec652a899207c8d6da"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/handlers/main.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "6b5ee42b03635a78d9b426b406e9f6abcee4d7429aea4660450f52b5f996c723"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/tasks/authority.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "0e72a0bd8f318e04da61df98714c1546d3b7f6b0330bc5176d04380520afa30e"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/tasks/cleanup.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "a0ee2b0d59b2852afade26ea4d385bfae96394217fadaeccc62324252f70e6f8"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/tasks/configuration.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "722d0092ac8ce1e18bfdf949ed67effa38268a19e4db84dcaf64e2e3b090ab47"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/tasks/health.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "c4af7b853dd7451ad420a97b89d436b676dedc0f49fc070fc2935e21a0154b28"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/tasks/host.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "07180b66e9f10b1e3b2d19d13822692d11be825520fbb78e0a0ee7fa41fb362a"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/tasks/main.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "f99c82a710e37f88ea218b7e07b29421769775e59e2d169b598c2d0fe9b0c943"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/tasks/network.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "2278ac6d5455e43b41c6a14acd15526279beb68f4cb90183cfae5a4fbfa1f70b"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/tasks/pki.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "c3ab8598b38d0063724f6a7b23cf9594235e152efeb3b4bc33a780de96689886"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/tasks/preflight.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "a9fe0b88fda7f56cf48d131566b4a1ae996be4ca89b4cf3f3c8119b0de719b45"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/tasks/services.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "70b72d8dea4c109d0cdb804569b6b69d3e157c0db9f9cac5ebf2f6b1af636093"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/templates/90-veilway-ipv6.yaml.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "71bfb44f395cb992effa3af1862ea846a32d6d591fd66ef542f596f2eaff5eec"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/templates/90-veilway.conf.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "546af15f7e8969308e8d8d6a7dd661b1ce56ad15c242b8f92940fb838373e2ca"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/templates/compose.yaml.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "e8bb8996d99783bf1dbb5fc9e07e28042bdf8f62a0eee82446ef1b43c3d7d0c8"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/templates/docker-daemon.json.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "96ef36891ecf2e981cf68c52158f4fb174474b6ca7eb122c659b9f0d17d8abe5"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/templates/nftables.conf.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "e592b320e50cc83db653eb96bcfa5943dda500233eef5f1995ad22b99ac83ee6"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/templates/openvpn-multihop-server.conf.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "ee6170c1bce00b6af1c891346100a3e5f08191f97092c237f4961f20eca0b122"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/templates/openvpn-server.conf.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "d302cc67e28270154633fb9e69f1b5f0c46345e819e871131d3874e6984debd3"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/templates/openvpn-transit-client.conf.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "a3240bb106fec78f40bedc90a042e48b7e2cff4a34fc6d5eb3831f4f860f25ef"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/templates/openvpn-transit-server.conf.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "12ba58371a7d1710e5217bba86e3a3962fe3f845bbcd096bdb0838fb498d3a0e"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/templates/transit-route-down.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "144e9d72cd809954c84ee043e76a5f48317eb493e226c8fb32fc154bd643b8bc"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/templates/transit-route-up.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "194c9b67a7626a875ee245269f7aa186bc98146b25bf9faa8194ca324482fdff"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/templates/unbound-transit.conf.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "b710c1f2aede3f7ace2d77c0c3e35fc745b6bcfba7d6b3cb159d7481d7b8b7e1"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/templates/unbound.conf.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "ba77ec4c9b53b91993f213026153d9e25e01dae58dd58ea121024dc2fa5d1aa9"
+    },
+    {
+      "path": "deploy/roles/veilway_direct/templates/yc-transit.ccd.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "a117ff001043874c9a4455e822b38ff83bb403bf1cabda978a04759e950d4eb3"
+    },
+    {
+      "path": "deploy/roles/veilway_heartbeat/defaults/main.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "4d45b4c287ceb46855882135d4bd6ca074a0bb87fd376a65545fb0ee4e7f670c"
+    },
+    {
+      "path": "deploy/roles/veilway_heartbeat/files/veilway-heartbeat-agent",
+      "group": "node_and_support_deployment",
+      "mode": "0775",
+      "sha256": "eafcc48e7150ba811c0e47e6da21a0ea562c02cb82b4cb6be26bc3db47eecafe"
+    },
+    {
+      "path": "deploy/roles/veilway_heartbeat/tasks/configuration.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "d5718eaf9b042f1decff27256585cb3cbd52c926b23dc7552c4c92870aee65ed"
+    },
+    {
+      "path": "deploy/roles/veilway_heartbeat/tasks/main.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "c9d281904edc2d134d375d7b50c81df6c9e62152c3566bc77f0896d870883dc4"
+    },
+    {
+      "path": "deploy/roles/veilway_heartbeat/tasks/services.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "ee7bf6974c2c1f524b32ae17e848b00ae2d8d6b3a08c8b327bdf002f184cf862"
+    },
+    {
+      "path": "deploy/roles/veilway_heartbeat/templates/config.json.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "009c606e8ac15f0e53ec4d5c1282ef0e7972c36b181e716bca617eef8c37c3b9"
+    },
+    {
+      "path": "deploy/roles/veilway_heartbeat/templates/veilway-heartbeat.service.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "592cd87634881d0cf0a728ead14c4aede574b76787f6980607b568086029f85e"
+    },
+    {
+      "path": "deploy/roles/veilway_heartbeat/templates/veilway-heartbeat.timer.j2",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "f7d07ccc8d6742fd72e0a91d771c884c150704e3bdc235fd81dc9f75a687f8cc"
+    },
+    {
+      "path": "deploy/site.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "d5ee285c414eccbab5fb3b468f92a72bfb6a14055e2335d728e81061fe3c0993"
+    },
+    {
+      "path": "deploy/verify.yml",
+      "group": "node_and_support_deployment",
+      "mode": "0664",
+      "sha256": "5fc54f289908ce14cf235900288b863f40d5a6f275b65a7237c977d2058499de"
+    },
+    {
+      "path": "docs/adr/0001-greenfield-direct-vpn.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "0fc2c7a0c85b0533093b6940addc28a587d0c3f78289c8a30b68441d5be146af"
+    },
+    {
+      "path": "docs/adr/0002-aws-direct-udp-443.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "60bb233021e3965e4f989f8c1794b5ee446936f4ab8a7d6c938a149c3e70f371"
+    },
+    {
+      "path": "docs/adr/0003-yc-aws-fail-closed-multihop.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "754ad047f66f1ed1c6228edae68fc81585f33090ce960b6bd2004bd2116b97cc"
+    },
+    {
+      "path": "docs/adr/0004-public-restart-control-plane.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "77065d24fb316f5d68536aa6861d95749e4b9920881f6fe89414d3156ea839b0"
+    },
+    {
+      "path": "docs/adr/0005-google-profiles-and-server-pki.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "6d7323f91e1b4a10d0ea45440b82dbb49fb8a7fe49d16653d8a639402f2776a7"
+    },
+    {
+      "path": "docs/audit.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "6230ad3ae930fd58d5926182d554c7cde981f657d522546ef7cf97b7ac8b6435"
+    },
+    {
+      "path": "docs/control-plane.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "14d61f11df8bb9c62f5adaee9dcb88458253b1be612685d70260dd75fb67a237"
+    },
+    {
+      "path": "docs/crl-delivery.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "32176b54d4bd8bbaa4363a199097873b43d9226c2d8889e8a31f0a2fe4f4c6f6"
+    },
+    {
+      "path": "docs/deployment.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "a49717f3806b4fb9493f55dbedf9471d2b146457dadb70e1e05fe8dbde1f8ef0"
+    },
+    {
+      "path": "docs/legacy-profile-migration.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "db1b3153a8006680c4e6525316dc7f80edd328082cf489e1bce45675f7f60ca5"
+    },
+    {
+      "path": "docs/pki-evolution-plan.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "e3aea8cc764ef61f7caadd014e9307e6f27270ffdf316354ce0d45dbd3e31d95"
+    },
+    {
+      "path": "docs/pki-service.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "d2ef5945b54b85841fcd1c59f45485a606f1a73e54dd6e97f7401161f24e2222"
+    },
+    {
+      "path": "docs/profile-api.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "b068951bc7cd25ca66e5981ec9258e5a0e4e0d14c0eac78fc023dd408d967426"
+    },
+    {
+      "path": "docs/profile-management-plan.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "00c1fda1f0baac5578ad34de411e18044b93d801d3c7d3b618274cfd834c449a"
+    },
+    {
+      "path": "docs/profile-panel.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "51f7843eae572b49881c1541985f98c99602085a11b76ceb1ecc80946c4245f2"
+    },
+    {
+      "path": "docs/profile-rollout.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "e17b6a317d6dbc3bf7a9b18ee5b0a7890180f54715ba6cf780ac101e93ea5b15"
+    },
+    {
+      "path": "docs/profile-security-acceptance.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "df9af22523ab86bb65a04dac5373e46e426d27153ff1b8d3df3e9c308a2a2632"
+    },
+    {
+      "path": "docs/requirements.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "49e54ae5d9dd4131eb2beedc69a81f619374cc29110b0ef57e2c1f78540f7902"
+    },
+    {
+      "path": "docs/roadmap.md",
+      "group": "documentation",
+      "mode": "0664",
+      "sha256": "b8328d78a9c6c319ccd1663c677dc9810b1e6d086c4c4a4c4ee81f308e48ab08"
+    },
+    {
+      "path": "scripts/acceptance-ubuntu-direct",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "7158daf2935db92c96ad937a41180de316222bf5c82a94a83b9751269c54e440"
+    },
+    {
+      "path": "scripts/audit-vm.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "fa09f3455f42d47f9cd87a9f1c43a6c51b2bcd36be86396cbae3dfd4882d12c3"
+    },
+    {
+      "path": "scripts/check-public-diff.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "736f83dddb7f6982395ff55a9d36c9e4281bbefcbc852f24d0044af2415c6335"
+    },
+    {
+      "path": "scripts/check.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "ada4b7045a99de475ea0e1b1db762b271c26ced8f1aea590c1ddecdb96b1c7f7"
+    },
+    {
+      "path": "scripts/container-smoke.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "0acbfcc00dfe85a84999564b1155351452d2652cf546f39c5d0f767e712a6584"
+    },
+    {
+      "path": "scripts/control-postgres-smoke.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "ab5945b3e570d49fe90c5eff70f686680fa692bec236d03601943984d1b33f69"
+    },
+    {
+      "path": "scripts/deploy-web-control.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "af18313645026b2b93671a4fa41b11029ed7fe6d6373b479722cded95981db73"
+    },
+    {
+      "path": "scripts/diagnose-aws-container-client",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "2f49fcb4566f560f26067f5ab5a32081730ae90aa9386c666ae7469605e9c276"
+    },
+    {
+      "path": "scripts/diagnose-aws-data-channel",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "08d03eadc9734d0d862bc813c81a007862176e93abed3aa557876c11e9eb8779"
+    },
+    {
+      "path": "scripts/lib/aws_diagnostic_parsers.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "540798c391f02b57456a8d43d80cd9f25c70a9f05a2d11f7e09e5dbf86b052f8"
+    },
+    {
+      "path": "scripts/lib/operator_validation.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "281ba99dec5663a80ec0faa4c1ce96a960529a51262558cc9efeb3aa72c87a69"
+    },
+    {
+      "path": "scripts/lib/pki/ca.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "d56887c39f0aa377b8cbade5f2e68500669f3b0ffa69c51e0116955d19f8dfbb"
+    },
+    {
+      "path": "scripts/lib/pki/common.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "6bf7b8409571a05481513e6ca13244399767b1d636af32c2e1ac3b04eb7312dc"
+    },
+    {
+      "path": "scripts/lib/pki/identities.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "10c981822e992123d7b40a84e17c3523141d2952deebcb6ad15da37cc2c110d9"
+    },
+    {
+      "path": "scripts/lib/pki/profiles.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "d2e2a94ee0a2a0d3cf962d84ea6fb94349d29bf148bd46b46886d39587bd6c2e"
+    },
+    {
+      "path": "scripts/lib/pki/revoke.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "3b01425357c434160cdab7f62fbd5997cc0bb7e7cc1a4e52171a1b5cd06d84ca"
+    },
+    {
+      "path": "scripts/pki-expiry.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "47b2b99ab869c365a12f8328609aed700f16d1eb39222edd180cd06f5a207606"
+    },
+    {
+      "path": "scripts/pki-smoke.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "61251c0de3ada6632b0e17259000848f3313bdba7e033646c092661ed0368093"
+    },
+    {
+      "path": "scripts/render-inventory.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "1db2b83157cd217c011836a09d35ea9dedc1d4a767401f1937d57856c54e7207"
+    },
+    {
+      "path": "scripts/review-aws-direct-plan.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "6efdb5674e5acc6d746d9bd73ac2949c75407a5b524031609ed9fc456b2bfb99"
+    },
+    {
+      "path": "scripts/review-yandex-multihop-plan.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "aaab68c5d715fb94aeec160f1c065096613855726b910a46b2a22f6bb9a01bde"
+    },
+    {
+      "path": "scripts/test-control-plane.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "baf0c53e17637620f5707fe44a056595b5eb5af3b3cf631a9505275e429cdfdf"
+    },
+    {
+      "path": "scripts/test-crl-mount.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0755",
+      "sha256": "d92a95637af2670e7d3da2691140219751e70d2805e70d963a4e949d14c26875"
+    },
+    {
+      "path": "scripts/test-operator-tools.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "8a406fca45ca84e29f9f74d320b46d0c8df8a43d58bce8151d21a3e34d74c364"
+    },
+    {
+      "path": "scripts/test-panel-proxy.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "d24f7d4d5a5154363fa3a967dc28e604dffc51dd686e9be4f4a79340afa574cf"
+    },
+    {
+      "path": "scripts/test-pki-expiry.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "53589cac1d32022923c9e551385353d28dd81c9a3ccb568960a4f7cdd5eb823f"
+    },
+    {
+      "path": "scripts/test-pki-service.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0755",
+      "sha256": "c791ff7d66d2e465f5d6207d23d35b5d9c6a0041dba3922e88342beb9c79c7f1"
+    },
+    {
+      "path": "scripts/test-profile-api.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0755",
+      "sha256": "38f0ed7181aff59b1b834232ded6f47aef2339646db354f7d582963da68dc018"
+    },
+    {
+      "path": "scripts/test-profile-panel.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0755",
+      "sha256": "89ee7c82ed88cf49238b5335a47ae7c2c10089178f2a84b61f84f44586e3d9ca"
+    },
+    {
+      "path": "scripts/test-profile-rollout.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0664",
+      "sha256": "f6376986d392fad00bf51ba16edf676a7c3c6d5694dd21181d836c0c29c64c71"
+    },
+    {
+      "path": "scripts/test-profile-security.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "06b34361672248cee9e4fa9528770bd9c524ce2f6d2c7bb9567287669de30df1"
+    },
+    {
+      "path": "scripts/validate-control-compose.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "8578a8024a7f25420947bdd856f4e73f964d6c6a5349af5ae1fa7c6ef9221348"
+    },
+    {
+      "path": "scripts/validate-network-plan.py",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "1e63f7714cd1ce06ca884695d98755d42ab68d9806f09d1212f2741f70d05c51"
+    },
+    {
+      "path": "scripts/veilway-pki",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "d064d5696d63999b41928426ab37c0f95455ab137444aba1da5442428ce320d4"
+    },
+    {
+      "path": "scripts/verify-aws-host-key.sh",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "f534a51d0394b2101d289d520b9bb0c7cd45a53be2e8292fa9237d84693eb00e"
+    },
+    {
+      "path": "scripts/verify-client-profiles",
+      "group": "operator_and_verification_tools",
+      "mode": "0775",
+      "sha256": "0ce27a6abef3fb6f7bdcc4287cad9464f0db7f614a4737b14ce6f5e0d624fc10"
+    },
+    {
+      "path": "web/backend/.dockerignore",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "1d636505ea0c51ba235e0b6e0278294d52bcb1ff86d6dfe7915e93a0846098c3"
+    },
+    {
+      "path": "web/backend/Dockerfile",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "95db2e69cac975b77096ef31132d10b12720187dfe006e9e0894e861d17a057b"
+    },
+    {
+      "path": "web/backend/Dockerfile.test",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "ebd75ddb1278e9eb1361fa758c9c2d8f13ee7405b5eed462220721c1f377d531"
+    },
+    {
+      "path": "web/backend/alembic.ini",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "0d6603a18c46a4972c13f187904d56cc712e58f1b1e0009f0898cb5f7f7ac0ee"
+    },
+    {
+      "path": "web/backend/container-entrypoint.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "79cf37adfd51c40ef713008846956fe1d928a0d8ba77b4f9ccb10113296b6aa5"
+    },
+    {
+      "path": "web/backend/migrations/env.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "e85195136635bd74e7099f83cc6a6ffa601eecd99f4f2718353d9b54e155baf7"
+    },
+    {
+      "path": "web/backend/migrations/script.py.mako",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "d3244c86d221281de16e369b51c24857af6569d93d7dd65564591c618da8498a"
+    },
+    {
+      "path": "web/backend/migrations/versions/0001_restart_control_plane.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "df967c54a52cb6cecf72c72ddb94de637585d24d34adf8618a25937c1a21468e"
+    },
+    {
+      "path": "web/backend/migrations/versions/0002_users_and_profiles.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "941c7ff0661ce76d276c1bdbfc7739697524ffc69ec31d35e67456e66b216711"
+    },
+    {
+      "path": "web/backend/migrations/versions/0003_google_sign_in.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "781f91504c2d8790b93044cbeede28fed7773bb00f95033cae135c5713800107"
+    },
+    {
+      "path": "web/backend/migrations/versions/0004_profile_api.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "bc5a1bc4423eb22ad5c2c1d32ba6845a86a2cda3556ca2eabab171452e3ae084"
+    },
+    {
+      "path": "web/backend/migrations/versions/0005_crl_delivery.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "956bfcb59b7e68f9a5b5406625402f3948391fe950b6e58a36e77970e082b32f"
+    },
+    {
+      "path": "web/backend/migrations/versions/0006_legacy_profiles.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "630bccbe813b645ca5f0c0d25d1c10eadd9bf3e4384751d81b2c6dbde9794c8a"
+    },
+    {
+      "path": "web/backend/pyproject.toml",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "fffde7184dd2b18ba1e202d6340b7b521fda8d72fc24cc2bb89f68dc0f55cc7e"
+    },
+    {
+      "path": "web/backend/src/veilway_control/__init__.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "7e735f8190fc01bd5f4608aa94e0633bb2d7d7bc7536903047b386055b5f1324"
+    },
+    {
+      "path": "web/backend/src/veilway_control/access.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "3ddcc2fa2fe84abfcef36ddc30e22fbd1e45099e242a9a0e92e40a04543c3605"
+    },
+    {
+      "path": "web/backend/src/veilway_control/api.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "4b4284b1a6b2ea73083b2a37f93abfe38710ccca6e5f4b30dea058277ba38d35"
+    },
+    {
+      "path": "web/backend/src/veilway_control/cli.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "3f0d65ebfa393662aa27847665287d624dd2369a0635722b057515c050f7a2cd"
+    },
+    {
+      "path": "web/backend/src/veilway_control/cloud.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "4581c1fec85a1ec0cc0202e30fe4f4961777fe07c8bae69797a68ee9cf78c19a"
+    },
+    {
+      "path": "web/backend/src/veilway_control/config.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "3ebbd2f3df88d689f0e48f5fd0d6cde4a664ae8dd1d60032cf6c83769dc443b6"
+    },
+    {
+      "path": "web/backend/src/veilway_control/crl.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "bda5ff60baccbb94061bbcb49e3d5a447b10517b8734561ad9b98aa2c7ad9cc8"
+    },
+    {
+      "path": "web/backend/src/veilway_control/crl_api.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "2b4dabf230dfe6d5d48e942ae3fbc7b307877c68dc0c5229a153b7b6c27efd99"
+    },
+    {
+      "path": "web/backend/src/veilway_control/database.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "a60f8992e95b61af1aa2480d5e2a269e9de5fc51b122004bce1fcb6426aaa3d8"
+    },
+    {
+      "path": "web/backend/src/veilway_control/headers.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "de6a83ca2e804608e5bf7fd063134a7398a7f1243dcf351e07b726dc36467d54"
+    },
+    {
+      "path": "web/backend/src/veilway_control/legacy_profiles.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "772482859d4134dfe51e662dbfa80017ca3d490275871115fea27b981319307b"
+    },
+    {
+      "path": "web/backend/src/veilway_control/main.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "6ec32b33aa3f1385e6cfa5245c9cf3905a83b26e7857be2a7c3925831b8a1f66"
+    },
+    {
+      "path": "web/backend/src/veilway_control/models.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "ef500d02bd25edcdc31e70a1293f6533446f753beca4685c24ac116bf915057b"
+    },
+    {
+      "path": "web/backend/src/veilway_control/oidc.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "b2390dca2d09a514050ebc496a4519330b22fc1e736fc7b02bfaa677dacc6e93"
+    },
+    {
+      "path": "web/backend/src/veilway_control/orchestrator.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "2594715edcac7b99cf94c1c65c7a99e309ac80e1903a5cdcc6aa19c4a5e17c72"
+    },
+    {
+      "path": "web/backend/src/veilway_control/pki.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "c0ddf39ef6a10d5742a583513db8724e0fb4ac05afaf7c30ac75dd1e78938359"
+    },
+    {
+      "path": "web/backend/src/veilway_control/profile_api.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "2637e4dd4fb7323249033a2f57e0b2af58171ab7ac0c574f19ceb728fd86e2b0"
+    },
+    {
+      "path": "web/backend/src/veilway_control/profile_worker.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "fa23297720759c16d680a64f141894d2ea2e244e716479803833f4ad9055f860"
+    },
+    {
+      "path": "web/backend/src/veilway_control/profiles.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "237141d51f7f2a3048e9ca3685bed2693958078592837c22e79180df141261ee"
+    },
+    {
+      "path": "web/backend/src/veilway_control/schemas.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "e25fce23783ac027555d19c9e25f2b6b4fa0b4b708a1d20c0d8d536d7c802800"
+    },
+    {
+      "path": "web/backend/src/veilway_control/security.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "cb2a00fa46b8f6d510e95423bb013d12f74c76e9602aab7dd676d08bbbea6cd7"
+    },
+    {
+      "path": "web/backend/src/veilway_control/services.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "ea1c63662fcb33bfcdef2e5360dd34c2cabf5f878dda2bad6ecf1973dbb78156"
+    },
+    {
+      "path": "web/backend/tests/conftest.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "4e3389345aacfbfcda0518f204e9de491ce7c4ac9c989ce77c3cc0fe6cf4efd1"
+    },
+    {
+      "path": "web/backend/tests/oidc_helpers.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "04bf7997d20e09c0d45eb68baa37c885e07b7d0155225a034ec6e45e5677d87c"
+    },
+    {
+      "path": "web/backend/tests/privacy_helpers.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "f05a3d93059543c5434359b6cbd39ea37e204afc1f08c6834e2eea02b0104b1f"
+    },
+    {
+      "path": "web/backend/tests/test_access.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "e9b22d7b499222e2c4a9c8dd0c7f090bdd6ca4787736777a203be3d0d1a19fef"
+    },
+    {
+      "path": "web/backend/tests/test_api.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "b4fe680e7da929be35d5a541e970b378211ac7cc17a3a15e4bff81b8275c05c9"
+    },
+    {
+      "path": "web/backend/tests/test_cloud.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "58a4e6ab6ba520c9f948b0d81d08b31e456932c4d896824cda764513f1de01f9"
+    },
+    {
+      "path": "web/backend/tests/test_crl.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "b04d4d5d823a0e68465e293b5041da783f7facc8b80751dc7ad426b6db6bf30c"
+    },
+    {
+      "path": "web/backend/tests/test_crl_openvpn.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "e4fa6a527154d3ab53d885cf996276183724c4c22663f83a4bf32e5b5cd7e5a7"
+    },
+    {
+      "path": "web/backend/tests/test_legacy_profiles.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "5fd08c2c05b3374a936f527b15ec65ce94e96237961edb71358f87299d146eb4"
+    },
+    {
+      "path": "web/backend/tests/test_migrations.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "67caf30cf38a818d664c36269d992da5cb3fd382effaf2d4143aac69fce89884"
+    },
+    {
+      "path": "web/backend/tests/test_oidc.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "494d3c8379edf45f8726a009426fdd448567c1f8e1d208ce0198873790359b25"
+    },
+    {
+      "path": "web/backend/tests/test_orchestrator.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "398c113d92eac5bd57d749f1869a6c025f14ef081e2d31a75c7991b58dc32add"
+    },
+    {
+      "path": "web/backend/tests/test_pki_client.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "b16e4d62039d7868615d1decb565f90a51f40928f60810e24862232515ef502c"
+    },
+    {
+      "path": "web/backend/tests/test_profile_integration.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "005dd9522df527898387844d1c053276f05e36d27fca5fc2bcaa9049add740c7"
+    },
+    {
+      "path": "web/backend/tests/test_profile_postgres.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "f48be214fbf985512f59adb4f5fe6b44eba31110ed62d8e8bbd979b22bccb208"
+    },
+    {
+      "path": "web/backend/tests/test_profiles.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "843ad479bbea6ef87bc77f06912c2a5af4116bab844a323667cf8690949fc49e"
+    },
+    {
+      "path": "web/backend/tests/test_runtime.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "0c15aeb3441665c79e757c06e17f9cdd9e33954f9a422e4fcecd46e576e37d7e"
+    },
+    {
+      "path": "web/backend/tests/test_security.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "1d191590d6d91e2d5ec2220146e01a5a77ff0ca28a3dc618ae784628df92ef53"
+    },
+    {
+      "path": "web/backend/tests/test_stage7_security.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "d512efe779ec91677c506166d6ea2ae66abb16816b061d1b0c75477a7fe11734"
+    },
+    {
+      "path": "web/compose.yaml",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "e0e065792b4bbf7f16a2252572b623b0e2fa403e1558e1642012c4fa7e02b3c2"
+    },
+    {
+      "path": "web/frontend/.dockerignore",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "64a9cbca995520fd8d02a0063e2d4d2fefcbc3723a5481b848a1e1ecff954f2f"
+    },
+    {
+      "path": "web/frontend/Caddyfile",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "874273c8094e15a2e277946de250ec31738c1dd0a786bf29c40e6124e2ff88af"
+    },
+    {
+      "path": "web/frontend/Dockerfile",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "5cd0b2aca5aaaf3d07067d5843db506dbe5b51d4c603efc59f97e890bba3c415"
+    },
+    {
+      "path": "web/frontend/Dockerfile.browser",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "3544c872f4b2def6c6a529bbae91b5e926b3f06a77b20972f6d9698a80c33d52"
+    },
+    {
+      "path": "web/frontend/index.html",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "be45260ef6cfce4544d311a17007603f2aaec68058f2b3e832b0d06dd694e92b"
+    },
+    {
+      "path": "web/frontend/package-lock.json",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "7887db60412e4563c0c06c9486bad84faec8622817867745bd885c66019b2695"
+    },
+    {
+      "path": "web/frontend/package.json",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "3d74a173cddf3b87ba7a71a1ff893e4970087298067f5bb2105807904e1f049a"
+    },
+    {
+      "path": "web/frontend/src/AccountHome.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "a54099f8f35a1add6698dde07a14f85946103aa5d79388fa4b89b2fe458881ff"
+    },
+    {
+      "path": "web/frontend/src/Dashboard.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "fe95453e0cce361b89653cab205e8b3adbe6c85a560cfa172bce5ae82706940b"
+    },
+    {
+      "path": "web/frontend/src/Delivery.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "9e4f9e5e043d2af0f01cb1135c343d6cd3ec0539f3b2564d1f595884ebaf37bd"
+    },
+    {
+      "path": "web/frontend/src/History.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "c65371a7e387f0e54fd385698b4c2fa977215ddae18b3effcd8e609e060cf9c5"
+    },
+    {
+      "path": "web/frontend/src/JobHistory.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "5f783c72ee8220c28240cf97c54abdeeb48577dd05cd637d374088fa39f82078"
+    },
+    {
+      "path": "web/frontend/src/Layout.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "411ded24d92e3b81e8a7b4ead9a07609946b9c21eaa8f529c397d70bc07a9ab6"
+    },
+    {
+      "path": "web/frontend/src/Login.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "97fbcd0e8a511c4c7cdaa33812e3d55c02c636940f650a3e0e43de410dd9e623"
+    },
+    {
+      "path": "web/frontend/src/Modal.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "4d708953b386892298bde0b2643400d61a1809aaff0f02dea7eb6a9141c82d41"
+    },
+    {
+      "path": "web/frontend/src/Nodes.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "b24fe66032ed2613554fbe3e80e32d9dfcb38b332a6fd03d6e09cf42f6ec1993"
+    },
+    {
+      "path": "web/frontend/src/Profiles.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "7b267ef6595c31fcd78c29702376e18fb623dcef990c11ad5b199fcb54316a36"
+    },
+    {
+      "path": "web/frontend/src/RestartConfirmation.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "865b566c249ce5f9ad98f8354e1236e06e4ab9dee653827aecf82bc016515295"
+    },
+    {
+      "path": "web/frontend/src/SessionView.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "5d55bbbf31a06b6a69f58bdc52ed00f516fa65e79f8b7f997b0741e911506067"
+    },
+    {
+      "path": "web/frontend/src/Users.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "cec551c3b0540163a934d1ff2e1d7e4d0cb4753f547df4b5ed9566ba127551f1"
+    },
+    {
+      "path": "web/frontend/src/VmCard.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "00531846e4a1bb39e32bd4f8f4c49addc6c9b14cb67a2018df8941b4fcfbb3d3"
+    },
+    {
+      "path": "web/frontend/src/api.ts",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "820701bef42e7c803848b8104eabfb96773d83a29fe13fd1367a89e598a36323"
+    },
+    {
+      "path": "web/frontend/src/main.tsx",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "a769941322a80d96a170401da0450e91b83f36c35ab2a7562ec87d41743ce5e9"
+    },
+    {
+      "path": "web/frontend/src/polling.ts",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "5cefcc6840e96e4c53c6a1508a0ed47e473d8b9d0e05d141dcd2dd29d501e1f0"
+    },
+    {
+      "path": "web/frontend/src/profilePresentation.ts",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "b003eb1895c4498daf9eb8422f32ca28c847ed014f384a4dd10e3f9d0ebabba8"
+    },
+    {
+      "path": "web/frontend/src/styles.css",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "8e2bde180962b250163b338b083da1ed481babe5771639db025024aa4bf04f5b"
+    },
+    {
+      "path": "web/frontend/src/useDashboardPolling.ts",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "e64cb27e21b44e139e3c1e1a1f872eddd056129a50b0504945360072ea1bc130"
+    },
+    {
+      "path": "web/frontend/src/useResource.ts",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "02eb33ead81acd87bad15c622b1b0493969a29ad77d4958f23b329412502e990"
+    },
+    {
+      "path": "web/frontend/tests/auth.test.cjs",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "29b0b92a09f02acaae619b6016bf11d82afc69e6b6d202645b1262a7efa03f71"
+    },
+    {
+      "path": "web/frontend/tests/browser.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "e4e6c2463ed59f02fb5a08d6a7c6acf934ac8c90858c881be08fbcd78b22c38d"
+    },
+    {
+      "path": "web/frontend/tests/polling.test.cjs",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "e8489680e506002f5c97af7a59fb590a5035d5c72829e59c05704e2981f68f28"
+    },
+    {
+      "path": "web/frontend/tests/profiles.test.cjs",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "b3505aefa050953925941960422a9106831f41a9664ed893ef6d01643c2234cc"
+    },
+    {
+      "path": "web/frontend/tests/run.mjs",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "7b461deb67733de8e5c6e91078aeca208604882fa593a724b62e8868c98e6f19"
+    },
+    {
+      "path": "web/frontend/tsconfig.app.json",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "68c1deb8e204d8bf22d0eac34ed5f3caae97a7c784549151fc3fb5ccc861e0f2"
+    },
+    {
+      "path": "web/frontend/tsconfig.json",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "b3e1a02c1e7edb5a9f66c319450bc05c71b9398cf205403c6454ea700a3f4f8b"
+    },
+    {
+      "path": "web/frontend/vite.config.ts",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "da269817799c9fbda9b050059f5d5ad307ee238525a37fb8c7abf36e9b1c4217"
+    },
+    {
+      "path": "web/pki/.dockerignore",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "991d12da2f88744adb8c86126087f29e981c2b5d94d923f40c521568e86a0f19"
+    },
+    {
+      "path": "web/pki/Dockerfile",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "d0a675b9e84a314195c4be0c0203a1eba19817f45cf436b87e7b29a4dbb87f4c"
+    },
+    {
+      "path": "web/pki/Dockerfile.integration",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "aabf665604db8cccc53befbfc8b5dbc436328377243faefaeb2c7abe2b272f27"
+    },
+    {
+      "path": "web/pki/Dockerfile.test",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "64c7b97736468d105c76f3702bbfb2c346ecfaf7a94d897dc77d9226ff4286b2"
+    },
+    {
+      "path": "web/pki/container-entrypoint.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "1bd09d3e33c859fd5c770211eb03440d985cfa9a352c81de09d378af7fd532e6"
+    },
+    {
+      "path": "web/pki/tests/test_container.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "b71f9841c7eca816619987929d2c4c01caa3883106a89a906d14ff3bfe922377"
+    },
+    {
+      "path": "web/pki/tests/test_legacy.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "bd31f030f0a63b6d2b0a6f4940bab405060ef712211d69f817494b8c0fc9a21b"
+    },
+    {
+      "path": "web/pki/tests/test_pki.py",
+      "group": "verification",
+      "mode": "0664",
+      "sha256": "b147bcf55baed0ad2e6b253eebd0b477b1d4771692153a91c871de1273f14005"
+    },
+    {
+      "path": "web/pki/veilway_pki/__init__.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "2f1065e59c6cf1ca84f7a25f30de7eb0313cddb43086652bd7db7c4ac4ab6bd7"
+    },
+    {
+      "path": "web/pki/veilway_pki/__main__.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "87b02eec23b022aff8550e27ad9a1fea0d91106e9fcdc3b9634f1b238d3229fa"
+    },
+    {
+      "path": "web/pki/veilway_pki/core.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "45ee6e79fa7607c2ac6933a8876eae2133dca6164dfb282451aed3f255457f04"
+    },
+    {
+      "path": "web/pki/veilway_pki/legacy.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "84c4eb77d3348bb272b7ae70c4026ffdb0666371cc436b228cdd78f282136088"
+    },
+    {
+      "path": "web/pki/veilway_pki/server.py",
+      "group": "panel_runtime",
+      "mode": "0664",
+      "sha256": "392f9fb377179b63b99a8cfe5438b56f601b37b15488f478de506e915a49d166"
+    }
+  ]
+}

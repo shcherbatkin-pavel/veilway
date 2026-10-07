@@ -3,13 +3,19 @@
   ansible.builtin.assert:
     that:
       - veilway_control_web_apply_ack | bool
-      - veilway_control_admin_login | length >= 3
-      - veilway_control_admin_password | length >= 14
+      - veilway_control_pki_ca_passphrase | length >= 1
+      - veilway_control_pki_yc_endpoint | length >= 7
+      - veilway_control_pki_aws_endpoint | length >= 7
+      - veilway_control_google_client_id | length >= 10
+      - veilway_control_google_client_secret | length >= 16
+      - veilway_control_admin_google_email | length >= 5
       - veilway_control_postgres_password | length >= 20
       - veilway_control_aws_access_key_id | length >= 16
       - veilway_control_aws_secret_access_key | length >= 32
       - veilway_control_aws_direct_instance_id | length >= 6
       - veilway_control_yc_direct_instance_id | length >= 6
+      - veilway_control_aws_crl_token | default('') | length >= 32
+      - veilway_control_yc_crl_token | default('') | length >= 32
       - veilway_control_aws_heartbeat_token | length >= 32
       - veilway_control_yc_heartbeat_token | length >= 32
     quiet: true

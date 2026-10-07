@@ -4,12 +4,15 @@
 
 Veilway will provide self-hosted, internet-only VPN connectivity through two
 new, dedicated Ubuntu 24.04 LTS virtual machines: one in Yandex Cloud and one in
-AWS. The prototype is for a single operator and is not a multi-tenant service.
+AWS. One ADMIN manages access for registered USER accounts on shared dedicated
+nodes. There is no tenant infrastructure or billing.
 
 ## Users and clients
 
-- One operator; the prototype does not provide application users or tenant
-  accounts.
+- One operator ADMIN, bootstrapped from protected Google email and pinned by
+  Google subject; all other verified Google identities register as USER.
+- Registration grants no VPN access. ADMIN assigns new profiles to USER;
+  USER can list and download only their own active, unexpired profiles.
 - The baseline has two client devices: an Ubuntu laptop and an iPhone.
 - The operator may explicitly provision additional device profiles with
   non-personal identifiers.
@@ -31,11 +34,13 @@ and IPv6 egress through AWS.
 
 ## Management and coexistence
 
-- The accepted restart-only panel is public at `https://veilway.ru` so it stays
+- The accepted profile/restart panel is public at `https://veilway.ru` so it stays
   reachable during a VPN outage. It manages only `aws-direct` and `yc-direct`
-  and uses a single administrator with a server-side cookie session.
-- Registration, MFA, PKI and profile generation are not part of the restart
-  control-plane MVP.
+  and uses Google registration, ADMIN/USER roles and server-side cookie sessions.
+- ADMIN manages profile issue/ownership/rename/revocation and node restart/history.
+  USER sees mode, expiry, status and download. All API responses are non-cacheable;
+  mutations require session-bound CSRF. MFA and general VM administration are out
+  of scope.
 - Veilway deployment targets only newly created, dedicated VMs. Inventory and
   Terraform state must not reference the old VMs.
 - The existing OpenVPN Access Server is outside the target architecture and
@@ -65,8 +70,21 @@ and IPv6 egress through AWS.
 - Each device and mode uses a unique client certificate and `tls-crypt-v2` key.
 - TLS 1.3, AEAD data ciphers, certificate revocation, and disabled compression
   are mandatory. Password-only authentication is not supported.
-- The root CA private key and generated client profiles remain on the trusted
-  operator workstation. The root CA private key must never be copied to a VM.
+- Before the approved handover, local PKI tooling prepares the dedicated CA.
+  After handover, its sole writer is the network-isolated server PKI on the panel
+  VM, with an encrypted CA key and protected private profile storage. VPN nodes,
+  API, Caddy and PostgreSQL never mount private CA storage. This replaces the
+  earlier workstation-only rule under [ADR 0005](adr/0005-google-profiles-and-server-pki.md).
+- Preserve the full existing registry, counters and revoked set during import
+  and recovery. Disable local PKI writes and stale deployment CRL copying.
+- Issue new UUID profiles, default duration 365 days within CA lifetime,
+  with durable idempotency and worker recovery. Assigned owners cannot transfer.
+- Import existing profiles under the same CA without replacing certificates,
+  keys, endpoints or expiry; explicitly assign owners, preserve original download
+  bytes, revocations and provenance. Follow the [legacy migration procedure](legacy-profile-migration.md).
+- Signed full CRLs reach dedicated outgoing agents. `revoking` disables download;
+  `revoked` requires the relevant node's acknowledgement. Active sessions are not
+  forcibly ended; subsequent connections enforce CRL and certificate expiry.
 - Servers receive only their own key and certificate, the public CA,
   certificate revocation list, and endpoint-specific `tls-crypt-v2` server key.
 - The Yandex transit client receives only its own client key and certificate,
@@ -93,15 +111,17 @@ and IPv6 egress through AWS.
 - Independent Terraform stacks for AWS and Yandex Cloud.
 - Explicit Ansible deployment for the two new VMs.
 - Compose-managed OpenVPN and Unbound services for both direct modes.
-- Local client-profile creation and revocation tooling.
+- Local PKI tooling for bootstrap, disabled after server handover.
+- Google registration and ADMIN/USER profile panel with isolated server PKI.
 - Fail-closed Yandex-to-AWS multi-hop routing and transit-only DNS.
 - Static validation and operator acceptance-test instructions.
-- A separately deployable three-container restart control plane and outbound
-  heartbeat agent for the two dedicated VPN VMs.
+- A separately deployable four-container profile/restart control plane, outbound
+  heartbeat and CRL agents for the two dedicated VPN VMs, and coherent protected
+  backup/recovery and approved live-acceptance procedures.
 
 ## First-iteration non-goals
 
-- Web registration, user profile issuance, PKI management, cloud discovery or
-  management of any VM other than `aws-direct` and `yc-direct`.
+- MFA, tenant provisioning, billing, cloud discovery, public ADMIN-role mutation,
+  or management of any VM other than `aws-direct` and `yc-direct`.
 - Migrating or modifying the old VMs or existing OpenVPN Access Server.
 - Automatically applying Terraform or connecting to any VM.

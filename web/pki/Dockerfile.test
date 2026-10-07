@@ -1,0 +1,3 @@
+FROM veilway-control-pki:0.1.0
+COPY tests ./tests
+ENTRYPOINT ["python", "-m", "unittest", "discover", "-s", "tests", "-v"]

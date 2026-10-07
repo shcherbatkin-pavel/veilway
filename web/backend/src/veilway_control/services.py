@@ -9,7 +9,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from .config import Settings
-from .models import ALLOWED_VM_SLUGS, RestartJob, RestartTarget, VmHeartbeat, VpnVm, as_utc
+from .access import ensure_admin
+from .models import ALLOWED_VM_SLUGS, RestartJob, RestartTarget, User, VmHeartbeat, VpnVm, as_utc
 
 
 VmState = Literal["healthy", "degraded", "unknown", "restarting"]
@@ -58,8 +59,12 @@ def list_vm_states(db: Session, settings: Settings, *, now: datetime) -> list[tu
 
 
 def create_restart(
-    db: Session, settings: Settings, admin_id: UUID, targets: list[str], *, now: datetime
+    db: Session, settings: Settings, user_id: UUID, targets: list[str], *, now: datetime
 ) -> RestartJob:
+    user = db.get(User, user_id)
+    if user is None:
+        raise RestartRejected(status_code=401, detail="unknown user")
+    ensure_admin(user)
     vms = db.scalars(
         select(VpnVm)
         .where(VpnVm.slug.in_(targets))
@@ -78,7 +83,7 @@ def create_restart(
         )
 
     job = RestartJob(
-        admin_id=admin_id,
+        user_id=user_id,
         status="queued",
         active_guard=1,
     )

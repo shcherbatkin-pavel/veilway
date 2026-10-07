@@ -55,11 +55,12 @@
       {{
         [
           {'path': veilway_pki_root ~ '/ca/ca.crt', 'mode': '0644'},
-          {'path': veilway_pki_root ~ '/crl.pem', 'mode': '0644'},
           {'path': veilway_pki_root ~ '/endpoints/' ~ veilway_mode ~ '/server.crt', 'mode': '0644'},
           {'path': veilway_pki_root ~ '/endpoints/' ~ veilway_mode ~ '/server.key', 'mode': '0600'},
           {'path': veilway_pki_root ~ '/endpoints/' ~ veilway_mode ~ '/tls-crypt-v2-server.key', 'mode': '0600'}
         ]
+        + ([{'path': veilway_pki_root ~ '/crl.pem', 'mode': '0644'}]
+           if not (veilway_crl_agent_managed | bool) else [])
         + (
           [
             {'path': veilway_pki_root ~ '/endpoints/yc-multihop-ingress/server.crt', 'mode': '0644'},

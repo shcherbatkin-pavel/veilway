@@ -1,0 +1,13 @@
+---
+- name: Install approved CRL agents on dedicated VPN nodes
+  hosts: direct_vpn
+  become: true
+  gather_facts: false
+  serial: 1
+  vars:
+    veilway_crl_agent_apply_ack: true
+    veilway_crl_agent_token: >-
+      {{ lookup('env', 'VEILWAY_DEPLOY_CRL_AWS_DIRECT_TOKEN'
+        if veilway_mode == 'aws-direct' else 'VEILWAY_DEPLOY_CRL_YC_DIRECT_TOKEN') }}
+  roles:
+    - role: veilway_crl_agent

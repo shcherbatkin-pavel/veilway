@@ -1,0 +1,193 @@
+#!/usr/bin/python3
+"""Outbound-only CRL installer. Configuration and trust anchor are root-owned."""
+from __future__ import annotations
+
+import base64
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import secrets
+import ssl
+import stat
+from datetime import datetime, timezone
+import urllib.request
+
+from cryptography import x509
+
+MAX_PEM = 65536
+SLUGS = {"aws-direct", "yc-direct"}
+
+
+class Rejected(Exception):
+    pass
+
+
+def utc(value):
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+def date(value, name):
+    # Ubuntu 24.04 and newer cryptography versions share this trust contract.
+    result = getattr(value, name + "_utc") if hasattr(value, name + "_utc") else getattr(value, name)
+    return None if result is None else utc(result)
+
+
+def inspect(pem, ca_pem, *, allow_expired=False, now=None):
+    now = now or datetime.now(timezone.utc)
+    try:
+        if not 0 < len(pem) <= MAX_PEM or not 0 < len(ca_pem) <= 16384:
+            raise ValueError()
+        ca = x509.load_pem_x509_certificate(ca_pem)
+        crl = x509.load_pem_x509_crl(pem)
+        if (not ca.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+                or not ca.extensions.get_extension_for_class(x509.KeyUsage).value.crl_sign
+                or not date(ca, "not_valid_before") <= now < date(ca, "not_valid_after")
+                or crl.issuer != ca.subject or not crl.is_signature_valid(ca.public_key())
+                or date(crl, "next_update") is None or date(crl, "last_update") > now
+                or not allow_expired and date(crl, "next_update") <= now):
+            raise ValueError()
+        for extension in crl.extensions:
+            if isinstance(extension.value, (x509.DeltaCRLIndicator, x509.IssuingDistributionPoint)) or (
+                    extension.critical and not isinstance(extension.value, x509.CRLNumber)):
+                raise ValueError()
+        version = crl.extensions.get_extension_for_class(x509.CRLNumber).value.crl_number
+        if not 1 <= version < 2**63:
+            raise ValueError()
+        return version, hashlib.sha256(pem).hexdigest(), {entry.serial_number for entry in crl}
+    except Exception:
+        raise Rejected("invalid_bundle") from None
+
+
+def read_at(directory_fd, name):
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_PEM:
+            raise Rejected("installation_failed")
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            return stream.read(MAX_PEM + 1)
+    finally:
+        os.close(fd)
+
+
+def install(directory, ca_pem, payload):
+    try:
+        if (not isinstance(payload, dict) or set(payload) != {"version", "sha256", "crl_base64"}
+                or type(payload["version"]) is not int or not isinstance(payload["sha256"], str)
+                or not isinstance(payload["crl_base64"], str) or len(payload["crl_base64"]) > 88000):
+            raise ValueError()
+        pem = base64.b64decode(payload["crl_base64"], validate=True)
+    except Exception:
+        raise Rejected("invalid_bundle") from None
+    version, digest, serials = inspect(pem, ca_pem)
+    if payload["version"] != version or payload["sha256"] != digest:
+        raise Rejected("invalid_bundle")
+    try:
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        raise Rejected("installation_failed") from None
+    temporary = None
+    try:
+        fcntl.flock(directory_fd, fcntl.LOCK_EX)
+        # Initial CRL must be provisioned before OpenVPN uses this directory.
+        current = read_at(directory_fd, "crl.pem")
+        old_version, old_digest, old_serials = inspect(current, ca_pem, allow_expired=True)
+        if version < old_version or version == old_version and digest != old_digest or not old_serials.issubset(serials):
+            raise Rejected("invalid_bundle")
+        if digest != old_digest:
+            temporary = ".crl-" + secrets.token_hex(16)
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory_fd)
+            try:
+                with os.fdopen(fd, "wb", closefd=False) as stream:
+                    stream.write(pem)
+                    stream.flush()
+                os.fchmod(fd, 0o640)  # setgid directory preserves the OpenVPN reader group.
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(temporary, "crl.pem", src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            temporary = None
+            os.fsync(directory_fd)
+        installed = read_at(directory_fd, "crl.pem")
+        installed_version, installed_digest, _ = inspect(installed, ca_pem)
+        if installed_version != version or installed_digest != digest:
+            raise Rejected("installation_failed")
+        return {"version": version, "sha256": digest}
+    except Rejected:
+        raise
+    except Exception:
+        raise Rejected("installation_failed") from None
+    finally:
+        if temporary is not None:
+            os.unlink(temporary, dir_fd=directory_fd)
+        os.close(directory_fd)
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        raise Rejected("transport_unavailable")
+
+
+class Transport:
+    def __init__(self, slug, token):
+        if slug not in SLUGS or not 32 <= len(token) <= 256 or any(ord(c) < 33 or ord(c) > 126 for c in token):
+            raise Rejected("transport_unavailable")
+        self.base = "https://veilway.ru/api/v1/crl-agents/" + slug
+        self.token = token
+        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(),
+            urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+
+    def request(self, operation, payload=None):
+        if operation not in {"bundle", "receipt", "error"}:
+            raise Rejected("transport_unavailable")
+        data = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("ascii")
+        request = urllib.request.Request(self.base + "/" + operation, data=data,
+            headers={"Authorization": "Bearer " + self.token, "Content-Type": "application/json", "Accept": "application/json"})
+        try:
+            with self.opener.open(request, timeout=10) as response:
+                if response.status != (200 if operation == "bundle" else 204):
+                    raise ValueError()
+                raw = response.read(131073)
+                if len(raw) > 131072:
+                    raise ValueError()
+                return json.loads(raw) if operation == "bundle" else None
+        except Exception:
+            raise Rejected("transport_unavailable") from None
+
+
+def step(transport, directory, ca_pem):
+    try:
+        receipt = install(directory, ca_pem, transport.request("bundle"))
+        # Lost acknowledgement is harmless: next poll revalidates the installed file.
+        transport.request("receipt", receipt)
+        return None
+    except Rejected as error:
+        code = str(error)
+        try:
+            transport.request("error", {"code": code})
+        except Rejected:
+            pass
+        return code
+
+
+def main():
+    os.umask(0o077)
+    try:
+        config = json.loads(Path("/etc/veilway-crl-agent/config.json").read_text())
+        if not isinstance(config, dict) or set(config) != {"slug"} or config["slug"] not in SLUGS:
+            raise ValueError()
+        token = Path("/etc/veilway-crl-agent/token").read_text().strip()
+        ca = Path("/etc/veilway-crl-agent/ca.crt").read_bytes()
+        error = step(Transport(config["slug"], token), "/var/lib/veilway-crl", ca)
+    except Exception:
+        error = "installation_failed"
+    if error:
+        print(error)  # Never log tokens, URLs, CRL contents or exception details.
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

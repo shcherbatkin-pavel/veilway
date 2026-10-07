@@ -5,7 +5,6 @@ set -euo pipefail
 readonly PROGRAM_NAME="${0##*/}"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
-readonly API_TEST_IMAGE='veilway-control-api-test:0.1.0'
 readonly FRONTEND_TEST_IMAGE='veilway-control-frontend-test:0.1.0'
 
 usage() {
@@ -24,22 +23,10 @@ done
 
 cd -- "${REPOSITORY_ROOT}"
 
-printf '%s\n' '[1/4] Build the isolated backend test image'
-docker build \
-    --file web/backend/Dockerfile.test \
-    --tag "${API_TEST_IMAGE}" \
-    web/backend
+printf '%s\n' '[1/3] Full backend, agent, PKI and disposable PostgreSQL acceptance'
+./scripts/test-profile-security.sh --build
 
-printf '%s\n' '[2/4] Run backend tests without network or writable root filesystem'
-docker run --rm \
-    --network none \
-    --read-only \
-    --tmpfs /tmp:rw,noexec,nosuid,size=32m \
-    --cap-drop ALL \
-    --security-opt no-new-privileges:true \
-    "${API_TEST_IMAGE}"
-
-printf '%s\n' '[3/4] Build the pinned frontend test stage and validate Compose'
+printf '%s\n' '[2/3] Build the pinned frontend test stage and validate Compose'
 docker build \
     --file web/frontend/Dockerfile \
     --target build \
@@ -48,7 +35,8 @@ docker build \
 docker compose --file web/compose.yaml config --format json \
     | python3 scripts/validate-control-compose.py
 
-printf '%s\n' '[4/4] Exercise migrations and bootstrap with disposable PostgreSQL'
+printf '%s\n' '[3/3] Exercise migrations and VM sync with disposable PostgreSQL'
 python3 scripts/control-postgres-smoke.py
 
 printf '%s\n' "${PROGRAM_NAME}: all control-plane tests passed"
+printf '%s\n' 'PKI lifecycle and container isolation: scripts/test-pki-service.sh --build'
