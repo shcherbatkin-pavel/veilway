@@ -93,7 +93,8 @@ USER и проходит проверки доступа, скачивания, 
 [манифесте исходников](panel-release-candidate.json).
 
 M4.4 выполняется по частям: комплекты импорта подготовлены локально;
-draft PR готовится в `feat/google-profile-panel`. Reviewed/merged release,
+Открыт [draft PR #6](https://github.com/shcherbatkin-pavel/veilway/pull/6)
+из `feat/google-profile-panel`. Reviewed/merged release,
 передача на VM, обновление и сам импорт ещё не выполнены.
 
 - Подготовить reviewed release, защищённые inputs и inventory; получить точные
@@ -291,3 +292,15 @@ feat/google-profile-panel; актуальная GitHub main совпадает �
 локальной приёмки M4.1. Private .env, inventory, CA/.ovpn, backup и import
 bundles исключены из Git. Draft PR объединяет готовый согласованный релиз;
 review/разрешение conversations, squash merge и rollout остаются отдельно.
+
+### 2026-10-07 — M4.4: draft PR опубликован
+
+- Создан implementation commit 9241db4 на feat/google-profile-panel. В staging
+  проверены 142 публичных файла: состав соответствует candidate manifest,
+  секретные и generated файлы не включены; runtime fingerprint не менялся.
+- Ветка опубликована, открыт
+  [draft PR #6](https://github.com/shcherbatkin-pavel/veilway/pull/6) в main.
+  PR содержит problem/behavior, миграционные ограничения и результаты приёмки.
+- Remote main совпадала с базой кандидата при создании PR. Никакого force push,
+  merge или VM deployment/import не выполнялось. До apply необходимы review,
+  разрешение review conversations и squash merge согласно AGENTS.md.

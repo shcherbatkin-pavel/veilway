@@ -86,3 +86,8 @@ Commit/PR/push/apply/export/handover в M4.1 не выполнялись.
 момент M4.1; публикация кандидата не означает review, merge или rollout.
 Runtime fingerprint остался прежним; прошедшие проверки относятся к тому же
 составу runtime. Секретные backup/import артефакты находятся вне репозитория.
+
+Код кандидата зафиксирован коммитом `9241db4` и опубликован в
+[draft PR #6](https://github.com/shcherbatkin-pavel/veilway/pull/6).
+Последующие изменения журнала не меняют runtime. Перед rollout использовать
+финальную reviewed/merged revision PR, а не базовый HEAD M4.1 или название тега.

@@ -3,7 +3,7 @@
   "candidate": "panel-profiles-2026-10-07",
   "base_commit": "fc6a3c9dc76a5c881eec9231d1e4ee08f98124f0",
   "published": false,
-  "entries_sha256": "5686167190cff5af3cad2ecd6165e1902e9cf5d1a95d2aa8ebb4b1c7dcf075ec",
+  "entries_sha256": "f8f9c0cc2eca627e1041d59ff8ae3d498fe31453ef1744add7fa5fb530e1535f",
   "panel_runtime_sha256": "b41631f4c9a36f4b249ef48a5b1c9cae7020883da39dad6459a0e9501abb7529",
   "excluded_reports": [
     "docs/panel-release-candidate.json",
@@ -471,7 +471,7 @@
       "path": "docs/pki-evolution-plan.md",
       "group": "documentation",
       "mode": "0664",
-      "sha256": "e3aea8cc764ef61f7caadd014e9307e6f27270ffdf316354ce0d45dbd3e31d95"
+      "sha256": "2cfae2b7db6ff68024037ad9fb4fa6ed2234f19a4f7096e438e55477d3a8c5cb"
     },
     {
       "path": "docs/pki-service.md",
