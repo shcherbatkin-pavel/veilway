@@ -3,12 +3,12 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from veilway_control.database import Base
-from veilway_control.models import Admin, VmHeartbeat, VpnVm, utcnow
+from veilway_control.models import CrlSyncState, GoogleAdminBinding, User, VmHeartbeat, VpnVm, utcnow
 from veilway_control.security import PASSWORD_HASHER, hash_token
 
 
@@ -19,8 +19,16 @@ def db_factory() -> Iterator[sessionmaker[Session]]:
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+
+    @event.listens_for(engine, "connect")
+    def enable_foreign_keys(connection, _record):
+        connection.execute("PRAGMA foreign_keys=ON")
+
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as db:
+        db.add_all([GoogleAdminBinding(id=1), CrlSyncState(id=1)])
+        db.commit()
     try:
         yield factory
     finally:
@@ -31,11 +39,12 @@ def db_factory() -> Iterator[sessionmaker[Session]]:
 def seed_control_data(
     db_factory: sessionmaker[Session],
 ) -> Callable[..., dict[str, object]]:
-    def seed(*, with_heartbeats: bool = True) -> dict[str, object]:
+    def seed(*, with_heartbeats: bool = True, legacy_admin: bool = False) -> dict[str, object]:
         with db_factory() as db:
-            admin = Admin(
-                login="operator",
-                password_hash=PASSWORD_HASHER.hash("correct horse battery staple"),
+            admin = User(
+                role="ADMIN",
+                **({"login": "operator", "password_hash": PASSWORD_HASHER.hash("correct horse battery staple")}
+                   if legacy_admin else {"google_sub": "operator-sub", "email": "operator@gmail.com"}),
             )
             aws = VpnVm(
                 slug="aws-direct",
@@ -55,6 +64,8 @@ def seed_control_data(
             )
             db.add_all([admin, aws, yandex])
             db.flush()
+            if not legacy_admin:
+                db.get(GoogleAdminBinding, 1).user_id = admin.id
             if with_heartbeats:
                 db.add_all(
                     [
@@ -75,6 +86,6 @@ def seed_control_data(
                     ]
                 )
             db.commit()
-            return {"admin_id": admin.id, "aws_id": aws.id, "yandex_id": yandex.id}
+            return {"user_id": admin.id, "aws_id": aws.id, "yandex_id": yandex.id}
 
     return seed

@@ -1,0 +1,31 @@
+---
+- name: Inspect only the local CA authority marker
+  ansible.builtin.stat:
+    path: "{{ veilway_pki_root }}/.server-managed"
+    get_attributes: false
+    get_checksum: false
+    get_mime: false
+  delegate_to: localhost
+  become: false
+  register: veilway_local_ca_authority
+  no_log: true
+
+- name: Inspect only the dedicated CRL agent bootstrap marker
+  ansible.builtin.stat:
+    path: "{{ veilway_crl_state_root | default('/var/lib/veilway-crl') }}/crl.pem"
+    get_attributes: false
+    get_checksum: false
+    get_mime: false
+  register: veilway_remote_crl_authority
+  no_log: true
+
+- name: Refuse a legacy CRL deployment after CA handover or agent bootstrap
+  ansible.builtin.assert:
+    that:
+      - >-
+        (veilway_crl_agent_managed | bool) or
+        (not veilway_local_ca_authority.stat.exists and
+         not veilway_remote_crl_authority.stat.exists)
+    fail_msg: >-
+      Server-managed CA or bootstrapped CRL agent detected. Preserve managed
+      inventory and the approved CRL directory mount; legacy deployment is refused.

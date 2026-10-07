@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     )
 
     environment: str = "development"
+    pki_socket_path: Path = Path("/run/veilway-pki/pki.sock")
     public_host: str = "veilway.ru"
     database_host: str = "db"
     database_port: int = 5432
@@ -29,6 +30,11 @@ class Settings(BaseSettings):
     worker_interval_seconds: int = Field(default=3, ge=1, le=30)
     session_cookie_name: Literal["__Host-veilway_session"] = "__Host-veilway_session"
     cookie_secure: bool = True
+    google_client_id_file: Path = Path("/run/secrets/google_client_id")
+    google_client_secret_file: Path = Path("/run/secrets/google_client_secret")
+    admin_google_email_file: Path = Path("/run/secrets/admin_google_email")
+    oauth_cookie_name: Literal["__Host-veilway_oauth"] = "__Host-veilway_oauth"
+    oauth_attempt_seconds: int = Field(default=600, ge=60, le=600)
     aws_access_key_id_file: Path = Path("/run/secrets/aws_access_key_id")
     aws_secret_access_key_file: Path = Path("/run/secrets/aws_secret_access_key")
     yandex_metadata_url: str = (
@@ -73,6 +79,29 @@ class Settings(BaseSettings):
     @property
     def aws_secret_access_key(self) -> str:
         return self.read_secret(self.aws_secret_access_key_file)
+
+    @property
+    def google_client_id(self) -> str:
+        return self.read_secret(self.google_client_id_file)
+
+    @property
+    def google_client_secret(self) -> str:
+        return self.read_secret(self.google_client_secret_file)
+
+    @property
+    def admin_google_email(self) -> str:
+        value = self.read_secret(self.admin_google_email_file).lower()
+        if len(value) > 320 or value.count("@") != 1 or any(c.isspace() for c in value):
+            raise RuntimeError("invalid configured administrator email")
+        local, domain = value.split("@")
+        if not local or "." not in domain or domain.startswith(".") or domain.endswith("."):
+            raise RuntimeError("invalid configured administrator email")
+        return value
+
+    @property
+    def google_redirect_uri(self) -> str:
+        # Fixed origin and path: never derive an OAuth redirect from request headers.
+        return f"https://{self.public_host}/api/v1/auth/google/callback"
 
 
 @lru_cache

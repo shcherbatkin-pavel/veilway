@@ -11,13 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 VmSlug = Literal["aws-direct", "yc-direct"]
 
 
-class LoginRequest(BaseModel):
-    login: str = Field(min_length=1, max_length=64)
-    password: str = Field(min_length=1, max_length=1024)
-
-
 class SessionResponse(BaseModel):
-    login: str
+    user_id: uuid.UUID
+    email: str
+    role: Literal["ADMIN", "USER"]
     csrf_token: str
 
 
@@ -80,3 +77,92 @@ class RestartJobResponse(BaseModel):
     finished_at: datetime | None
     error_code: str | None
     targets: list[RestartTargetResponse]
+
+
+ProfileMode = Literal["yc-direct", "aws-direct", "yc-aws-multihop"]
+ProfileStatus = Literal["issuing", "active", "expired", "revoking", "revoked", "failed"]
+
+
+class ProfileCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: uuid.UUID
+    device_name: str = Field(min_length=1, max_length=128)
+    mode: ProfileMode
+    owner_id: uuid.UUID | None = None
+    duration_days: int | None = Field(default=None, ge=1, strict=True)
+    expires_at: datetime | None = None
+
+    @field_validator("device_name")
+    @classmethod
+    def clean_device_name(cls, value: str) -> str:
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("invalid device name")
+        value = value.strip()
+        if not value:
+            raise ValueError("invalid device name")
+        return value
+
+    @field_validator("expires_at")
+    @classmethod
+    def timezone_required(cls, value: datetime | None):
+        if value is not None and (value.tzinfo is None or value.microsecond != 0):
+            raise ValueError("expiry requires timezone and whole seconds")
+        return value
+
+
+class ProfileRenameRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    device_name: str = Field(min_length=1, max_length=128)
+
+    _clean_name = field_validator("device_name")(ProfileCreateRequest.clean_device_name.__func__)
+
+
+class ProfileAssignRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner_id: uuid.UUID
+
+
+class ProfileRevokeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    idempotency_key: uuid.UUID
+
+
+class ProfileResponse(BaseModel):
+    id: uuid.UUID
+    device_name: str
+    mode: ProfileMode
+    owner_id: uuid.UUID | None
+    status: ProfileStatus
+    created_at: datetime
+    expires_at: datetime
+
+
+class ProfileJobResponse(BaseModel):
+    id: uuid.UUID
+    profile_id: uuid.UUID
+    kind: Literal["issue", "revoke"]
+    status: Literal["queued", "running", "succeeded", "failed", "needs_review"]
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    error_code: str | None
+
+
+class ProfileCreateResponse(BaseModel):
+    profile: ProfileResponse
+    job: ProfileJobResponse
+
+
+class RegisteredUserResponse(BaseModel):
+    id: uuid.UUID
+    email: str
+
+
+class ProfileAuditResponse(BaseModel):
+    id: uuid.UUID
+    actor_id: uuid.UUID
+    action: str
+    object_id: uuid.UUID
+    result: str
+    created_at: datetime

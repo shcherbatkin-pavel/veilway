@@ -14,6 +14,9 @@ RUN python -m pip install --no-cache-dir --upgrade pip==26.2 \
     && python -m pip install --no-cache-dir '.[test]'
 
 COPY tests ./tests
+COPY migrations ./migrations
+COPY alembic.ini ./
+COPY container-entrypoint.py ./
 
 USER 10001:10001
 CMD ["python", "-m", "pytest", "-p", "no:cacheprovider", "tests"]

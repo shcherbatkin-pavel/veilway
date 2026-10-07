@@ -8,6 +8,7 @@
     mode: "0644"
   no_log: true
   register: veilway_public_pki_copy
+  when: item.dest != 'crl.pem' or not (veilway_crl_agent_managed | bool)
   loop:
     - src: "{{ veilway_pki_root }}/ca/ca.crt"
       dest: ca.crt

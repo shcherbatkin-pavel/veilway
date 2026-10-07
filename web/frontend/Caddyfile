@@ -1,13 +1,37 @@
 {
 	admin off
 	email admin@veilway.ru
+	# Runtime error logs must not include OAuth query strings or cookies.
+	log {
+		format filter {
+			wrap json
+			fields {
+				request delete
+			}
+		}
+	}
+}
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
 }
 
 veilway.ru {
 	encode zstd gzip
+	@oauth path /api/v1/auth/google/*
+	log_skip @oauth
 
 	@api path /api/*
 	handle @api {
+		header Cache-Control "no-store"
+		header Pragma "no-cache"
 		reverse_proxy unix//run/veilway/api.sock
 	}
 
@@ -17,17 +41,22 @@ veilway.ru {
 		file_server
 	}
 
-	header {
-		Strict-Transport-Security "max-age=31536000"
-		Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
-		Referrer-Policy "no-referrer"
-		Permissions-Policy "camera=(), microphone=(), geolocation=()"
-		X-Content-Type-Options "nosniff"
-		-Server
+	import security_headers
+	handle_errors {
+		import security_headers
+		header Cache-Control "no-store"
+		header Pragma "no-cache"
+		respond "Service unavailable" {err.status_code}
 	}
 
 	log {
 		output stdout
-		format json
+		# Custom CSRF headers are sensitive too; omit the whole request object.
+		format filter {
+			wrap json
+			fields {
+				request delete
+			}
+		}
 	}
 }

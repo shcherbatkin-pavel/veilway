@@ -9,7 +9,7 @@ server-ipv6 {{ veilway_transit_ipv6_cidr }}
 ca /etc/veilway/pki/ca.crt
 cert /etc/veilway/pki/transit-server/server.crt
 key /etc/veilway/pki/transit-server/server.key
-crl-verify /etc/veilway/pki/crl.pem
+crl-verify {{ "/etc/veilway/crl/crl.pem" if veilway_crl_agent_managed else "/etc/veilway/pki/crl.pem" }}
 tls-crypt-v2 /etc/veilway/pki/transit-server/tls-crypt-v2-server.key force-cookie
 verify-client-cert require
 remote-cert-tls client

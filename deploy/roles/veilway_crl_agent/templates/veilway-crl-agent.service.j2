@@ -1,0 +1,30 @@
+[Unit]
+Description=Fetch and acknowledge signed Veilway CRL
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PYTHONDONTWRITEBYTECODE=1
+User=veilway-crl
+Group=veilway-crl
+ExecStart=/usr/local/sbin/veilway-crl-agent
+TimeoutStartSec=45
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/veilway-crl
+InaccessiblePaths=/etc/veilway/pki
+PrivateTmp=true
+PrivateDevices=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+UMask=0077

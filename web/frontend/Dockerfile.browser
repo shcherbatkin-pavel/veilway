@@ -1,0 +1,16 @@
+# Browser acceptance image only; never deploy it as the web panel.
+FROM node:22.13.1-bookworm-slim AS build
+WORKDIR /build
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY tsconfig.json tsconfig.app.json vite.config.ts index.html ./
+COPY src ./src
+RUN npm run build
+
+FROM mcr.microsoft.com/playwright/python:v1.63.0-noble
+RUN python -m pip install --no-cache-dir playwright==1.63.0
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 VEILWAY_BROWSER_DIST=/app/dist
+WORKDIR /app
+COPY --from=build /build/dist ./dist
+COPY tests/browser.py ./browser.py
+ENTRYPOINT ["python", "/app/browser.py"]

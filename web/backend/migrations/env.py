@@ -13,8 +13,9 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-database_url = build_database_url(get_settings()).render_as_string(hide_password=False)
-config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+if config.attributes.get("connection") is None:
+    database_url = build_database_url(get_settings()).render_as_string(hide_password=False)
+    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 target_metadata = Base.metadata
 
 
@@ -32,6 +33,17 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     from sqlalchemy import engine_from_config, pool
+
+    supplied_connection = config.attributes.get("connection")
+    if supplied_connection is not None:
+        context.configure(
+            connection=supplied_connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+        return
 
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),

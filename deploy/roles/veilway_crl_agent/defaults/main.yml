@@ -1,0 +1,7 @@
+---
+veilway_crl_agent_apply_ack: false
+veilway_crl_agent_mount_ack: false
+veilway_crl_agent_enable: false
+veilway_crl_agent_token: ""
+veilway_crl_agent_uid: 10004
+veilway_crl_agent_gid: 10004

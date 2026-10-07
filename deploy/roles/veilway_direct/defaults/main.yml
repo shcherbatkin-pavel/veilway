@@ -20,3 +20,6 @@ veilway_multihop_route_table_ipv6: 243
 veilway_multihop_route_priority: 24200
 veilway_operator_ipv4_cidrs: []
 veilway_operator_ipv6_cidrs: []
+
+# Enable only after the explicitly approved CRL directory/mount cutover.
+veilway_crl_agent_managed: false

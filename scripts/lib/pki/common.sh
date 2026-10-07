@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 # Definitions only; loaded by scripts/veilway-pki.
 
+acquire_local_writer_lock() {
+    require_command flock
+    ensure_directory "${SECRETS_ROOT}" 0700
+    ensure_directory "${PKI_ROOT}" 0700
+    [[ ! -L "${PKI_ROOT}/.writer.lock" ]] || fail 'refusing symlinked writer lock'
+    exec {PKI_WRITER_FD}>> "${PKI_ROOT}/.writer.lock"
+    flock --exclusive "${PKI_WRITER_FD}"
+}
+
+mark_server_authority() {
+    local marker="${PKI_ROOT}/.server-managed"
+    [[ ! -L "${marker}" ]] || fail 'refusing symlinked authority marker'
+    if [[ -e "${marker}" ]]; then
+        [[ -f "${marker}" ]] || fail 'invalid authority marker'
+    else
+        (set -o noclobber; printf '%s\n' 'server-managed' > "${marker}")
+    fi
+    chmod 0600 -- "${marker}"
+    printf '%s\n' 'Local CA changes disabled. Preserve this marker on every operator copy; no automatic reversal exists.'
+}
+
 fail() {
     printf 'Error: %s\n' "$*" >&2
     exit 1

@@ -1,4 +1,51 @@
 ---
+- name: Inspect the existing panel manifest before maintenance
+  ansible.builtin.stat:
+    path: "{{ veilway_control_install_root }}/app/compose.yaml"
+    get_checksum: false
+    get_mime: false
+  register: veilway_control_existing_manifest
+
+- name: List only existing panel service names before maintenance
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - config
+      - --services
+  when: veilway_control_existing_manifest.stat.exists
+  register: veilway_control_existing_services
+  changed_when: false
+
+- name: Quiesce existing API and web before replacing code or migrating
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - stop
+      - api
+      - web
+  when: veilway_control_existing_manifest.stat.exists
+  changed_when: true
+
+- name: Quiesce existing PKI if upgrading a four-container panel
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --file
+      - "{{ veilway_control_install_root }}/app/compose.yaml"
+      - stop
+      - pki
+  when:
+    - veilway_control_existing_manifest.stat.exists
+    - "'pki' in veilway_control_existing_services.stdout_lines"
+  changed_when: true
+
 - name: Create web control plane directories
   ansible.builtin.file:
     path: "{{ item.path }}"
@@ -23,6 +70,18 @@
       owner: root
       group: root
       mode: "0755"
+    - path: "{{ veilway_control_install_root }}/app/pki"
+      owner: root
+      group: root
+      mode: "0755"
+    - path: "{{ veilway_control_data_root }}/pki"
+      owner: "10002"
+      group: "10002"
+      mode: "0700"
+    - path: "{{ veilway_control_pki_runtime_root }}"
+      owner: "10002"
+      group: "10003"
+      mode: "0710"
     - path: "{{ veilway_control_secret_root }}"
       owner: root
       group: root
@@ -52,6 +111,19 @@
     group: root
     mode: "0644"
 
+- name: Persist only runtime path interpolation for every Compose operation
+  ansible.builtin.copy:
+    content: |
+      VEILWAY_DATA_ROOT={{ veilway_control_data_root }}
+      VEILWAY_RUNTIME_ROOT={{ veilway_control_runtime_root }}
+      VEILWAY_PKI_RUNTIME_ROOT={{ veilway_control_pki_runtime_root }}
+      VEILWAY_SECRET_ROOT={{ veilway_control_secret_root }}
+    dest: "{{ veilway_control_install_root }}/app/.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
 - name: Copy only allowlisted backend build inputs
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../web/backend/{{ item }}"
@@ -61,6 +133,7 @@
     directory_mode: "0755"
     mode: preserve
   loop:
+    - .dockerignore
     - Dockerfile
     - alembic.ini
     - container-entrypoint.py
@@ -77,6 +150,7 @@
     directory_mode: "0755"
     mode: preserve
   loop:
+    - .dockerignore
     - Caddyfile
     - Dockerfile
     - index.html
@@ -87,6 +161,28 @@
     - tsconfig.app.json
     - tsconfig.json
     - vite.config.ts
+
+- name: Copy only allowlisted PKI build inputs
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../web/pki/{{ item }}"
+    dest: "{{ veilway_control_install_root }}/app/pki/{{ item }}"
+    owner: root
+    group: root
+    directory_mode: "0755"
+    mode: preserve
+  loop:
+    - .dockerignore
+    - Dockerfile
+    - container-entrypoint.py
+    - veilway_pki/
+
+- name: Preserve the private PKI socket directory across host boots
+  ansible.builtin.copy:
+    content: "d {{ veilway_control_pki_runtime_root }} 0710 10002 10003 -\n"
+    dest: /etc/tmpfiles.d/veilway-pki.conf
+    owner: root
+    group: root
+    mode: "0644"
 
 - name: Install root-only runtime secrets
   ansible.builtin.copy:
@@ -102,9 +198,32 @@
       value: "{{ veilway_control_aws_access_key_id }}"
     - name: aws_secret_access_key
       value: "{{ veilway_control_aws_secret_access_key }}"
+    - name: google_client_id
+      value: "{{ veilway_control_google_client_id }}"
+    - name: google_client_secret
+      value: "{{ veilway_control_google_client_secret }}"
+    - name: admin_google_email
+      value: "{{ veilway_control_admin_google_email }}"
   no_log: true
 
-- name: Build the web and API application images
+- name: Install PKI-only runtime inputs
+  ansible.builtin.copy:
+    content: "{{ item.value }}\n"
+    dest: "{{ veilway_control_secret_root }}/{{ item.name }}"
+    owner: root
+    group: root
+    mode: "0600"
+  loop:
+    - name: pki_ca_passphrase
+      value: "{{ veilway_control_pki_ca_passphrase }}"
+    - name: pki_endpoints
+      value: >-
+        {{ {'yc-direct': veilway_control_pki_yc_endpoint,
+            'aws-direct': veilway_control_pki_aws_endpoint,
+            'yc-aws-multihop': veilway_control_pki_yc_endpoint} | to_json }}
+  no_log: true
+
+- name: Build the web, API and isolated PKI images
   ansible.builtin.command:
     argv:
       - /usr/bin/docker

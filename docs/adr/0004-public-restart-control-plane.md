@@ -3,6 +3,10 @@
 - Status: accepted
 - Date: 2026-08-31
 
+Authentication, container count and PKI/profile scope are superseded by
+[ADR 0005](0005-google-profiles-and-server-pki.md). The decision below records
+the original restart-only iteration; restart permissions and coexistence apply.
+
 ## Context
 
 The earlier prototype requirement postponed the web panel and required a

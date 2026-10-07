@@ -1,7 +1,9 @@
 export type VmSlug = "aws-direct" | "yc-direct";
 
 export interface Session {
-  login: string;
+  user_id: string;
+  email: string;
+  role: "ADMIN" | "USER";
   csrf_token: string;
 }
 
@@ -49,6 +51,7 @@ async function request<T>(
     ...init,
     headers,
     credentials: "same-origin",
+    cache: "no-store",
   });
   if (!response.ok) {
     let message = `HTTP ${response.status}`;
@@ -65,11 +68,6 @@ async function request<T>(
 }
 
 export const api = {
-  login: (login: string, password: string) =>
-    request<Session>("/api/v1/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ login, password }),
-    }),
   session: () => request<Session>("/api/v1/auth/session"),
   logout: (csrf: string) =>
     request<void>("/api/v1/auth/logout", { method: "POST" }, csrf),
@@ -83,3 +81,64 @@ export const api = {
     ),
 };
 
+export type ProfileMode = "yc-direct" | "aws-direct" | "yc-aws-multihop";
+export type ProfileStatus = "issuing" | "active" | "expired" | "revoking" | "revoked" | "failed";
+export interface Profile {
+  id: string; device_name: string; mode: ProfileMode; owner_id: string | null;
+  status: ProfileStatus; created_at: string; expires_at: string;
+}
+export interface ProfileJob {
+  id: string; profile_id: string; kind: "issue" | "revoke";
+  status: "queued" | "running" | "succeeded" | "failed" | "needs_review";
+  created_at: string; error_code: string | null;
+}
+export interface RegisteredUser { id: string; email: string }
+export interface ProfileAudit { id: string; actor_id: string; object_id: string; action: string; result: string; created_at: string }
+export interface CrlDelivery {
+  version: number | null; next_update: string | null; publisher_error: string | null;
+  nodes: { slug: VmSlug; status: string; acknowledged_version: number | null; last_contact_at: string | null; error_code: string | null }[];
+}
+export interface CreateProfile {
+  idempotency_key: string; device_name: string; mode: ProfileMode;
+  owner_id?: string; duration_days: number;
+}
+
+async function listAll<T>(path: string, signal?: AbortSignal): Promise<T[]> {
+  const items: T[] = [];
+  for (let offset = 0; ; offset += 100) {
+    const page = await request<T[]>(`${path}?limit=100&offset=${offset}`, { signal });
+    items.push(...page);
+    if (page.length < 100) return items;
+  }
+}
+
+export const profilesApi = {
+  profiles: (signal?: AbortSignal) => listAll<Profile>("/api/v1/profiles", signal),
+  jobs: (signal?: AbortSignal) => listAll<ProfileJob>("/api/v1/profile-jobs", signal),
+  users: (signal?: AbortSignal) => listAll<RegisteredUser>("/api/v1/users", signal),
+  audit: (signal?: AbortSignal) => listAll<ProfileAudit>("/api/v1/profile-audit-events", signal),
+  crl: (signal?: AbortSignal) => request<CrlDelivery>("/api/v1/crl-delivery", { signal }),
+  create: (data: CreateProfile, csrf: string) => request<{ profile: Profile; job: ProfileJob }>("/api/v1/profiles", { method: "POST", body: JSON.stringify(data) }, csrf),
+  rename: (id: string, device_name: string, csrf: string) => request<Profile>(`/api/v1/profiles/${id}`, { method: "PATCH", body: JSON.stringify({ device_name }) }, csrf),
+  assign: (id: string, owner_id: string, csrf: string) => request<Profile>(`/api/v1/profiles/${id}/owner`, { method: "POST", body: JSON.stringify({ owner_id }) }, csrf),
+  revoke: (id: string, key: string, csrf: string) => request<ProfileJob>(`/api/v1/profiles/${id}/revoke`, { method: "POST", body: JSON.stringify({ idempotency_key: key }) }, csrf),
+  async download(id: string, csrf: string) {
+    const response = await fetch(`/api/v1/profiles/${id}/download`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "X-CSRF-Token": csrf } });
+    if (!response.ok) throw new ApiError(response.status, "download failed");
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url; link.download = `veilway-${id}.ovpn`;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  },
+};
+
+export function errorMessage(reason: unknown, download = false): string {
+  if (!(reason instanceof ApiError)) return "Нет связи с панелью. Проверьте подключение и попробуйте снова.";
+  if (reason.status === 503) return download ? "Скачивание временно недоступно: сервис выпуска профилей не отвечает. Попробуйте позже." : "Сервис временно недоступен. Попробуйте позже.";
+  if (reason.status === 403) return "Недостаточно прав или сессия устарела. Войдите снова.";
+  if (reason.status === 404) return "Профиль недоступен. Обновите список.";
+  if (reason.status === 409) return "Состояние изменилось. Обновите список и проверьте доступность действия.";
+  if (reason.status === 422) return "Проверьте название, владельца и срок действия профиля.";
+  return "Не удалось выполнить действие. Попробуйте снова.";
+}

@@ -1,0 +1,20 @@
+# Build the backend test image as :stage4 first; this image is test-only.
+FROM veilway-control-api-test:stage4
+USER root
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends openssl openvpn="2.6.*" \
+    && rm -rf /var/lib/apt/lists/*
+# Named build context contains only public backend inputs. Reinstall current
+# application code without downloading the unchanged dependency set again.
+COPY --from=backend pyproject.toml /app/pyproject.toml
+COPY --from=backend src /app/src
+RUN python -m pip install --no-cache-dir --no-deps .
+COPY --from=backend tests /app/tests
+COPY --from=backend migrations /app/migrations
+COPY --from=backend container-entrypoint.py /app/container-entrypoint.py
+COPY veilway_pki /app/veilway_pki
+COPY tests/test_pki.py /app/pki-fixtures/test_pki.py
+COPY tests/test_legacy.py /app/pki-fixtures/test_legacy.py
+COPY --from=agent veilway-crl-agent /app/crl_agent.py
+ENV PYTHONPATH=/app
+USER 10001:10001

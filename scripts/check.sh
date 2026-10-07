@@ -10,8 +10,8 @@ cd -- "${REPOSITORY_ROOT}"
 
 shell_files=(
     scripts/acceptance-ubuntu-direct scripts/audit-vm.sh scripts/check.sh
-    scripts/container-smoke.sh scripts/diagnose-aws-container-client
-    scripts/diagnose-aws-data-channel scripts/test-control-plane.sh scripts/veilway-pki
+    scripts/container-smoke.sh scripts/test-profile-security.sh scripts/diagnose-aws-container-client
+    scripts/diagnose-aws-data-channel scripts/test-control-plane.sh scripts/test-pki-service.sh scripts/test-profile-api.sh scripts/test-crl-mount.sh scripts/test-profile-panel.sh scripts/veilway-pki
     scripts/verify-aws-host-key.sh scripts/verify-client-profiles deploy/image/wait-for-interface
 )
 mapfile -t pki_shell_files < <(rg --files scripts/lib/pki --glob '*.sh' | sort)
@@ -30,6 +30,9 @@ fi
 
 printf '%s\n' '[3/9] Python syntax and CIDR validation'
 python3 -m py_compile \
+    web/frontend/tests/browser.py \
+    scripts/test-panel-proxy.py \
+    scripts/test-profile-rollout.py \
     scripts/control-postgres-smoke.py \
     scripts/pki-smoke.py \
     scripts/pki-expiry.py \
@@ -43,12 +46,14 @@ python3 -m py_compile \
     scripts/validate-control-compose.py \
     scripts/validate-network-plan.py \
     deploy/filter_plugins/veilway_network.py \
+    deploy/roles/veilway_crl_agent/files/veilway-crl-agent \
     deploy/roles/veilway_heartbeat/files/veilway-heartbeat-agent
-mapfile -t control_python_files < <(rg --files web/backend --glob '*.py' | sort)
+mapfile -t control_python_files < <(rg --files web/backend web/pki --glob '*.py' | sort)
 mapfile -t operator_python_files < <(rg --files scripts/lib --glob '*.py' | sort)
 python3 -m py_compile "${control_python_files[@]}" "${operator_python_files[@]}"
 python3 scripts/test-pki-expiry.py
 python3 scripts/test-operator-tools.py
+python3 scripts/test-profile-rollout.py
 valid_result="$(printf '%s\n' '{"vpc_cidr":"10.241.1.0/24","vpn_cidr":"10.242.10.0/24","future_multihop_cidr":"10.242.30.0/24","transit_cidr":"10.242.40.0/29","operator_cidrs_json":"[\"198.51.100.10/32\"]"}' | scripts/validate-network-plan.py)"
 [[ "${valid_result}" == *'"valid": "true"'* ]] || {
     printf '%s\n' 'CIDR validator rejected the known-good fixture.' >&2
@@ -113,6 +118,9 @@ if command -v -- ansible-playbook >/dev/null 2>&1; then
     ANSIBLE_LOCAL_TEMP=/tmp/veilway-ansible-local \
         ANSIBLE_CONFIG="${REPOSITORY_ROOT}/deploy/ansible.cfg" \
         ansible-playbook -i deploy/control-inventory.example.yml deploy/heartbeat.yml --syntax-check
+    ANSIBLE_LOCAL_TEMP=/tmp/veilway-ansible-local \
+        ANSIBLE_CONFIG="${REPOSITORY_ROOT}/deploy/ansible.cfg" \
+        ansible-playbook -i deploy/control-inventory.example.yml deploy/crl-agents.yml --syntax-check
 else
     printf '%s\n' '[5/9] Ansible syntax skipped: command unavailable'
 fi
@@ -162,5 +170,5 @@ printf '%s\n' '[9/9] Diff whitespace and changed public-file credential scan'
 git diff --check
 python3 scripts/check-public-diff.py
 
-printf '%s\n' 'Container smoke tests are separate: scripts/test-control-plane.sh --build, scripts/pki-smoke.py, scripts/container-smoke.sh'
+printf '%s\n' 'Container smoke tests are separate: scripts/test-control-plane.sh --build, scripts/test-pki-service.sh --build, scripts/pki-smoke.py, scripts/container-smoke.sh'
 printf '%s\n' "${PROGRAM_NAME}: all available static checks passed"

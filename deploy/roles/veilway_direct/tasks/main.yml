@@ -1,4 +1,7 @@
 ---
+- name: Check CA and CRL authority before deployment
+  ansible.builtin.import_tasks: authority.yml
+
 - name: Run the read-only deployment preflight
   ansible.builtin.import_tasks: preflight.yml
 

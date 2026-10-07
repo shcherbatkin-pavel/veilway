@@ -1,0 +1,151 @@
+---
+- name: Require exact approval and dedicated node mount cutover
+  ansible.builtin.assert:
+    that:
+      - veilway_crl_agent_apply_ack | bool
+      - not (veilway_crl_agent_enable | bool) or (veilway_crl_agent_mount_ack | bool)
+      - veilway_dedicated_host_ack | default(false) | bool
+      - not (veilway_crl_agent_enable | bool) or (veilway_crl_agent_managed | default(false) | bool)
+      - veilway_mode in ['aws-direct', 'yc-direct']
+      - veilway_crl_agent_token | length >= 32
+      - veilway_crl_agent_token | length <= 256
+      - veilway_crl_agent_token is match('^[!-~]+$')
+      - veilway_crl_agent_uid | int == 10004
+      - veilway_crl_agent_gid | int == 10004
+    quiet: true
+  no_log: true
+
+- name: Require the existing dedicated OpenVPN reader group
+  ansible.builtin.getent:
+    database: group
+    key: veilway
+
+- name: Verify reader group contract
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.getent_group.veilway[1] | int == 900
+
+- name: Install agent Python dependency
+  ansible.builtin.apt:
+    name: python3-cryptography
+    state: present
+
+- name: Create isolated agent group
+  ansible.builtin.group:
+    name: veilway-crl
+    gid: 10004
+    system: true
+
+- name: Create unprivileged agent account without the VPN key reader group
+  ansible.builtin.user:
+    name: veilway-crl
+    uid: 10004
+    group: veilway-crl
+    groups: ''
+    append: false
+    shell: /usr/sbin/nologin
+    create_home: false
+    system: true
+
+- name: Create writable CRL directory with inherited OpenVPN reader group
+  ansible.builtin.file:
+    path: /var/lib/veilway-crl
+    state: directory
+    owner: veilway-crl
+    group: veilway
+    mode: '2750'
+
+- name: Create read-only agent configuration directory
+  ansible.builtin.file:
+    path: /etc/veilway-crl-agent
+    state: directory
+    owner: root
+    group: veilway-crl
+    mode: '0750'
+
+- name: Pin the common public CA from the dedicated node
+  ansible.builtin.copy:
+    src: /etc/veilway/pki/ca.crt
+    dest: /etc/veilway-crl-agent/ca.crt
+    remote_src: true
+    force: false
+    owner: root
+    group: veilway-crl
+    mode: '0640'
+
+- name: Bootstrap initial CRL without replacing an existing installed version
+  ansible.builtin.copy:
+    src: /etc/veilway/pki/crl.pem
+    dest: /var/lib/veilway-crl/crl.pem
+    remote_src: true
+    force: false
+    owner: veilway-crl
+    group: veilway
+    mode: '0640'
+
+- name: Install fixed agent executable
+  ansible.builtin.copy:
+    src: veilway-crl-agent
+    dest: /usr/local/sbin/veilway-crl-agent
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Write node identity configuration
+  ansible.builtin.copy:
+    content: "{{ {'slug': veilway_mode} | to_json }}\n"
+    dest: /etc/veilway-crl-agent/config.json
+    owner: root
+    group: veilway-crl
+    mode: '0640'
+
+- name: Install separate protected CRL credential
+  ansible.builtin.copy:
+    content: "{{ veilway_crl_agent_token }}\n"
+    dest: /etc/veilway-crl-agent/token
+    owner: root
+    group: veilway-crl
+    mode: '0640'
+  no_log: true
+
+- name: Install service and timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - veilway-crl-agent.service
+    - veilway-crl-agent.timer
+
+- name: Inspect only approved dedicated server CRL mounts before enabling acknowledgements
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - inspect
+      - --format
+      - '{{ "{{json .Mounts}}" }}'
+      - "{{ item }}"
+  loop: "{{ ['veilway-openvpn'] + (['veilway-openvpn-multihop'] if veilway_mode == 'yc-direct' else ['veilway-openvpn-transit']) if veilway_multihop_enabled | default(false) | bool else ['veilway-openvpn'] }}"
+  register: veilway_crl_mounts
+  changed_when: false
+  no_log: true
+  when: veilway_crl_agent_enable | bool
+
+- name: Require the directory mount to expose atomic file replacements
+  ansible.builtin.assert:
+    that:
+      - item.stdout | from_json | selectattr('Source', 'equalto', '/var/lib/veilway-crl') | selectattr('Destination', 'equalto', '/etc/veilway/crl') | selectattr('RW', 'equalto', false) | list | length == 1
+    quiet: true
+  loop: "{{ veilway_crl_mounts.results | default([]) }}"
+  no_log: true
+  when: veilway_crl_agent_enable | bool
+
+- name: Enable the approved outbound CRL timer
+  ansible.builtin.systemd_service:
+    name: veilway-crl-agent.timer
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: veilway_crl_agent_enable | bool

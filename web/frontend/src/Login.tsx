@@ -1,38 +1,21 @@
-import { FormEvent, useState } from "react";
-import { api, ApiError, Session } from "./api";
-
-export function Login({ onLogin }: { onLogin: (session: Session) => void }) {
-  const [login, setLogin] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      onLogin(await api.login(login, password));
-    } catch (reason) {
-      setError(reason instanceof ApiError && reason.status === 401 ? "Неверный логин или пароль" : "Сервис временно недоступен");
-    } finally {
-      setBusy(false);
-    }
-  }
+export function Login({ errorCode, message }: { errorCode?: string | null; message?: string }) {
+  const error = errorCode === "cancelled"
+    ? "Вход отменён. Можно попробовать ещё раз."
+    : errorCode === "unavailable"
+      ? "Вход временно недоступен. Попробуйте позже."
+      : errorCode ? "Не удалось выполнить вход. Попробуйте ещё раз." : "";
 
   return (
     <main className="login-shell">
       <section className="login-card">
         <div className="brand-mark">V</div>
-        <p className="eyebrow">VEILWAY CONTROL</p>
-        <h1>Управление VPN</h1>
-        <p className="muted">Закрытая панель обслуживания узлов</p>
-        <form onSubmit={submit}>
-          <label>Логин<input autoComplete="username" value={login} onChange={(e) => setLogin(e.target.value)} required /></label>
-          <label>Пароль<input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
-          {error && <p className="error">{error}</p>}
-          <button className="primary" disabled={busy}>{busy ? "Проверяем…" : "Войти"}</button>
-        </form>
+        <p className="eyebrow">VEILWAY</p>
+        <h1>Ваш VPN</h1>
+        <p className="muted">Войдите через Google, чтобы получить доступ к своим VPN-профилям.</p>
+        {message && <p className="muted" role="status">{message}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
+        <a className="primary google-login" href="/api/v1/auth/google/start">Войти через Google</a>
+        <p className="login-note muted">При первом входе аккаунт создаётся автоматически. Доступ к VPN выдаёт администратор.</p>
       </section>
     </main>
   );

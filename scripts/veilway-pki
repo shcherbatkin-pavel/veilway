@@ -27,6 +27,7 @@ Usage:
   ${PROGRAM_NAME} profile create --device <device-id> --mode <yc-direct|aws-direct|yc-aws-multihop> [--valid-for <positive integer m|mo> | --expires-at <ISO-8601 with timezone>]
   ${PROGRAM_NAME} profile update-remote --mode <yc-direct|aws-direct|yc-aws-multihop>
   ${PROGRAM_NAME} profile revoke --name <profile-name>
+  ${PROGRAM_NAME} handover --confirm-server-managed
 
 All private material is written under the Git-ignored secrets/ and
 client-profiles/ directories with restrictive permissions. The CA passphrase is
@@ -59,6 +60,19 @@ main() {
     }
 
     validate_private_roots
+
+    case "$1" in
+        --help|-h) usage; return ;;
+        init|server|transit|profile|handover) acquire_local_writer_lock ;;
+        *) usage >&2; exit 2 ;;
+    esac
+    if [[ "$1" == handover ]]; then
+        [[ $# -eq 2 && "$2" == --confirm-server-managed ]] || fail 'expected: handover --confirm-server-managed'
+        mark_server_authority
+        return
+    fi
+    [[ ! -e "${PKI_ROOT}/.server-managed" && ! -L "${PKI_ROOT}/.server-managed" ]] \
+        || fail 'CA is server-managed; local PKI changes are disabled. Use the approved server procedure.'
 
     case "$1" in
         init)

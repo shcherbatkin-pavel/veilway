@@ -39,12 +39,27 @@ EXPECTED_VM_CONFIGURATION = {
 }
 
 
-class Admin(Base):
-    __tablename__ = "admins"
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("role IN ('ADMIN', 'USER')", name="ck_user_role"),
+        CheckConstraint(
+            "(google_sub IS NOT NULL AND email IS NOT NULL AND "
+            "login IS NULL AND password_hash IS NULL) OR "
+            "(google_sub IS NULL AND email IS NULL AND "
+            "login IS NOT NULL AND password_hash IS NOT NULL)",
+            name="ck_user_identity",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    login: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    # Legacy credentials remain independent of Google identities until stage 2.
+    login: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    google_sub: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    role: Mapped[str] = mapped_column(String(16), default="USER", server_default="USER")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -52,18 +67,18 @@ class Admin(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
 
-    sessions: Mapped[list[AdminSession]] = relationship(
-        back_populates="admin", cascade="all, delete-orphan"
+    sessions: Mapped[list[UserSession]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
     )
-    restart_jobs: Mapped[list[RestartJob]] = relationship(back_populates="admin")
+    restart_jobs: Mapped[list[RestartJob]] = relationship(back_populates="user")
 
 
-class AdminSession(Base):
-    __tablename__ = "admin_sessions"
+class UserSession(Base):
+    __tablename__ = "user_sessions"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    admin_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("admins.id", ondelete="CASCADE"), nullable=False, index=True
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     token_hash: Mapped[bytes] = mapped_column(LargeBinary(32), unique=True, nullable=False)
     csrf_hash: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
@@ -75,7 +90,123 @@ class AdminSession(Base):
         DateTime(timezone=True), default=utcnow, nullable=False
     )
 
-    admin: Mapped[Admin] = relationship(back_populates="sessions")
+    user: Mapped[User] = relationship(back_populates="sessions")
+
+
+class OAuthLoginAttempt(Base):
+    __tablename__ = "oauth_login_attempts"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    state_hash: Mapped[bytes] = mapped_column(LargeBinary(32), unique=True, nullable=False)
+    browser_hash: Mapped[bytes] = mapped_column(LargeBinary(32), unique=True, nullable=False)
+    nonce_hash: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class GoogleAdminBinding(Base):
+    """A locked singleton pins the administrator to a user, never just an email."""
+
+    __tablename__ = "google_admin_binding"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_google_admin_singleton"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, unique=True
+    )
+
+
+class VpnProfile(Base):
+    """Metadata only: private material belongs to the separate PKI service."""
+
+    __tablename__ = "vpn_profiles"
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('yc-direct', 'aws-direct', 'yc-aws-multihop')",
+            name="ck_vpn_profile_mode",
+        ),
+        CheckConstraint(
+            "status IN ('issuing', 'active', 'expired', 'revoking', 'revoked', 'failed')",
+            name="ck_vpn_profile_status",
+        ),
+        CheckConstraint("expires_at > created_at", name="ck_vpn_profile_expiry"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    device_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    created_by_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), default="issuing", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    owner: Mapped[User | None] = relationship(foreign_keys=[owner_id])
+    certificate_serial: Mapped[str | None] = mapped_column(String(40))
+    certificate_sha256: Mapped[str | None] = mapped_column(String(64))
+    legacy_import_sha256: Mapped[str | None] = mapped_column(String(64))
+    created_by: Mapped[User] = relationship(foreign_keys=[created_by_id])
+    jobs: Mapped[list[ProfileJob]] = relationship(back_populates="profile")
+
+
+class ProfileJob(Base):
+    __tablename__ = "profile_jobs"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "kind", name="uq_profile_job_kind"),
+        CheckConstraint("kind IN ('issue', 'revoke')", name="ck_profile_job_kind"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed', 'needs_review')",
+            name="ck_profile_job_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("vpn_profiles.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    requested_by_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    idempotency_key: Mapped[uuid.UUID] = mapped_column(
+        default=uuid.uuid4, unique=True, nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    request_hash: Mapped[bytes | None] = mapped_column(LargeBinary(32))
+    claim_token: Mapped[uuid.UUID | None] = mapped_column()
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    crl_number: Mapped[int | None] = mapped_column(BigInteger)
+
+    profile: Mapped[VpnProfile] = relationship(back_populates="jobs")
+    requested_by: Mapped[User] = relationship()
+
+
+class ProfileAuditEvent(Base):
+    __tablename__ = "profile_audit_events"
+    __table_args__ = (
+        CheckConstraint("action IN ('create', 'rename', 'assign', 'download', 'revoke', 'issue_result', 'revoke_result', 'import')", name="ck_profile_audit_action"),
+        CheckConstraint("result IN ('accepted', 'succeeded', 'denied', 'unavailable', 'failed', 'needs_review', 'local_revocation_applied')", name="ck_profile_audit_result"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    object_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    result: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class VpnVm(Base):
@@ -133,8 +264,8 @@ class RestartJob(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    admin_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("admins.id", ondelete="RESTRICT"), nullable=False, index=True
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
     active_guard: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -145,7 +276,7 @@ class RestartJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_code: Mapped[str | None] = mapped_column(String(64))
 
-    admin: Mapped[Admin] = relationship(back_populates="restart_jobs")
+    user: Mapped[User] = relationship(back_populates="restart_jobs")
     targets: Mapped[list[RestartTarget]] = relationship(
         back_populates="job",
         cascade="all, delete-orphan",
@@ -184,3 +315,34 @@ Index(
     unique=True,
     postgresql_where=RestartJob.active_guard.is_not(None),
 )
+
+
+class CrlPublication(Base):
+    __tablename__ = "crl_publications"
+    version: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    ca_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    pem: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    this_update: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    next_update: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class CrlAgent(Base):
+    __tablename__ = "crl_agents"
+    __table_args__ = (CheckConstraint("slug IN ('aws-direct', 'yc-direct')", name="ck_crl_agent_slug"),)
+    slug: Mapped[str] = mapped_column(String(32), primary_key=True)
+    token_hash: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False, unique=True)
+    last_contact_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_version: Mapped[int | None] = mapped_column(BigInteger)
+    acknowledged_sha256: Mapped[str | None] = mapped_column(String(64))
+    acknowledged_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(32))
+
+
+class CrlSyncState(Base):
+    __tablename__ = "crl_sync_state"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_crl_sync_singleton"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(32))

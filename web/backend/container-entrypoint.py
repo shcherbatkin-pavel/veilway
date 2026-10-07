@@ -18,6 +18,9 @@ SECRET_PATHS = {
     "VEILWAY_AWS_SECRET_ACCESS_KEY_FILE": Path(
         "/run/secrets/aws_secret_access_key"
     ),
+    "VEILWAY_GOOGLE_CLIENT_ID_FILE": Path("/run/secrets/google_client_id"),
+    "VEILWAY_GOOGLE_CLIENT_SECRET_FILE": Path("/run/secrets/google_client_secret"),
+    "VEILWAY_ADMIN_GOOGLE_EMAIL_FILE": Path("/run/secrets/admin_google_email"),
 }
 
 
@@ -67,7 +70,7 @@ def main() -> int:
         environment[variable] = f"/proc/self/fd/{descriptor}"
 
     command, socket_path = command_for(sys.argv[1:])
-    os.setgroups([])
+    os.setgroups([10003])
     os.setgid(RUNTIME_GID)
     os.setuid(RUNTIME_UID)
     os.umask(0o077)

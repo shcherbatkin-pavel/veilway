@@ -54,10 +54,25 @@ Authentication, CSRF protection, the two-node allowlist, audit-safe responses,
 and handling ambiguous mutations are covered by local tests. Live acceptance
 and each real restart remain separate, explicit operator actions.
 
-Application users, client-profile delivery, rotation, revocation and PKI are
-outside this web phase. Any future web management of profiles requires its own
-design and security review; the existing local operator tools remain the
-supported interface.
+The original restart-only phase is superseded for identities/profiles/PKI by
+[ADR 0005](adr/0005-google-profiles-and-server-pki.md). Its two-node restart
+allowlist and cloud-permission boundaries remain in force.
+
+The agreed next web iteration is tracked in the
+[Google sign-in and profile management implementation plan](profile-management-plan.md).
+Its eight development stages have been executed individually; their status
+and validation results are recorded in that document. Use the
+[rollout, backup and recovery runbook](profile-rollout.md) after separate exact
+approval. After handover the server PKI is the sole CA writer; local tools are
+disabled and general node deployment cannot overwrite managed CRLs.
+
+The 2026-10-06 scope update preserves the existing CA and working legacy
+client profiles during the panel upgrade. Explicit offline profile import and
+metadata synchronization into USER accounts are implemented; CA import alone
+does not adopt private profiles or assign owners.
+See the [migration and CA lifecycle plan](pki-evolution-plan.md) for individually
+tracked stages M1–M4. ADMIN-driven CA registration, node rollout and retirement
+are future stages C1–C4, with continued old-client compatibility as a release gate.
 
 ## 6. Hardening and operations
 
