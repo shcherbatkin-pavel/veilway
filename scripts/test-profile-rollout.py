@@ -86,6 +86,45 @@ class HandoverTests(unittest.TestCase):
             self.assertEqual(subprocess.run(command + ["--help"], capture_output=True).returncode, 0)
 
     @unittest.skipUnless(shutil.which("ansible-playbook"), "Ansible is not installed")
+    def test_managed_crl_servers_have_startup_reader_group(self):
+        with tempfile.TemporaryDirectory(prefix="veilway-crl-groups-") as directory:
+            root = Path(directory)
+            plays = []
+            for mode in ("yc-direct", "aws-direct"):
+                for multihop in (False, True):
+                    for managed in (False, True):
+                        variables = dict(veilway_mode=mode, veilway_multihop_enabled=multihop,
+                            veilway_crl_agent_managed=managed, veilway_vpn_ipv4_cidr="10.242.10.0/24",
+                            veilway_vpn_ipv6_cidr="fd12:3456:789a:10::/64",
+                            veilway_multihop_ipv6_cidr="fd12:3456:789a:30::/64",
+                            veilway_transit_ipv6_cidr="fd12:3456:789a:40::/64",
+                            expected_group=["900"] if managed else [])
+                        tasks = [
+                            {"ansible.builtin.set_fact": {"rendered":
+                                "{{ lookup('template', '" + str(ROOT / "deploy/roles/veilway_direct/templates/compose.yaml.j2") + "') | from_yaml }}"}},
+                            {"ansible.builtin.assert": {"that": [
+                                "rendered.services.openvpn.group_add | default([]) == expected_group",
+                                "rendered.services.unbound.group_add | default([]) == []"]}},
+                            {"ansible.builtin.assert": {"that": [
+                                "rendered.services[item].group_add | default([]) == (expected_group if item != 'openvpn-transit' or veilway_mode == 'aws-direct' else [])",
+                                "rendered.services[item].cap_add | sort == (['NET_ADMIN'] if item == 'openvpn-transit' and veilway_mode == 'yc-direct' else ['KILL', 'NET_ADMIN', 'SETGID', 'SETUID'])"]},
+                                "loop": ["openvpn", "openvpn-multihop", "openvpn-transit"],
+                                "when": "item in rendered.services"},
+                            {"ansible.builtin.assert": {"that": [
+                                "rendered.services['unbound-transit'].group_add | default([]) == []"]},
+                                "when": "'unbound-transit' in rendered.services"}]
+                        plays.append(dict(hosts="localhost", gather_facts=False, tasks=[
+                            {"ansible.builtin.include_vars": str(ROOT / "deploy/roles/veilway_direct/defaults/main.yml")},
+                            {"ansible.builtin.set_fact": variables}, *tasks]))
+            playbook = root / "playbook.json"
+            playbook.write_text(json.dumps(plays))
+            environment = {**os.environ, "ANSIBLE_LOCAL_TEMP": str(root / "ansible"),
+                "ANSIBLE_NOCOLOR": "1", "ANSIBLE_FILTER_PLUGINS": str(ROOT / "deploy/filter_plugins")}
+            result = subprocess.run(["ansible-playbook", "--inventory", "localhost,", "--connection", "local",
+                str(playbook)], env=environment, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    @unittest.skipUnless(shutil.which("ansible-playbook"), "Ansible is not installed")
     def test_real_ansible_refuses_legacy_and_skips_stale_crl(self):
         with tempfile.TemporaryDirectory(prefix="veilway-rollout-") as directory:
             root = Path(directory)
