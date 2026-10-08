@@ -13,6 +13,10 @@ services:
       - /etc/openvpn/server.conf
     network_mode: host
     restart: unless-stopped
+{% if veilway_crl_agent_managed %}
+    group_add:
+      - "900"
+{% endif %}
     read_only: true
     cap_drop:
       - ALL
@@ -115,6 +119,10 @@ services:
       openvpn-transit:
         condition: service_healthy
     restart: unless-stopped
+{% if veilway_crl_agent_managed %}
+    group_add:
+      - "900"
+{% endif %}
     read_only: true
     cap_drop:
       - ALL
@@ -214,6 +222,10 @@ services:
       - /etc/openvpn/transit-server.conf
     network_mode: host
     restart: unless-stopped
+{% if veilway_crl_agent_managed %}
+    group_add:
+      - "900"
+{% endif %}
     read_only: true
     cap_drop:
       - ALL

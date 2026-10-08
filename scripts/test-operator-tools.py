@@ -4,6 +4,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -91,6 +92,12 @@ class ParserTests(unittest.TestCase):
 
 class OperatorContracts(unittest.TestCase):
     def test_cli_rejections_do_not_require_private_inputs(self):
+        temporary = tempfile.TemporaryDirectory(prefix="veilway-cli-contract-")
+        self.addCleanup(temporary.cleanup)
+        isolated_scripts = Path(temporary.name) / "scripts"
+        isolated_scripts.mkdir()
+        shutil.copy(ROOT / "scripts/veilway-pki", isolated_scripts / "veilway-pki")
+        shutil.copytree(ROOT / "scripts/lib/pki", isolated_scripts / "lib/pki")
         for command, args, code, message in (
             ("veilway-pki", [], 2, "Usage:"),
             ("veilway-pki", ["profile", "create", "--device", "../unsafe", "--mode", "yc-direct"], 1, "device identifier"),
@@ -102,7 +109,8 @@ class OperatorContracts(unittest.TestCase):
         ):
             with self.subTest(command=command, args=args):
                 executable = [sys.executable] if command.endswith(".py") else []
-                result = subprocess.run([*executable, str(ROOT / "scripts" / command), *args], capture_output=True, text=True)
+                script = (isolated_scripts if command == "veilway-pki" else ROOT / "scripts") / command
+                result = subprocess.run([*executable, str(script), *args], capture_output=True, text=True)
                 self.assertEqual(result.returncode, code, result.stderr)
                 self.assertIn(message, result.stdout + result.stderr)
 

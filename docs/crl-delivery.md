@@ -94,7 +94,12 @@ filesystem read-only except for `/var/lib/veilway-crl`. Runtime code writes only
 The directory is owned by `veilway-crl:veilway`, mode `2750` (group 900); the
 setgid bit makes replacement files retain OpenVPN's reader group. CRL files are
 `0640`, so the separate OpenVPN UID/GID 900 can read them without granting the
-agent access to server keys. The agent locks the directory inode, validates the
+agent access to server keys. With managed CRLs, Direct, Yandex ingress and AWS
+transit server containers also receive supplementary group 900 at startup.
+OpenVPN initially reads the CRL as root before dropping privileges; the
+capability-restricted root process otherwise cannot traverse the agent-owned
+directory. This adds no capabilities and does not apply to the Yandex transit
+client or DNS containers. The agent locks the directory inode, validates the
 existing signed CRL as its durable anti-rollback state, writes a bounded candidate,
 fsyncs it, renames atomically and fsyncs the directory. Missing, symlinked or
 invalid installed files fail rather than bootstrap from a remotely supplied file.
