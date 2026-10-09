@@ -1,5 +1,9 @@
 # Google/profile panel rollout and recovery (stage 8)
 
+For the merged refactoring release, use the separately reviewed
+[API/web-only rollout](api-web-rollout.md). The full web role below also
+quiesces PKI and runs migrations; it is not the point-update procedure.
+
 This is the operator runbook for the completed development plan, not permission
 to deploy. Every real Google/cloud/host operation, CA export/import, service
 stop/start, VPN mount change and agent activation needs approval for the exact

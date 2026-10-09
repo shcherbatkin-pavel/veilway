@@ -10,6 +10,7 @@ audit-*.zip
 # Logs and temporary files
 *.log
 /logs/
+/release-artifacts/
 __pycache__/
 *.py[cod]
 *.tmp

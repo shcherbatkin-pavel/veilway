@@ -45,6 +45,9 @@ python3 -m py_compile \
     scripts/review-aws-direct-plan.py \
     scripts/review-yandex-multihop-plan.py \
     scripts/deploy-web-control.py \
+    scripts/prepare-api-web-release.py \
+    scripts/inspect-api-web-release.py \
+    scripts/test-api-web-release.py \
     scripts/validate-control-compose.py \
     scripts/validate-network-plan.py \
     deploy/filter_plugins/veilway_network.py \
@@ -57,6 +60,7 @@ python3 scripts/test-pki-expiry.py
 python3 scripts/test-pki-benchmark.py
 python3 scripts/test-operator-tools.py
 python3 scripts/test-profile-rollout.py
+python3 scripts/test-api-web-release.py
 valid_result="$(printf '%s\n' '{"vpc_cidr":"10.241.1.0/24","vpn_cidr":"10.242.10.0/24","future_multihop_cidr":"10.242.30.0/24","transit_cidr":"10.242.40.0/29","operator_cidrs_json":"[\"198.51.100.10/32\"]"}' | scripts/validate-network-plan.py)"
 [[ "${valid_result}" == *'"valid": "true"'* ]] || {
     printf '%s\n' 'CIDR validator rejected the known-good fixture.' >&2
