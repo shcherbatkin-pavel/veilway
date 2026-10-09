@@ -12,6 +12,7 @@ from sqlalchemy import and_, or_, select, update
 from .models import ProfileJob, VpnProfile, as_utc, utcnow
 from .pki import PkiClient, PkiUnavailable
 from .profiles import audit
+from .workers import run_periodic_step
 
 
 class IssueResult(TypedDict):
@@ -52,17 +53,11 @@ class ProfileWorker:
         self.stopping.set()
 
     async def run(self):
-        while not self.stopping.is_set():
-            try:
-                await asyncio.to_thread(self.step)
-            except Exception:
-                # DB outages must not kill the worker or disclose DB/PKI inputs.
-                # Committed leases are reclaimed automatically after expiration.
-                pass
-            try:
-                await asyncio.wait_for(self.stopping.wait(), timeout=self.settings.worker_interval_seconds)
-            except TimeoutError:
-                pass
+        # Committed leases are reclaimed automatically after expiration.
+        await run_periodic_step(
+            self.step, self.stopping, self.settings.worker_interval_seconds,
+            continue_on_error=True,
+        )
 
     def step(self, *, now: datetime | None = None) -> bool:
         now = now or utcnow()

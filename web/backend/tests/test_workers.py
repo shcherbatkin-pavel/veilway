@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
+from veilway_control.crl import CrlWorker
+from veilway_control.orchestrator import RestartWorker
+from veilway_control.profile_worker import ProfileWorker
 from veilway_control.workers import WorkerLifecycle
 
 
@@ -20,6 +24,70 @@ class QuietWorker:
 
     def stop(self):
         self.stopping.set()
+
+
+@pytest.mark.parametrize("worker_type", [RestartWorker, ProfileWorker, CrlWorker])
+def test_periodic_worker_preserves_error_policy(worker_type, caplog):
+    async def scenario():
+        worker = worker_type(SimpleNamespace(worker_interval_seconds=0.001, pki_socket_path="/unused"), None)
+        calls = []
+        loop = asyncio.get_running_loop()
+
+        def step():
+            calls.append("step")
+            if calls.count("step") == 1:
+                raise RuntimeError("synthetic-private-exception")
+            loop.call_soon_threadsafe(worker.stop)
+
+        worker.step = step
+        if worker_type is RestartWorker:
+            worker.recover_interrupted_dispatches = lambda: calls.append("recover")
+            with pytest.raises(RuntimeError, match="synthetic-private-exception"):
+                await asyncio.wait_for(worker.run(), timeout=2)
+            assert calls == ["recover", "step"]
+        else:
+            await asyncio.wait_for(worker.run(), timeout=2)
+            assert calls == ["step", "step"]
+
+    asyncio.run(scenario())
+    assert "synthetic-private-exception" not in caplog.text
+
+
+@pytest.mark.parametrize("worker_type", [RestartWorker, ProfileWorker, CrlWorker])
+def test_periodic_worker_shutdown_finishes_step_and_interrupts_interval(worker_type):
+    async def scenario():
+        worker = worker_type(SimpleNamespace(worker_interval_seconds=3600, pki_socket_path="/unused"), None)
+        if worker_type is RestartWorker:
+            worker.recover_interrupted_dispatches = lambda: None
+        entered, release = threading.Event(), threading.Event()
+        finished = []
+
+        def step():
+            entered.set()
+            assert release.wait(timeout=5)
+            finished.append(True)
+
+        worker.step = step
+        lifecycle = WorkerLifecycle({"worker": worker})
+        lifecycle.start()
+        try:
+            for _ in range(100):
+                if entered.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert entered.is_set()
+            shutdown = asyncio.create_task(lifecycle.stop())
+            await asyncio.sleep(0)
+            assert not shutdown.done()
+            release.set()
+            await asyncio.wait_for(shutdown, timeout=2)
+            assert finished == [True]
+            assert lifecycle.states["worker"].error_code is None
+        finally:
+            release.set()
+            await lifecycle.stop()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("name", ["restart-worker", "profile-worker", "crl-worker"])

@@ -11,6 +11,7 @@ from sqlalchemy import select
 from .models import CrlAgent, CrlPublication, CrlSyncState, ProfileJob, VpnProfile, as_utc, utcnow
 from .pki import PkiClient
 from .profiles import audit
+from .workers import run_periodic_step
 
 
 def verify(pem, ca_pem, now):
@@ -68,15 +69,10 @@ class CrlWorker:
         self.stopping.set()
 
     async def run(self):
-        while not self.stopping.is_set():
-            try:
-                await asyncio.to_thread(self.step)
-            except Exception:
-                pass  # Fixed error state only; no material or connection details in logs.
-            try:
-                await asyncio.wait_for(self.stopping.wait(), timeout=self.settings.worker_interval_seconds)
-            except TimeoutError:
-                pass
+        await run_periodic_step(
+            self.step, self.stopping, self.settings.worker_interval_seconds,
+            continue_on_error=True,
+        )
 
     def step(self, *, now=None):
         now = now or utcnow()
