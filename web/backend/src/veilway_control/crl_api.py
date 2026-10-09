@@ -25,14 +25,13 @@ def agent_auth(slug: str, authorization: str | None = Header(default=None), db: 
     return agent
 
 
-def no_store(response):
-    response.headers["Cache-Control"] = "no-store"
+def no_referrer(response):
     response.headers["Referrer-Policy"] = "no-referrer"
 
 
 @router.get("/crl-agents/{slug}/bundle")
 def bundle(response: Response, agent: CrlAgent = Depends(agent_auth), db: Session = Depends(get_db)):
-    no_store(response)
+    no_referrer(response)
     publication = db.scalar(select(CrlPublication).order_by(CrlPublication.version.desc()).limit(1))
     agent.last_contact_at = utcnow()
     db.commit()
@@ -50,7 +49,7 @@ class Receipt(BaseModel):
 
 @router.post("/crl-agents/{slug}/receipt", status_code=204)
 def receipt(payload: Receipt, response: Response, agent: CrlAgent = Depends(agent_auth), db: Session = Depends(get_db)):
-    no_store(response)
+    no_referrer(response)
     agent = db.scalar(select(CrlAgent).where(CrlAgent.slug == agent.slug).with_for_update())
     publication = db.get(CrlPublication, payload.version)
     now = utcnow()
@@ -71,14 +70,14 @@ class DeliveryError(BaseModel):
 
 @router.post("/crl-agents/{slug}/error", status_code=204)
 def report_error(payload: DeliveryError, response: Response, agent: CrlAgent = Depends(agent_auth), db: Session = Depends(get_db)):
-    no_store(response)
+    no_referrer(response)
     agent.error_code, agent.last_contact_at = payload.code, utcnow()
     db.commit()
 
 
 @router.get("/crl-delivery")
 def delivery(response: Response, _=Depends(require_admin), db: Session = Depends(get_db)):
-    no_store(response)
+    no_referrer(response)
     latest = db.scalar(select(CrlPublication).order_by(CrlPublication.version.desc()).limit(1))
     state = db.get(CrlSyncState, 1)
     nodes = []

@@ -211,3 +211,9 @@ response validation and sanitized errors.
 Protocol/crypto references: [OpenSSL ca](https://docs.openssl.org/3.0/man1/openssl-ca/),
 [OpenVPN 2.6](https://build.openvpn.net/man/openvpn-2.6/openvpn.8.html), and
 [Python Unix sockets](https://docs.python.org/3.12/library/socket.html).
+
+## Performance measurement
+
+The optional [synthetic PKI benchmark](pki-benchmark.md) measures issuance,
+revocation and generation filesystem work without accessing operator material.
+It is separate from static checks and acceptance tests.

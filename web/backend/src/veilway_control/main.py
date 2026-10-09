@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from .api import router
@@ -13,30 +13,28 @@ from .orchestrator import RestartWorker
 from .profile_worker import ProfileWorker
 from .crl import CrlWorker
 from .headers import ApiNoStoreMiddleware, safe_validation_error
+from .workers import WorkerLifecycle
 from fastapi.exceptions import RequestValidationError
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    worker = RestartWorker(settings, get_session_factory())
-    task = asyncio.create_task(worker.run(), name="restart-worker")
-    app.state.restart_worker = worker
-    profile_worker = ProfileWorker(settings, get_session_factory())
-    profile_task = asyncio.create_task(profile_worker.run(), name="profile-worker")
-    app.state.profile_worker = profile_worker
-    crl_worker = CrlWorker(settings, get_session_factory())
-    crl_task = asyncio.create_task(crl_worker.run(), name="crl-worker")
-    app.state.crl_worker = crl_worker
+    factory = get_session_factory()
+    app.state.restart_worker = RestartWorker(settings, factory)
+    app.state.profile_worker = ProfileWorker(settings, factory)
+    app.state.crl_worker = CrlWorker(settings, factory)
+    lifecycle = WorkerLifecycle({
+        "restart-worker": app.state.restart_worker,
+        "profile-worker": app.state.profile_worker,
+        "crl-worker": app.state.crl_worker,
+    })
+    app.state.worker_lifecycle = lifecycle
+    lifecycle.start()
     try:
         yield
     finally:
-        worker.stop()
-        profile_worker.stop()
-        crl_worker.stop()
-        await task
-        await profile_task
-        await crl_task
+        await lifecycle.stop()
 
 
 settings = get_settings()
@@ -60,3 +58,11 @@ app.include_router(router)
 @app.get("/api/healthz", include_in_schema=False)
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/readyz", include_in_schema=False)
+def readyz(request: Request) -> JSONResponse:
+    lifecycle = getattr(request.app.state, "worker_lifecycle", None)
+    ready = lifecycle is not None and lifecycle.ready
+    return JSONResponse({"status": "ready" if ready else "unavailable"},
+                        status_code=200 if ready else 503)

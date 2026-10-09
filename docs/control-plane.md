@@ -270,3 +270,21 @@ use:
 ```sh
 python3 scripts/control-postgres-smoke.py
 ```
+
+## Worker readiness and recovery
+
+`GET /api/healthz` remains a liveness check returning `{"status":"ok"}`.
+`GET /api/readyz` returns HTTP 200 with `{"status":"ready"}` only while all
+three background worker tasks have started and remain running. Before startup,
+during shutdown or after an unexpected task exit it returns HTTP 503 with
+`{"status":"unavailable"}`. This checks task lifetimes, not database, cloud or
+PKI availability; transient outages handled inside a running worker do not by
+themselves make readiness fail. Responses contain no exception details.
+
+Unexpected restart-worker failure is not retried automatically. An operator must
+inspect the durable job state and any ambiguous dispatch before explicitly
+approving recovery/restart. On the next approved application startup, interrupted
+dispatches are marked for review rather than rebooted again. PKI workers retain
+their original job keys and lease recovery; CRL polling retains its own retry
+policy. Application shutdown signals every worker and waits for all in-flight
+operations, including threaded PKI calls, without cancelling them.

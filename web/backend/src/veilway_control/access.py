@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
-from .models import User, VpnProfile
+from .models import ProfileJob, User, VpnProfile
 
 
 def ensure_active_user(user: User) -> None:
@@ -24,10 +24,26 @@ def ensure_admin(user: User) -> None:
         raise HTTPException(status_code=403)
 
 
+def registered_users() -> Select[tuple[User]]:
+    """Eligible profile owners: active Google-registered USER accounts."""
+    return select(User).where(
+        User.role == "USER", User.is_active.is_(True), User.google_sub.is_not(None),
+    )
+
+
 def visible_profiles(user: User) -> Select[tuple[VpnProfile]]:
     """Filter in SQL so unauthorized metadata never enters an API response."""
     ensure_active_user(user)
     query = select(VpnProfile)
+    if user.role == "USER":
+        query = query.where(VpnProfile.owner_id == user.id)
+    return query
+
+
+def visible_jobs(user: User) -> Select[tuple[ProfileJob]]:
+    """Apply the same active-user and ownership rules as profile metadata."""
+    ensure_active_user(user)
+    query = select(ProfileJob).join(VpnProfile, ProfileJob.profile_id == VpnProfile.id)
     if user.role == "USER":
         query = query.where(VpnProfile.owner_id == user.id)
     return query

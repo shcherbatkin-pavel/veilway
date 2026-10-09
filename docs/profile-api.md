@@ -35,6 +35,14 @@ cannot create, rename, assign or revoke profiles, enumerate users or read the
 administrative journal. Unauthenticated requests receive `401`; administrative
 operations by USER and missing/incorrect CSRF receive `403`.
 
+Profile and job visibility queries live in `access.py` and both check active
+accounts and allowed roles before constructing a query. Ownership filtering
+stays in SQL. The user list and owner validation share the same active,
+Google-registered USER selection; assignment retains its user-row lock.
+Inactive accounts are rejected with `401` and unsupported roles with `403`,
+including direct calls to the visibility helpers. Endpoint responses, ordering,
+pagination and transaction boundaries are unchanged.
+
 Create JSON requires a fresh `idempotency_key` UUID, `device_name` (1–128
 characters), and `mode` (`yc-direct`, `aws-direct`, `yc-aws-multihop`). Optional
 `owner_id` must reference an active Google-registered USER. Omitting it issues
@@ -46,6 +54,14 @@ CA by PKI before signing: a request beyond its expiry fails the job with
 `pki_expiry_rejected`, without consuming a committed certificate serial. It is
 not silently shortened. The asynchronous API can accept the job before that
 CA check; poll job status before offering a download.
+
+The typed profile service calculates new-request expiry separately using an
+explicit reference time, with the same 365-day default used in the request
+digest. Durable replay is resolved before time-dependent expiry validation:
+repeating an accepted request after its expiry returns the original profile and
+job rather than creating another operation. This does not make expired profiles
+downloadable. Transaction boundaries, row locks and conflict handling remain
+unchanged.
 
 Unknown input fields are forbidden. UUID, role, profile status, PKI paths,
 certificate metadata and authors cannot be supplied through rename/assignment

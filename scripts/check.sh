@@ -36,6 +36,8 @@ python3 -m py_compile \
     scripts/control-postgres-smoke.py \
     scripts/pki-smoke.py \
     scripts/pki-expiry.py \
+    scripts/benchmark-pki.py \
+    scripts/test-pki-benchmark.py \
     scripts/test-pki-expiry.py \
     scripts/test-operator-tools.py \
     scripts/check-public-diff.py \
@@ -52,6 +54,7 @@ mapfile -t control_python_files < <(rg --files web/backend web/pki --glob '*.py'
 mapfile -t operator_python_files < <(rg --files scripts/lib --glob '*.py' | sort)
 python3 -m py_compile "${control_python_files[@]}" "${operator_python_files[@]}"
 python3 scripts/test-pki-expiry.py
+python3 scripts/test-pki-benchmark.py
 python3 scripts/test-operator-tools.py
 python3 scripts/test-profile-rollout.py
 valid_result="$(printf '%s\n' '{"vpc_cidr":"10.241.1.0/24","vpn_cidr":"10.242.10.0/24","future_multihop_cidr":"10.242.30.0/24","transit_cidr":"10.242.40.0/29","operator_cidrs_json":"[\"198.51.100.10/32\"]"}' | scripts/validate-network-plan.py)"
@@ -100,27 +103,18 @@ fi
 
 if command -v -- ansible-playbook >/dev/null 2>&1; then
     printf '%s\n' '[5/9] Ansible syntax'
-    ANSIBLE_LOCAL_TEMP=/tmp/veilway-ansible-local \
-        ANSIBLE_CONFIG="${REPOSITORY_ROOT}/deploy/ansible.cfg" \
-        ansible-playbook -i deploy/inventory.example.yml deploy/site.yml --syntax-check
-    ANSIBLE_LOCAL_TEMP=/tmp/veilway-ansible-local \
-        ANSIBLE_CONFIG="${REPOSITORY_ROOT}/deploy/ansible.cfg" \
-        ansible-playbook -i deploy/inventory.example.yml deploy/preflight.yml --syntax-check
-    ANSIBLE_LOCAL_TEMP=/tmp/veilway-ansible-local \
-        ANSIBLE_CONFIG="${REPOSITORY_ROOT}/deploy/ansible.cfg" \
-        ansible-playbook -i deploy/inventory.example.yml deploy/verify.yml --syntax-check
-    ANSIBLE_LOCAL_TEMP=/tmp/veilway-ansible-local \
-        ANSIBLE_CONFIG="${REPOSITORY_ROOT}/deploy/ansible.cfg" \
-        ansible-playbook -i deploy/inventory.example.yml deploy/diagnose-egress.yml --syntax-check
-    ANSIBLE_LOCAL_TEMP=/tmp/veilway-ansible-local \
-        ANSIBLE_CONFIG="${REPOSITORY_ROOT}/deploy/ansible.cfg" \
-        ansible-playbook -i deploy/control-inventory.example.yml deploy/control-web.yml --syntax-check
-    ANSIBLE_LOCAL_TEMP=/tmp/veilway-ansible-local \
-        ANSIBLE_CONFIG="${REPOSITORY_ROOT}/deploy/ansible.cfg" \
-        ansible-playbook -i deploy/control-inventory.example.yml deploy/heartbeat.yml --syntax-check
-    ANSIBLE_LOCAL_TEMP=/tmp/veilway-ansible-local \
-        ANSIBLE_CONFIG="${REPOSITORY_ROOT}/deploy/ansible.cfg" \
-        ansible-playbook -i deploy/control-inventory.example.yml deploy/crl-agents.yml --syntax-check
+    vpn_playbooks=(site preflight verify diagnose-egress)
+    control_playbooks=(control-web heartbeat crl-agents)
+    for playbook in "${vpn_playbooks[@]}"; do
+        ANSIBLE_LOCAL_TEMP=/tmp/veilway-ansible-local \
+            ANSIBLE_CONFIG="${REPOSITORY_ROOT}/deploy/ansible.cfg" \
+            ansible-playbook -i deploy/inventory.example.yml "deploy/${playbook}.yml" --syntax-check
+    done
+    for playbook in "${control_playbooks[@]}"; do
+        ANSIBLE_LOCAL_TEMP=/tmp/veilway-ansible-local \
+            ANSIBLE_CONFIG="${REPOSITORY_ROOT}/deploy/ansible.cfg" \
+            ansible-playbook -i deploy/control-inventory.example.yml "deploy/${playbook}.yml" --syntax-check
+    done
 else
     printf '%s\n' '[5/9] Ansible syntax skipped: command unavailable'
 fi

@@ -1,7 +1,10 @@
 """Profile transactions and access rules; no private material is persisted here."""
-from datetime import timedelta, timezone
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+from typing import Literal, cast
 import uuid
 
 from fastapi import HTTPException
@@ -9,12 +12,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .access import ensure_admin, visible_profiles
+from .access import ensure_admin, registered_users, visible_profiles
 from .models import ProfileAuditEvent, ProfileJob, User, VpnProfile, as_utc, utcnow
 from .schemas import ProfileCreateRequest, ProfileJobResponse, ProfileResponse
 
+DEFAULT_DURATION_DAYS = 365
 
-def audit(db, actor_id, action, object_id, result):
+
+def audit(db: Session, actor_id: uuid.UUID, action: str, object_id: uuid.UUID, result: str) -> None:
     db.add(ProfileAuditEvent(actor_id=actor_id, action=action, object_id=object_id, result=result))
 
 
@@ -41,24 +46,41 @@ def locked_profile(db: Session, user: User, profile_id: uuid.UUID) -> VpnProfile
     return profile
 
 
-def registered_owner(db: Session, owner_id: uuid.UUID | None):
+def registered_owner(db: Session, owner_id: uuid.UUID | None) -> None:
     if owner_id is None:
         return
-    owner = db.scalar(select(User).where(User.id == owner_id, User.role == "USER", User.is_active.is_(True),
-                                         User.google_sub.is_not(None)).with_for_update())
+    owner = db.scalar(registered_users().where(User.id == owner_id).with_for_update())
     if owner is None:
         raise HTTPException(422, "owner must be a registered active USER")
 
 
 def request_digest(payload: ProfileCreateRequest) -> bytes:
     value = payload.model_dump(mode="json", exclude={"idempotency_key"})
-    value["duration_days"] = payload.duration_days if payload.duration_days is not None else (None if payload.expires_at else 365)
+    value["duration_days"] = payload.duration_days if payload.duration_days is not None else (
+        None if payload.expires_at else DEFAULT_DURATION_DAYS
+    )
     if payload.expires_at:
         value["expires_at"] = payload.expires_at.astimezone(timezone.utc).isoformat()
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).digest()
 
 
-def replay(db, actor, key, digest, kind, profile_id=None):
+def profile_expiry(payload: ProfileCreateRequest, *, now: datetime) -> datetime:
+    """Calculate a new request's expiry; durable replay precedes this check."""
+    try:
+        expires = payload.expires_at.astimezone(timezone.utc) if payload.expires_at else (
+            now + timedelta(days=payload.duration_days or DEFAULT_DURATION_DAYS)
+        )
+    except (OverflowError, ValueError):
+        raise HTTPException(422, "expiry is outside the supported calendar") from None
+    if expires <= now:
+        raise HTTPException(422, "expiry must be in the future")
+    return expires
+
+
+def replay(
+    db: Session, actor: User, key: uuid.UUID, digest: bytes, kind: Literal["issue", "revoke"],
+    profile_id: uuid.UUID | None = None,
+) -> ProfileJob | None:
     job = db.scalar(select(ProfileJob).where(ProfileJob.idempotency_key == key))
     if job is None:
         return None
@@ -68,21 +90,18 @@ def replay(db, actor, key, digest, kind, profile_id=None):
     return job
 
 
-def create_profile(db: Session, actor: User, payload: ProfileCreateRequest):
+def create_profile(db: Session, actor: User, payload: ProfileCreateRequest) -> tuple[VpnProfile, ProfileJob]:
     ensure_admin(actor)
     if payload.duration_days is not None and payload.expires_at is not None:
         raise HTTPException(422, "specify duration or expiry, not both")
     digest = request_digest(payload)
     existing = replay(db, actor, payload.idempotency_key, digest, "issue")
     if existing:
-        return db.get(VpnProfile, existing.profile_id), existing
+        # The durable job's foreign key guarantees its profile exists. Casts do
+        # not introduce a new runtime check or change replay transaction behavior.
+        return cast(VpnProfile, db.get(VpnProfile, existing.profile_id)), existing
     now = utcnow().replace(microsecond=0)
-    try:
-        expires = payload.expires_at.astimezone(timezone.utc) if payload.expires_at else now + timedelta(days=payload.duration_days or 365)
-    except (OverflowError, ValueError):
-        raise HTTPException(422, "expiry is outside the supported calendar") from None
-    if expires <= now:
-        raise HTTPException(422, "expiry must be in the future")
+    expires = profile_expiry(payload, now=now)
     registered_owner(db, payload.owner_id)
     profile = VpnProfile(device_name=payload.device_name, mode=payload.mode, owner_id=payload.owner_id,
         created_by_id=actor.id, created_at=now, expires_at=expires, status="issuing")
@@ -99,11 +118,11 @@ def create_profile(db: Session, actor: User, payload: ProfileCreateRequest):
         job = replay(db, actor, payload.idempotency_key, digest, "issue")
         if job is None:
             raise HTTPException(409, "profile request conflict") from None
-        profile = db.get(VpnProfile, job.profile_id)
+        profile = cast(VpnProfile, db.get(VpnProfile, job.profile_id))
     return profile, job
 
 
-def rename_profile(db, actor, profile_id, name):
+def rename_profile(db: Session, actor: User, profile_id: uuid.UUID, name: str) -> VpnProfile:
     ensure_admin(actor)
     profile = locked_profile(db, actor, profile_id)
     profile.device_name = name
@@ -112,7 +131,7 @@ def rename_profile(db, actor, profile_id, name):
     return profile
 
 
-def assign_profile(db, actor, profile_id, owner_id):
+def assign_profile(db: Session, actor: User, profile_id: uuid.UUID, owner_id: uuid.UUID | None) -> VpnProfile:
     ensure_admin(actor)
     profile = locked_profile(db, actor, profile_id)
     if profile.owner_id is not None and profile.owner_id != owner_id:
@@ -126,7 +145,7 @@ def assign_profile(db, actor, profile_id, owner_id):
     return profile
 
 
-def revoke_profile(db, actor, profile_id, key):
+def revoke_profile(db: Session, actor: User, profile_id: uuid.UUID, key: uuid.UUID) -> ProfileJob:
     ensure_admin(actor)
     profile = locked_profile(db, actor, profile_id)
     digest = hashlib.sha256(f"revoke:{profile_id}".encode()).digest()

@@ -20,12 +20,3 @@ export function useResource<T>(load: (signal: AbortSignal) => Promise<T>, onLogo
   const refresh = useCallback(() => poller.current?.refresh() ?? Promise.resolve(), []);
   return { data, error, loading, refresh };
 }
-
-export async function together<T extends unknown[]>(promises: { [K in keyof T]: Promise<T[K]> }): Promise<T> {
-  const results = await Promise.allSettled(promises);
-  const rejected = results.filter(item => item.status === "rejected");
-  const unauthorized = rejected.find(item => item.reason instanceof ApiError && item.reason.status === 401);
-  if (unauthorized) throw unauthorized.reason;
-  if (rejected.length) throw rejected[0].reason;
-  return results.map(item => (item as PromiseFulfilledResult<unknown>).value) as T;
-}
