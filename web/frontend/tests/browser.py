@@ -364,6 +364,54 @@ def storage_and_logout(browser, viewport):
     s.close()
 
 
+def connection_guide(browser, viewport):
+    links = {
+        'Android': ('Google Play', 'https://play.google.com/store/apps/details?id=net.openvpn.openvpn'),
+        'iPhone': ('App Store', 'https://apps.apple.com/app/openvpn-connect/id590379981'),
+        'Windows': ('официальной страницы', 'https://openvpn.net/client/'),
+        'Linux': ('официальных репозиториях OpenVPN', 'https://community.openvpn.net/Pages/OpenVPN%20software%20repos'),
+    }
+    for role in ('USER', 'ADMIN'):
+        s = Scene(browser, viewport, role, [profile()]); page = s.page
+        expect(s.row('Рабочий ноутбук')).to_be_visible()
+        navigation = page.get_by_role('navigation', name='Основная навигация')
+        navigation.get_by_role('button', name='Как подключиться', exact=True).click()
+        expect(page.get_by_role('heading', name='Как подключиться', exact=True)).to_be_visible()
+        expect(navigation.get_by_role('button', name='Как подключиться', exact=True)).to_have_attribute('aria-current', 'page')
+        platforms = page.get_by_role('group', name='Выберите платформу')
+        expect(platforms.get_by_role('button', name='Android', exact=True)).to_have_attribute('aria-pressed', 'true')
+        requests = list(s.requests)
+        for label, (text, href) in links.items():
+            button = platforms.get_by_role('button', name=label, exact=True)
+            button.focus(); page.keyboard.press('Enter')
+            expect(button).to_have_attribute('aria-pressed', 'true')
+            region = page.get_by_role('region', name=f'Подключение: {label}', exact=True)
+            expect(region.locator('ol > li')).to_have_count(4)
+            link = region.get_by_role('link', name=text, exact=False)
+            expect(link).to_have_attribute('href', href)
+            expect(link).to_have_attribute('target', '_blank')
+            expect(link).to_have_attribute('rel', 'noopener noreferrer')
+            expect(region).to_contain_text('обратитесь к администратору')
+            expect(region).to_contain_text('Не передавайте файл')
+            s.no_overflow()
+        expect(region).to_contain_text('sudo apt install openvpn')
+        expect(region).to_contain_text('sudo openvpn --config "/путь/к/скачанному/файлу.ovpn"')
+        expect(region).to_contain_text('Initialization Sequence Completed')
+        expect(region).to_contain_text('Ctrl+C')
+        page.wait_for_timeout(5500)
+        assert s.requests == requests, 'The guide must not fetch APIs or download profiles'
+        if role == 'USER':
+            for label in ('Пользователи', 'Узлы', 'История'):
+                expect(navigation.get_by_role('button', name=label, exact=True)).to_have_count(0)
+            assert not any(path in {'users', 'vpn-vms', 'restart-jobs', 'profile-audit-events', 'crl-delivery'} for _, path in s.requests)
+        page.get_by_role('button', name='К профилям →', exact=True).click()
+        expect(s.row('Рабочий ноутбук')).to_be_visible()
+        navigation.get_by_role('button', name='Как подключиться', exact=True).click()
+        navigation.get_by_role('button', name='Мои профили' if role == 'USER' else 'Профили', exact=True).click()
+        expect(s.row('Рабочий ноутбук')).to_be_visible()
+        s.close()
+
+
 def session_unavailable(browser, viewport):
     context=browser.new_context(viewport=viewport, is_mobile=viewport["width"] < 761, has_touch=viewport["width"] < 761)
     page=context.new_page()
@@ -389,7 +437,7 @@ with sync_playwright() as p:
     try:
         count=0
         for viewport in ({'width':1440,'height':1000},{'width':390,'height':844},{'width':320,'height':740}):
-            for run in (admin_flow,user_flow,empty_and_states,idempotent_creation,pagination_and_screenshot,loading_and_failures,session_unavailable,storage_and_logout):
+            for run in (admin_flow,user_flow,empty_and_states,idempotent_creation,pagination_and_screenshot,loading_and_failures,session_unavailable,storage_and_logout,connection_guide):
                 run(browser,viewport)
                 count+=1; print(f'PASS {run.__name__} {viewport["width"]}',flush=True)
         print(f'{count} browser scenarios passed',flush=True)

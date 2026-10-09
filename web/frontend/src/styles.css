@@ -946,6 +946,7 @@ fieldset:disabled {
   .sidebar nav {
     grid-column:1/-1;
     display:flex;
+    flex-wrap:wrap;
     gap:5px;
     padding-bottom:10px;
     grid-row:2;
@@ -1184,5 +1185,62 @@ fieldset:disabled {
 @media (max-width: 760px) {
   .row-actions .icon-button { min-width: 44px; min-height: 44px; }
   .row-actions .secondary { min-height: 44px; }
-  .sidebar nav .nav-link { min-height: 44px; }
+  .sidebar nav .nav-link { min-height:44px; width:auto; flex:1 1 auto; }
+}
+
+.guide-platforms {
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  margin-bottom:20px;
+}
+.guide-platforms button[aria-pressed="true"] {
+  color:var(--accent);
+  border-color:var(--accent);
+  background:#21372f;
+}
+.connection-guide {
+  padding:24px;
+  max-width:900px;
+  line-height:1.7;
+}
+.connection-guide a {
+  color:var(--accent);
+  text-underline-offset:3px;
+}
+.guide-steps {
+  padding-left:26px;
+  margin-bottom:0;
+}
+.guide-steps li {
+  padding-left:8px;
+  margin-bottom:24px;
+}
+.guide-steps li::marker {
+  color:var(--accent);
+  font-weight:700;
+}
+.guide-steps h3 { margin-bottom:8px; }
+.guide-steps p { margin-bottom:10px; }
+.connection-guide pre {
+  background:#101416;
+  border:1px solid var(--line);
+  border-radius:8px;
+  padding:12px;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  font-size:13px;
+}
+.connection-guide code { overflow-wrap:anywhere; }
+.guide-privacy {
+  border-top:1px solid var(--line);
+  padding-top:18px;
+  margin:0;
+  font-size:13px;
+}
+@media (max-width:760px) {
+  .connection-guide { padding:18px 14px; }
+  .guide-platforms { gap:8px; }
+  .guide-platforms button { flex:1 1 40%; min-height:44px; }
+  .guide-steps { padding-left:22px; }
 }
