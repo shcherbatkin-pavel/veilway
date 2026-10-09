@@ -6,6 +6,23 @@ The browser panel has a responsive dark Veilway interface. ADMIN starts in
 The backend remains the authority for roles, ownership, CSRF and profile state.
 This development stage does not deploy the panel or contact real VPN nodes.
 
+## Connection instructions
+
+Both roles have a “Как подключиться” section next to their profile navigation.
+It contains four short steps for Android, iPhone, Windows and Linux, with Android
+selected initially. Android/iPhone link to OpenVPN Connect in the official app
+stores; Windows links to the official download page. Linux covers Ubuntu/Debian
+with terminal installation and a quoted, replaceable path to the downloaded
+profile; it explains the connection-success message and Ctrl+C disconnection.
+
+The guide links back to profiles, explains how to obtain an assigned active
+profile and reminds users not to share their personal file. It makes no API
+requests, does not download profiles automatically and stores platform selection
+only in component state. External links open separately with noopener/noreferrer.
+USER navigation contains only profiles and the guide; administrative navigation
+and API access remain unavailable. Platform buttons work with the keyboard,
+and the guide and navigation wrap on narrow screens.
+
 ## Profiles and owners
 
 ADMIN can search by device name, mode or owner email, filter by mode/status/owner,

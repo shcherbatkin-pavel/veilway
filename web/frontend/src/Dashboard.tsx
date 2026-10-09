@@ -5,6 +5,7 @@ import { Profiles } from "./Profiles";
 import { Users } from "./Users";
 import { Nodes } from "./Nodes";
 import { History } from "./History";
+import { ConnectionGuide } from "./ConnectionGuide";
 export function Dashboard({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [section, setSection] = useState<Section>("profiles");
   const [owner, setOwner] = useState<string>();
@@ -13,5 +14,6 @@ export function Dashboard({ session, onLogout }: { session: Session; onLogout: (
     {section === "users" && <Users onLogout={onLogout} onProfiles={id => { setOwner(id); setSection("profiles"); }} />}
     {section === "nodes" && <Nodes session={session} onLogout={onLogout} />}
     {section === "history" && <History onLogout={onLogout} />}
+    {section === "guide" && <ConnectionGuide onProfiles={() => { setOwner(undefined); setSection("profiles"); }} />}
   </Layout>;
 }

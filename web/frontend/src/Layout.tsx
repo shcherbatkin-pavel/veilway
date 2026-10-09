@@ -1,16 +1,20 @@
 import { ReactNode, useState } from "react";
 import { api, errorMessage, Session } from "./api";
 
-export type Section = "profiles" | "users" | "nodes" | "history";
+export type Section = "profiles" | "users" | "nodes" | "history" | "guide";
 export const sections: { id: Section; label: string; icon: string }[] = [
   { id: "profiles", label: "Профили", icon: "▤" }, { id: "users", label: "Пользователи", icon: "◉" },
   { id: "nodes", label: "Узлы", icon: "◇" }, { id: "history", label: "История", icon: "◷" },
+  { id: "guide", label: "Как подключиться", icon: "?" },
 ];
 export function Layout({ session, section = "profiles", onSection, onLogout, children }: {
   session: Session; section?: Section; onSection?: (section: Section) => void; onLogout: () => void; children: ReactNode;
 }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const navigation = session.role === "ADMIN" ? sections : sections
+    .filter(item => item.id === "profiles" || item.id === "guide")
+    .map(item => item.id === "profiles" ? { ...item, label: "Мои профили" } : item);
   async function logout() {
     if (busy) return;
     setBusy(true);
@@ -25,7 +29,7 @@ export function Layout({ session, section = "profiles", onSection, onLogout, chi
       </a>
       <p className="nav-caption">{session.role === "ADMIN" ? "УПРАВЛЕНИЕ" : "ЛИЧНЫЙ КАБИНЕТ"}</p>
       <nav aria-label="Основная навигация">
-        {session.role === "ADMIN" ? sections.map(item => <button key={item.id} className={`nav-link ${section === item.id ? "selected" : ""}`} aria-current={section === item.id ? "page" : undefined} onClick={() => onSection?.(item.id)}><span aria-hidden="true">{item.icon}</span>{item.label}</button>) : <div className="nav-link selected"><span aria-hidden="true">▤</span>Мои профили</div>}
+        {navigation.map(item => <button key={item.id} className={`nav-link ${section === item.id ? "selected" : ""}`} aria-current={section === item.id ? "page" : undefined} onClick={() => onSection?.(item.id)}><span aria-hidden="true">{item.icon}</span>{item.label}</button>)}
       </nav>
       <div className="sidebar-note"><span className="live-dot" />{session.role === "ADMIN" ? "Панель управления VPN" : "Ваш доступ к VPN"}</div>
       <div className="account"><div className="avatar" aria-hidden="true">{session.email.slice(0, 1).toUpperCase()}</div><div className="identity"><strong title={session.email}>{session.email}</strong><span>{session.role === "ADMIN" ? "Администратор" : "Пользователь"}</span></div><button className="icon-button" aria-label="Выйти" disabled={busy} onClick={() => void logout()}>↪</button></div>
