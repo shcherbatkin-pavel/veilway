@@ -74,8 +74,10 @@ Profile, user and audit lists traverse backend pagination; profiles beyond the
 first hundred remain accessible. Reads poll every five seconds without overlapping
 request groups. Leaving a section aborts its reads and suppresses late results.
 Loading, empty and filtered-empty views are separate from unavailable-data views.
-A failed refresh preserves the last snapshot with a warning. A `401` removes the
-account view and requests Google sign-in again. Initial session/network failure
+A failed refresh preserves the last snapshot with a warning. Profile and node
+reads share the same polling lifecycle. Each group waits for every request to
+settle; a `401` takes precedence over other failures, removes the account view
+and requests Google sign-in again. Initial session/network failure
 has a retry screen and does not pretend the account is logged out. Error messages
 use fixed local strings and do not render raw server error bodies.
 
@@ -93,6 +95,17 @@ wrap or truncate appropriately. No horizontal document scrolling is needed at
 production/user data must not be recorded in repository screenshots.
 
 ## Verification
+
+Profile rows, the creation form and the action dialog are separate presentation
+components; their parent retains mutation locks, CSRF handling and the immutable
+creation retry payload. Snapshot indexes resolve profile/user/job metadata and
+owner counts without repeated list scans, preserving the first matching job in
+API order. This refactor does not change filters, sorting or role restrictions.
+The filter controls are a separate component. A pure selection function receives
+the current time explicitly and computes owner scope, matching rows and summary
+counts. Summary counts describe the entire owner scope, independently of search
+or interactive filters; USER search excludes owner metadata. Selection preserves
+API order and does not mutate profile data.
 
 ```bash
 npm --prefix web/frontend run typecheck

@@ -113,6 +113,8 @@ def test_full_admin_owner_user_matrix_and_safe_repeatable_download(scene, db_fac
                 if expected == 200:
                     assert download.content == b"synthetic test-only profile"
                     assert download.headers["cache-control"] == "no-store"
+                    assert download.headers["pragma"] == "no-cache"
+                    assert download.headers["referrer-policy"] == "no-referrer"
                     assert download.headers["content-disposition"] == f'attachment; filename="veilway-{profile_id}.ovpn"'
                     assert download.headers["x-content-type-options"] == "nosniff"
             assert user.get(f"/api/v1/profiles/{profile_id}/download").status_code == 405

@@ -1,6 +1,8 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
+const { join } = require("node:path");
 const { createPoller } = require(process.env.VEILWAY_POLLING_MODULE);
+const { ApiError, together } = require(join(process.env.VEILWAY_AUTH_MODULES, "api.js"));
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 function deferred() {
@@ -75,4 +77,45 @@ test("immediate unmount does not start a request", async () => {
   const pending = poller.refresh();
   poller.stop();
   await pending;
+});
+
+test("grouped results keep request order even when requests finish in reverse", async () => {
+  const first = deferred();
+  const second = deferred();
+  const pending = together([first.promise, second.promise]);
+  second.resolve("jobs");
+  first.resolve("vms");
+  assert.deepEqual(await pending, ["vms", "jobs"]);
+});
+
+test("a failed group waits for every request before allowing another poll", async () => {
+  const slow = deferred();
+  const unavailable = new ApiError(503, "unavailable");
+  const errors = [];
+  let calls = 0;
+  const poller = createPoller(() => {
+    calls++;
+    return together([Promise.reject(unavailable), slow.promise]);
+  }, assert.fail, error => errors.push(error));
+  const pending = poller.refresh();
+  await flush();
+  const concurrent = poller.refresh();
+  assert.equal(calls, 1);
+  assert.deepEqual(errors, []);
+  slow.resolve("jobs");
+  await Promise.all([pending, concurrent]);
+  assert.deepEqual(errors, [unavailable]);
+  await poller.refresh();
+  poller.stop();
+  assert.equal(calls, 2);
+});
+
+test("an expired session takes precedence over other grouped failures", async () => {
+  const unavailable = new ApiError(503, "unavailable");
+  const unauthorized = new ApiError(401, "expired session");
+  for (const failures of [[unavailable, unauthorized], [unauthorized, unavailable]]) {
+    await assert.rejects(together(failures.map(error => Promise.reject(error))), error => error === unauthorized);
+  }
+  const networkError = new Error("network failure");
+  await assert.rejects(together([Promise.reject(networkError), Promise.reject(unavailable)]), error => error === networkError);
 });

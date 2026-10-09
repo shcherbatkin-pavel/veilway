@@ -39,6 +39,16 @@ export class ApiError extends Error {
   }
 }
 
+export async function together<T extends unknown[]>(promises: { [K in keyof T]: Promise<T[K]> }): Promise<T> {
+  // Settle the whole group before polling again, and never hide an expired session.
+  const results = await Promise.allSettled(promises);
+  const rejected = results.filter(item => item.status === "rejected");
+  const unauthorized = rejected.find(item => item.reason instanceof ApiError && item.reason.status === 401);
+  if (unauthorized) throw unauthorized.reason;
+  if (rejected.length) throw rejected[0].reason;
+  return results.map(item => (item as PromiseFulfilledResult<unknown>).value) as T;
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},

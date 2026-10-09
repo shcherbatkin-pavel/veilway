@@ -2,14 +2,42 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 import uuid
+from typing import Literal, TypedDict, cast
 
 from sqlalchemy import and_, or_, select, update
 
 from .models import ProfileJob, VpnProfile, as_utc, utcnow
 from .pki import PkiClient, PkiUnavailable
 from .profiles import audit
+
+
+class IssueResult(TypedDict):
+    serial: str
+    certificate_sha256: str
+
+
+class RevokeResult(TypedDict):
+    crl_number: int
+
+
+@dataclass(frozen=True)
+class ClaimedJob:
+    id: uuid.UUID
+    token: uuid.UUID
+    profile_id: uuid.UUID
+    kind: Literal["issue", "revoke"]
+    key: uuid.UUID
+    mode: str
+    expires: str
+
+
+@dataclass(frozen=True)
+class PkiOutcome:
+    result: IssueResult | RevokeResult | None = None
+    error: str | None = None
 
 
 class ProfileWorker:
@@ -36,8 +64,16 @@ class ProfileWorker:
             except TimeoutError:
                 pass
 
-    def step(self, *, now=None):
+    def step(self, *, now: datetime | None = None) -> bool:
         now = now or utcnow()
+        claim = self._claim(now)
+        if claim is None:
+            return False
+        outcome = self._call_pki(claim)
+        self.fault("after_pki")
+        return self._complete(claim, outcome, now)
+
+    def _claim(self, now: datetime) -> ClaimedJob | None:
         token = uuid.uuid4()
         with self.session_factory() as db:
             eligible = and_(
@@ -47,7 +83,7 @@ class ProfileWorker:
             job = db.scalar(select(ProfileJob).where(eligible).order_by(ProfileJob.created_at, ProfileJob.id)
                             .with_for_update(skip_locked=True).limit(1))
             if job is None:
-                return False
+                return None
             # CAS also protects claims on lightweight databases without row locks.
             claimed = db.execute(update(ProfileJob).where(ProfileJob.id == job.id, eligible).values(
                 status="running", claim_token=token, lease_until=now + timedelta(seconds=180),
@@ -55,46 +91,53 @@ class ProfileWorker:
             ).execution_options(synchronize_session=False))
             if claimed.rowcount != 1:
                 db.rollback()
-                return False
+                return None
             job_id = job.id
             db.commit()
             db.refresh(job)
             profile = db.get(VpnProfile, job.profile_id)
-            profile_id, kind, key = profile.id, job.kind, job.idempotency_key
-            mode, expires = profile.mode, as_utc(profile.expires_at).strftime("%Y-%m-%dT%H:%M:%SZ")
+            return ClaimedJob(
+                id=job_id, token=token, profile_id=profile.id,
+                kind=cast(Literal["issue", "revoke"], job.kind), key=job.idempotency_key,
+                mode=profile.mode, expires=as_utc(profile.expires_at).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
 
-        result, error = None, None
+    def _call_pki(self, claim: ClaimedJob) -> PkiOutcome:
         try:
-            if kind == "issue":
-                result = self.client.issue(profile_id, key, mode, expires)
+            if claim.kind == "issue":
+                result = self.client.issue(claim.profile_id, claim.key, claim.mode, claim.expires)
             else:
-                result = self.client.revoke(profile_id, key)
+                result = self.client.revoke(claim.profile_id, claim.key)
+            return PkiOutcome(result=cast(IssueResult | RevokeResult, result))
         except PkiUnavailable as rejected:
-            error = rejected.code
+            return PkiOutcome(error=rejected.code)
         except Exception:
-            error = "unavailable"
-        self.fault("after_pki")
+            return PkiOutcome(error="unavailable")
 
+    def _complete(self, claim: ClaimedJob, outcome: PkiOutcome, now: datetime) -> bool:
+        error = outcome.error
+        kind = claim.kind
         with self.session_factory() as db:
-            job = db.scalar(select(ProfileJob).where(ProfileJob.id == job_id).with_for_update())
-            if job is None or job.claim_token != token or job.status != "running":
+            job = db.scalar(select(ProfileJob).where(ProfileJob.id == claim.id).with_for_update())
+            if job is None or job.claim_token != claim.token or job.status != "running":
                 return True  # A reclaimed lease owns completion now.
             profile = db.scalar(select(VpnProfile).where(VpnProfile.id == job.profile_id).with_for_update())
             if error is None:
                 if kind == "issue":
+                    result = cast(IssueResult, outcome.result)
                     profile.certificate_serial = result["serial"]
                     profile.certificate_sha256 = result["certificate_sha256"]
                     profile.status = "active" if as_utc(profile.expires_at) > now else "expired"
-                    outcome = "succeeded"
+                    audit_result = "succeeded"
                 else:
-                    job.crl_number = result["crl_number"]
+                    job.crl_number = cast(RevokeResult, outcome.result)["crl_number"]
                     # CA-local success does not prove that any node received the CRL.
                     profile.status = "revoking"
-                    outcome = "local_revocation_applied"
+                    audit_result = "local_revocation_applied"
                 job.status = "succeeded"
                 job.finished_at = now
                 job.error_code = None
-                audit(db, job.requested_by_id, f"{kind}_result", profile.id, outcome)
+                audit(db, job.requested_by_id, f"{kind}_result", profile.id, audit_result)
             elif error in {"unavailable", "operation_failed", "storage_error"}:
                 job.status = "queued"
                 job.retry_at = now + timedelta(seconds=min(300, 2 ** min(job.attempts, 8)))

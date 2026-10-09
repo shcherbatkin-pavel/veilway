@@ -9,11 +9,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from test_api import build_client, login
-from veilway_control.access import get_visible_profile, visible_profiles
+from veilway_control.access import get_visible_profile, registered_users, visible_jobs, visible_profiles
 from veilway_control.config import Settings
 from veilway_control.models import ProfileJob, RestartJob, User, UserSession, VpnProfile, utcnow
 from veilway_control.security import create_user_session
 from veilway_control.services import create_restart
+from veilway_control.profiles import registered_owner
 
 
 def google_user(subject: str, *, role: str = "USER") -> User:
@@ -132,10 +133,57 @@ def test_profile_ownership_matrix(db_factory, seed_control_data):
             assert denied.value.status_code == 404
         for profile in profiles:
             assert get_visible_profile(db, admin, profile.id) is profile
+        jobs = [ProfileJob(profile_id=profile.id, requested_by_id=admin.id, kind="issue") for profile in profiles]
+        db.add_all(jobs)
+        db.commit()
+        assert db.scalars(visible_jobs(admin)).all() == jobs
+        assert db.scalars(visible_jobs(owner)).all() == [jobs[0]]
+        assert db.scalars(visible_jobs(stranger)).all() == [jobs[1]]
+        assert db.scalar(visible_jobs(owner).where(ProfileJob.id == jobs[1].id)) is None
+        assert db.scalar(visible_jobs(owner).where(ProfileJob.id == jobs[2].id)) is None
         owner.is_active = False
         with pytest.raises(HTTPException) as denied:
             visible_profiles(owner)
         assert denied.value.status_code == 401
+
+
+@pytest.mark.parametrize("query", [visible_profiles, visible_jobs])
+@pytest.mark.parametrize("active,role,status", [
+    (False, "USER", 401), (False, "ADMIN", 401),
+    (False, "UNKNOWN", 401), (True, "UNKNOWN", 403),
+])
+def test_metadata_queries_reject_inactive_users_and_unknown_roles(query, active, role, status):
+    # Invalid roles cannot be persisted; test the query boundary directly.
+    user = User(id=uuid.uuid4(), role=role, is_active=active)
+    with pytest.raises(HTTPException) as denied:
+        query(user)
+    assert denied.value.status_code == status
+
+
+def test_user_listing_and_owner_validation_share_registration_rules(db_factory, seed_control_data):
+    seed_control_data()
+    with db_factory() as db:
+        eligible = [google_user("zeta"), google_user("alpha")]
+        inactive = google_user("inactive")
+        inactive.is_active = False
+        admin = google_user("another-admin", role="ADMIN")
+        legacy = User(login="legacy-user", password_hash="synthetic-test-only-hash", role="USER")
+        db.add_all([*eligible, inactive, admin, legacy])
+        db.commit()
+        assert db.scalars(registered_users().order_by(User.email)).all() == list(reversed(eligible))
+        for user in eligible:
+            registered_owner(db, user.id)
+        registered_owner(db, None)
+        for owner_id in (inactive.id, admin.id, legacy.id, uuid.uuid4()):
+            with pytest.raises(HTTPException) as denied:
+                registered_owner(db, owner_id)
+            assert denied.value.status_code == 422
+            assert denied.value.detail == "owner must be a registered active USER"
+        expected = [{"id": str(user.id), "email": user.email} for user in reversed(eligible)]
+    with build_client(db_factory) as client:
+        login(client)
+        assert client.get("/api/v1/users").json() == expected
+        assert client.get("/api/v1/users?limit=1&offset=1").json() == expected[1:]
 
 
 def test_restart_service_also_rejects_user(db_factory, seed_control_data):
