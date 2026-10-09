@@ -15,6 +15,7 @@ from .cloud import (
 )
 from .config import Settings
 from .models import RestartJob, RestartTarget, VpnVm, as_utc, utcnow
+from .workers import run_periodic_step
 
 
 ProviderFactory = Callable[[Settings, VpnVm], CloudProvider]
@@ -58,15 +59,9 @@ class RestartWorker:
 
     async def run(self) -> None:
         await asyncio.to_thread(self.recover_interrupted_dispatches)
-        while not self._stopping.is_set():
-            await asyncio.to_thread(self.step)
-            try:
-                await asyncio.wait_for(
-                    self._stopping.wait(),
-                    timeout=self.settings.worker_interval_seconds,
-                )
-            except TimeoutError:
-                pass
+        await run_periodic_step(
+            self.step, self._stopping, self.settings.worker_interval_seconds,
+        )
 
     def stop(self) -> None:
         self._stopping.set()

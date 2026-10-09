@@ -2,8 +2,31 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
+
+
+async def run_periodic_step(
+    step: Callable[[], object],
+    stopping: asyncio.Event,
+    interval_seconds: float,
+    *,
+    continue_on_error: bool = False,
+) -> None:
+    """Run blocking steps serially and wake promptly for graceful shutdown."""
+    while not stopping.is_set():
+        try:
+            await asyncio.to_thread(step)
+        except Exception:
+            if not continue_on_error:
+                raise
+            # Retry only when the worker's durable state permits it. Exception
+            # strings can contain private DB/PKI inputs and must not be logged.
+        try:
+            await asyncio.wait_for(stopping.wait(), timeout=interval_seconds)
+        except TimeoutError:
+            pass
 
 
 class Worker(Protocol):
