@@ -1,18 +1,17 @@
-# Yandex web control plane root
+# Корневой модуль веб-панели Yandex
 
-This root creates only the new `veilway.ru` web VM, its dedicated network,
-static IPv4, public Cloud DNS zone and apex A record, persistent data disk and service account. The disk attachment has
-`auto_delete=false`, so deleting the VM does not delete PostgreSQL data. The service
-account receives `compute.operator` through an instance-level binding to the
-existing `yc-direct` ID supplied by the operator. It receives no folder role.
+Этот модуль создаёт только новую веб-ВМ `veilway.ru`, её выделенную сеть,
+статический IPv4, публичную зону Cloud DNS и A-запись корня домена, постоянный диск
+данных и сервисный аккаунт. У подключения диска задано `auto_delete=false`,
+поэтому удаление ВМ не удаляет данные PostgreSQL. Сервисный аккаунт получает
+`compute.operator` через привязку на уровне экземпляра к существующему ID
+`yc-direct`, заданному оператором. Роль на уровне каталога ему не выдаётся.
 
-Copy `terraform.tfvars.example` to the ignored `terraform.tfvars`, review the
-plan, and apply it only as a separately approved operation. After the DNS zone
-exists, delegate the domain at REG.RU to the name servers from the
-`dns_name_servers` output. Ansible and real VM restarts remain outside this
-root.
+Скопируйте `terraform.tfvars.example` в игнорируемый `terraform.tfvars`, проверьте
+план и применяйте его только в рамках отдельно разрешённой операции. После
+создания DNS-зоны делегируйте домен в REG.RU на серверы имён из выходного значения
+`dns_name_servers`. Ansible и реальные перезапуски ВМ остаются вне этого модуля.
 
-TCP/22 is reachable from any IPv4 address so the operator is not tied to a
-fixed network. SSH access still requires the configured public key; the web
-panel separately uses the administrator login and password from the ignored
-local `.env`.
+TCP/22 доступен с любого IPv4, чтобы оператор не зависел от фиксированной сети.
+Доступ по SSH по-прежнему требует настроенного публичного ключа; веб-панель
+отдельно использует логин и пароль администратора из игнорируемого локального `.env`.

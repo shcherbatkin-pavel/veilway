@@ -1,163 +1,174 @@
-# Profile API and durable PKI jobs (stage 4)
+# API профилей и устойчивые к сбоям задания PKI (этап 4)
 
-The public API now connects Google ADMIN/USER sessions to the isolated PKI.
-It manages newly issued UUID profiles and explicitly imported historical profiles
-through the same ownership, expiry, download and revocation rules. The
-[legacy migration procedure](legacy-profile-migration.md) is operator-only;
-the public API cannot upload private materials. Existing OpenVPN Access Server
-remains outside this API. The [browser profile cabinet](profile-panel.md) is implemented in
-stage 6; [CRL distribution and node acknowledgements](crl-delivery.md) are implemented in stage 5.
+Публичный API связывает сессии Google ADMIN/USER с изолированной PKI.
+Он управляет новыми профилями UUID и явно импортированными историческими
+профилями по одинаковым правилам владения, срока действия, скачивания и отзыва.
+[Процедура миграции старых профилей](legacy-profile-migration.md) доступна
+только оператору; публичный API не может загружать закрытые материалы.
+Существующий OpenVPN Access Server остаётся вне этого API.
+[Кабинет профилей в браузере](profile-panel.md) реализован на этапе 6;
+[доставка CRL и подтверждения узлов](crl-delivery.md) — на этапе 5.
 
-## Endpoints
+## Точки API
 
-All paths have the `/api/v1` prefix. Every mutation requires the authenticated
-HttpOnly session and `X-CSRF-Token` from `/auth/session`. Metadata and download
-responses use `Cache-Control: no-store`. Lists accept `limit` (1–100, default
-100) and `offset` (>=0), with stable ordering.
+Все пути имеют префикс `/api/v1`. Каждая операция изменения требует
+аутентифицированной сессии HttpOnly и `X-CSRF-Token` из `/auth/session`.
+Ответы с метаданными и скачиваниями используют `Cache-Control: no-store`.
+Списки принимают `limit` (1–100, по умолчанию 100) и `offset` (>=0),
+с устойчивым порядком результатов.
 
-| Method/path | Access | Result |
+| Метод/путь | Доступ | Результат |
 | --- | --- | --- |
-| `GET /users` | ADMIN | Active registered USER IDs/emails for owner selection |
-| `GET /profiles` | ADMIN/USER | All managed profiles for ADMIN; own profiles for USER |
-| `POST /profiles` | ADMIN + CSRF | `202`, profile metadata and durable issue job |
-| `GET /profiles/{id}` | ADMIN/owner | Profile metadata; inaccessible IDs return `404` |
-| `PATCH /profiles/{id}` | ADMIN + CSRF | Change only `device_name` |
-| `POST /profiles/{id}/owner` | ADMIN + CSRF | Assign an unassigned profile once |
-| `POST /profiles/{id}/download` | ADMIN/owner + CSRF | Active `.ovpn` attachment |
-| `POST /profiles/{id}/revoke` | ADMIN + CSRF | `202`, durable local revoke job |
-| `GET /profile-jobs` | ADMIN/USER | All jobs for ADMIN; own profiles' jobs for USER |
-| `GET /profile-jobs/{id}` | ADMIN/owner | Job state or `404` |
-| `GET /profile-audit-events` | ADMIN | Actor/action/object/result/time journal |
+| `GET /users` | ADMIN | ID/email активных зарегистрированных USER для выбора владельца |
+| `GET /profiles` | ADMIN/USER | Все управляемые профили для ADMIN; собственные для USER |
+| `POST /profiles` | ADMIN + CSRF | `202`, метаданные профиля и устойчивое задание выпуска |
+| `GET /profiles/{id}` | ADMIN/владелец | Метаданные профиля; недоступные ID возвращают `404` |
+| `PATCH /profiles/{id}` | ADMIN + CSRF | Изменение только `device_name` |
+| `POST /profiles/{id}/owner` | ADMIN + CSRF | Однократное назначение профиля без владельца |
+| `POST /profiles/{id}/download` | ADMIN/владелец + CSRF | Активное вложение `.ovpn` |
+| `POST /profiles/{id}/revoke` | ADMIN + CSRF | `202`, устойчивое задание локального отзыва |
+| `GET /profile-jobs` | ADMIN/USER | Все задания для ADMIN; задания собственных профилей для USER |
+| `GET /profile-jobs/{id}` | ADMIN/владелец | Состояние задания или `404` |
+| `GET /profile-audit-events` | ADMIN | Журнал: инициатор/действие/объект/результат/время |
 
-`GET` downloads are not supported. Unknown or foreign profile/job IDs return
-`404` for authenticated USER reads/downloads, without consulting PKI. USER
-cannot create, rename, assign or revoke profiles, enumerate users or read the
-administrative journal. Unauthenticated requests receive `401`; administrative
-operations by USER and missing/incorrect CSRF receive `403`.
+Скачивание через `GET` не поддерживается. Неизвестные или чужие ID
+профилей/заданий возвращают `404` при чтении/скачивании аутентифицированным USER
+без обращения к PKI. USER не может создавать, переименовывать, назначать
+или отзывать профили, перечислять пользователей или читать административный
+журнал. Неаутентифицированные запросы получают `401`; административные операции
+USER и отсутствующий/неверный CSRF — `403`.
 
-Profile and job visibility queries live in `access.py` and both check active
-accounts and allowed roles before constructing a query. Ownership filtering
-stays in SQL. The user list and owner validation share the same active,
-Google-registered USER selection; assignment retains its user-row lock.
-Inactive accounts are rejected with `401` and unsupported roles with `403`,
-including direct calls to the visibility helpers. Endpoint responses, ordering,
-pagination and transaction boundaries are unchanged.
+Запросы видимости профилей и заданий находятся в `access.py`; оба проверяют
+активность записи и разрешённые роли до построения запроса. Фильтрация владения
+остаётся в SQL. Список пользователей и проверка владельца используют одинаковый
+выбор активных USER, зарегистрированных через Google; назначение сохраняет
+блокировку строки пользователя. Неактивные записи отклоняются с `401`,
+неподдерживаемые роли — с `403`, включая прямые вызовы функций видимости.
+Ответы, порядок, пагинация и границы транзакций не изменены.
 
-Create JSON requires a fresh `idempotency_key` UUID, `device_name` (1–128
-characters), and `mode` (`yc-direct`, `aws-direct`, `yc-aws-multihop`). Optional
-`owner_id` must reference an active Google-registered USER. Omitting it issues
-an unassigned profile, downloadable by ADMIN. Supply either `duration_days`
-(positive integer within the supported calendar) or `expires_at` (ISO timestamp with explicit timezone, whole
-seconds). Omitting both means 365 days. Past expiries and conflicting fields
-are rejected with `422`. The requested expiry is checked against the actual
-CA by PKI before signing: a request beyond its expiry fails the job with
-`pki_expiry_rejected`, without consuming a committed certificate serial. It is
-not silently shortened. The asynchronous API can accept the job before that
-CA check; poll job status before offering a download.
+JSON создания требует новый UUID `idempotency_key`, `device_name` (1–128 символов)
+и `mode` (`yc-direct`, `aws-direct`, `yc-aws-multihop`). Необязательный `owner_id`
+должен ссылаться на активного USER, зарегистрированного через Google.
+Без него выпускается профиль без владельца, доступный для скачивания ADMIN.
+Задайте либо `duration_days` (положительное целое в пределах поддерживаемого
+календаря), либо `expires_at` (ISO-время с явным часовым поясом, целые секунды).
+Без обоих полей срок равен 365 дням. Прошедшие сроки и конфликтующие поля
+отклоняются с `422`. Перед подписью PKI проверяет запрошенный срок по реальному
+CA: превышение срока CA завершает задание с `pki_expiry_rejected` без расходования
+зафиксированного серийного номера сертификата. Срок не сокращается молча.
+Асинхронный API может принять задание до проверки CA; опрашивайте статус
+задания перед предложением скачать профиль.
 
-The typed profile service calculates new-request expiry separately using an
-explicit reference time, with the same 365-day default used in the request
-digest. Durable replay is resolved before time-dependent expiry validation:
-repeating an accepted request after its expiry returns the original profile and
-job rather than creating another operation. This does not make expired profiles
-downloadable. Transaction boundaries, row locks and conflict handling remain
-unchanged.
+Типизированный сервис профилей отдельно вычисляет срок нового запроса с явным
+опорным временем и тем же значением 365 дней, которое используется в дайджесте
+запроса. Устойчивый повтор определяется до зависимой от времени проверки срока:
+повтор принятого запроса после истечения срока возвращает исходные профиль
+и задание вместо новой операции. Это не делает истёкшие профили доступными
+для скачивания. Границы транзакций, блокировки строк и обработка конфликтов сохранены.
 
-Unknown input fields are forbidden. UUID, role, profile status, PKI paths,
-certificate metadata and authors cannot be supplied through rename/assignment
-bodies. Display names accept Unicode but reject blank/control-character input.
-The certificate CN and download filename use the immutable generated profile
-UUID, never the device name. Multiple profiles may share a name and mode.
+Неизвестные входные поля запрещены. UUID, роль, статус профиля, пути PKI,
+метаданные сертификата и авторы не могут передаваться в телах переименования
+или назначения. Отображаемые имена принимают Unicode, но отклоняют пустые
+значения и управляющие символы. CN сертификата и имя скачиваемого файла
+используют неизменный созданный UUID профиля, а не имя устройства.
+Несколько профилей могут иметь одинаковые имя и режим.
 
-Repeating the same create key/payload returns the same profile and job. Reusing
-it for another actor/payload/operation returns `409`. Assignment JSON contains
-only `owner_id`; a repeat to that owner is allowed, but changing or clearing an
-assigned owner is rejected. This remains true after revocation. To change users,
-request revocation and create a new profile. Copies previously downloaded by the
-old owner cannot be recalled by changing database metadata.
+Повтор с тем же ключом и содержимым создания возвращает те же профиль и задание.
+Использование ключа другим инициатором, с другим содержимым или операцией
+возвращает `409`. JSON назначения содержит только `owner_id`; повтор для того
+же владельца разрешён, но смена или удаление назначенного владельца запрещены.
+Это верно и после отзыва. Для смены пользователя отзовите профиль и создайте
+новый. Скачанные старым владельцем копии нельзя отозвать изменением метаданных БД.
 
-Revoke JSON contains only `idempotency_key`. Repeats return the original revoke
-job, including repeated browser requests with fresh keys. At most one issue and
-one revoke job exist per profile, enforced by a database unique constraint.
-Profiles still issuing or with a failed issue cannot be revoked through this
-version's API; ambiguous PKI conflicts require operator investigation rather
-than silently minting another certificate.
+JSON отзыва содержит только `idempotency_key`. Повторы возвращают исходное
+задание отзыва, включая повторные запросы браузера с новыми ключами.
+На профиль приходится не более одного задания выпуска и одного отзыва — это
+обеспечивает уникальное ограничение БД. Ещё выпускаемые профили и профили
+с неудачным выпуском нельзя отозвать через эту версию API; неоднозначные
+конфликты PKI требуют расследования оператора вместо молчаливого выпуска
+ещё одного сертификата.
 
-## Download and revocation states
+## Состояния скачивания и отзыва
 
-A download requires both active database metadata and an unexpired, unrevoked
-PKI record. It returns `application/x-openvpn-profile`, an attachment filename
-`veilway-<uuid>.ovpn`, `no-store`, `Pragma: no-cache`, `nosniff` and
-`Referrer-Policy: no-referrer`. Repeated downloads return the same material.
-Keys/profile bytes are transient response data, never database or audit fields.
-A pending/failed/expired/revoking profile is rejected with `409`; unavailable
-or inconsistent PKI returns sanitized `503`, with no private material.
+Скачивание требует активных метаданных БД и неистёкшей, неотозванной записи PKI.
+Оно возвращает `application/x-openvpn-profile`, имя вложения
+`veilway-<uuid>.ovpn`, `no-store`, `Pragma: no-cache`, `nosniff` и
+`Referrer-Policy: no-referrer`. Повторные скачивания возвращают те же материалы.
+Ключи и байты профиля — временные данные ответа, никогда не поля БД или аудита.
+Ожидающий, неудачный, истёкший или отзываемый профиль отклоняется с `409`;
+недоступная или несогласованная PKI возвращает обезличенный `503` без закрытых материалов.
 
-The revoke transaction immediately changes profile state to `revoking`, so
-subsequent downloads stop before the worker contacts PKI. The worker then records
-the signed CRL version and marks the *local PKI job* `succeeded`. The profile
-stays `revoking` until the CRL worker verifies its relevant VPN node installed a
-valid full CRL containing that certificate; it then changes to `revoked`. Active
-VPN sessions are not forcibly terminated. A database-active profile past its expiry
-is returned as `expired`
-even before any background update.
+Транзакция отзыва сразу меняет статус на `revoking`, поэтому последующие
+скачивания прекращаются до обращения воркера к PKI. Затем воркер записывает
+версию подписанного CRL и помечает *локальное задание PKI* как `succeeded`.
+Профиль остаётся `revoking`, пока воркер CRL не проверит, что нужный VPN-узел
+установил действительный полный CRL с этим сертификатом; затем статус меняется
+на `revoked`. Активные VPN-сессии принудительно не завершаются.
+Активный в БД профиль с прошедшим сроком возвращается как `expired`
+даже до фонового обновления.
 
-## Worker, transactions and audit
+## Воркер, транзакции и аудит
 
-`main.lifespan` runs the profile worker alongside the existing restart worker.
-A claim locks an eligible job with PostgreSQL `FOR UPDATE SKIP LOCKED`, then
-commits `running`, a random claim token, attempt count and a 180-second lease.
-A guarded update prevents duplicate claims. The PKI call runs without holding
-that database transaction and always uses the job's original idempotency UUID.
-PKI serializes its own store and persists its receipt before replying.
+`main.lifespan` запускает воркер профилей рядом с существующим воркером
+перезапусков. Захват блокирует подходящее задание через PostgreSQL
+`FOR UPDATE SKIP LOCKED`, затем фиксирует `running`, случайный токен захвата,
+число попыток и аренду на 180 секунд. Условное обновление предотвращает
+двойной захват. Вызов PKI идёт без удержания транзакции БД и всегда использует
+исходный UUID идемпотентности задания. PKI сериализует хранилище и сохраняет
+подтверждение до ответа.
 
-Completion locks the job/profile and checks the current claim token before
-writing metadata. An old worker cannot overwrite a result saved after lease
-reclamation. If the service/process/DB fails after CA commit, the next claim
-replays the same PKI receipt. Transient socket/storage/operation errors requeue
-with bounded exponential delay (up to 256 seconds); they do not invent another
-job key or assert that signing did not happen. Invalid expiry/request is a
-terminal issue failure. Inconsistent/conflicting outcomes become `needs_review`
-with fixed error codes, without disclosing PKI responses or exception text.
+Завершение блокирует задание/профиль и проверяет текущий токен захвата перед
+записью метаданных. Старый воркер не может перезаписать результат после
+повторного захвата истёкшей аренды. Если сервис/процесс/БД откажет после фиксации
+CA, следующий захват повторяет то же подтверждение PKI. Временные ошибки
+сокета/хранилища/операции возвращают задание в очередь с ограниченной
+экспоненциальной задержкой (до 256 секунд); они не создают новый ключ и не
+утверждают, что подпись не произошла. Неверный срок/запрос — окончательный
+сбой выпуска. Несогласованные или конфликтующие результаты становятся
+`needs_review` с фиксированными кодами ошибок без раскрытия ответов PKI
+или текста исключений.
 
-Owner assignment and download checks lock the profile row. Concurrent owner
-assignments are serialized; only the first assignment succeeds. Profile creation,
-job enqueue and accepted audit record commit together. Replays do not duplicate
-that create record. Successful/denied/unavailable downloads and authorized
-rename/assign/revoke requests record their actor, action, object ID, result and
-time. Worker completions attribute the action to the requesting ADMIN. The
-journal contains no email copies, labels, `.ovpn`, keys, provider credentials or
-raw exceptions. It is exposed only to ADMIN and has no mutation endpoint.
+Назначение владельца и проверки скачивания блокируют строку профиля.
+Параллельные назначения сериализуются; успешно только первое. Создание профиля,
+добавление задания и запись аудита о принятии фиксируются вместе. Повтор
+не дублирует запись создания. Успешные, запрещённые и недоступные скачивания,
+а также разрешённые запросы переименования/назначения/отзыва записывают
+инициатора, действие, ID объекта, результат и время. Завершения воркера
+относятся к запросившему ADMIN. Журнал не содержит копий email, меток,
+`.ovpn`, ключей, учётных данных провайдеров или сырых исключений. Он доступен
+только ADMIN и не имеет точки изменения.
 
-PostgreSQL stores certificate serial/digest, job lease/retry/CRL metadata and
-the action journal; CA/client keys and profiles remain solely in PKI storage.
-Migration `0004_profile_api` adds those fields and constraints, keeps existing
-IDs/ownership/history and requeues pre-worker `running` jobs lacking leases.
-A downgrade refuses to discard active claims, new job receipts, certificate
-metadata or action history. Back up DB/PKI coherently and apply migrations only
-under the separate deployment approval described in [PKI operations](pki-service.md).
+PostgreSQL хранит серийный номер/дайджест сертификата, метаданные аренды,
+повторов и CRL задания, журнал действий; ключи CA/клиентов и профили остаются
+только в PKI. Миграция `0004_profile_api` добавляет эти поля и ограничения,
+сохраняет ID, владельцев и историю, возвращает в очередь старые задания
+`running` без аренды. Откат отказывается терять активные захваты, новые
+подтверждения заданий, метаданные сертификатов или историю действий.
+Копируйте БД/PKI согласованно и применяйте миграции только с отдельным разрешением
+на развёртывание по [операциям PKI](pki-service.md).
 
-Locking references: [PostgreSQL row locks](https://www.postgresql.org/docs/17/explicit-locking.html)
-and [SQLAlchemy FOR UPDATE](https://docs.sqlalchemy.org/en/20/core/selectable.html#sqlalchemy.sql.expression.Select.with_for_update).
+Источники по блокировкам: [блокировки строк PostgreSQL](https://www.postgresql.org/docs/17/explicit-locking.html)
+и [SQLAlchemy FOR UPDATE](https://docs.sqlalchemy.org/en/20/core/selectable.html#sqlalchemy.sql.expression.Select.with_for_update).
 
-## Verification
+## Проверка
 
 ```bash
 scripts/test-profile-api.sh --build
 scripts/check.sh
 ```
 
-The first command builds the backend test distribution and a separate integration
-image containing real OpenSSL/OpenVPN and the public PKI sources. It runs all
-backend and HTTP/socket/CA integration tests with synthetic material in tmpfs,
-read-only root and no network. PostgreSQL-only tests skip unless an explicit
-`VEILWAY_TEST_POSTGRES_URL` to a disposable database is supplied. For those tests,
-run that image with the temporary PostgreSQL container's isolated network namespace
-and this variable; do not target production. Tests create/drop their own schemas.
+Первая команда собирает тестовую версию бэкенда и отдельный интеграционный образ
+с реальными OpenSSL/OpenVPN и публичными исходниками PKI. Она запускает все
+тесты бэкенда и интеграции HTTP/сокет/CA на искусственных материалах в tmpfs,
+с корнем только для чтения и без сети. Тесты только для PostgreSQL пропускаются,
+пока явно не задан `VEILWAY_TEST_POSTGRES_URL` одноразовой БД. Для них запустите
+этот образ в изолированном сетевом пространстве временного контейнера PostgreSQL
+с этой переменной; не нацеливайте его на рабочую БД. Тесты создают и удаляют свои схемы.
 
-The stage-4 validation additionally uses disposable PostgreSQL for migration,
-duplicate create, competing owner assignments/revokes, concurrent job claims,
-lease reclamation and late-worker fencing. Integration checks cover all three
-modes through HTTP -> worker -> Unix socket -> actual synthetic CA, owner-only
-repeatable download, local revocation and a CA shorter than the default duration.
-Mock Google sessions avoid contacting Google or using real operator credentials.
+Проверка этапа 4 дополнительно использует одноразовый PostgreSQL для миграций,
+дублированного создания, конкурирующих назначений/отзывов, параллельных захватов,
+возврата истёкших аренд и блокирования опоздавших воркеров. Интеграционные
+проверки охватывают все три режима через HTTP → воркер → Unix-сокет → реальный
+искусственный CA, повторное скачивание только владельцем, локальный отзыв
+и CA со сроком короче стандартного. Имитации сессий Google позволяют
+не обращаться к Google и не использовать реальные учётные данные оператора.

@@ -1,75 +1,77 @@
-# ADR 0004: Public restart-only control plane
+# ADR 0004: Публичная панель только для перезапусков
 
-- Status: accepted
-- Date: 2026-08-31
+- Статус: принято
+- Дата: 2026-08-31
 
-Authentication, container count and PKI/profile scope are superseded by
-[ADR 0005](0005-google-profiles-and-server-pki.md). The decision below records
-the original restart-only iteration; restart permissions and coexistence apply.
+Аутентификация, число контейнеров и объём работ по PKI/профилям заменены
+[ADR 0005](0005-google-profiles-and-server-pki.md). Решение ниже фиксирует
+исходную итерацию только для перезапусков; права перезапуска и правила
+совместной работы остаются в силе.
 
-## Context
+## Контекст
 
-The earlier prototype requirement postponed the web panel and required a
-private listener reached through an SSH tunnel. That makes recovery dependent
-on operator network access precisely when the VPN may be unavailable. The
-first useful management action is restarting either of the two dedicated VPN
-VMs, or restarting both in a safe order.
+Прежние требования к прототипу откладывали веб-панель и требовали закрытого
+слушателя, доступного через SSH-туннель. Тогда восстановление зависит от
+сетевого доступа оператора именно в момент, когда VPN может быть недоступен.
+Первое полезное действие управления — перезапуск одной из двух выделенных VPN-ВМ
+или обеих в безопасном порядке.
 
-## Decision
+## Решение
 
-The canonical control-plane address is `https://veilway.ru`. A new Yandex
-Cloud VM hosts exactly three steady-state containers: Caddy plus a React SPA,
-FastAPI, and PostgreSQL. Only TCP/80 and TCP/443 are published. Caddy reaches
-FastAPI through a Unix socket; PostgreSQL is reachable only on an internal
-Compose network.
+Основной адрес панели — `https://veilway.ru`. Новая ВМ Yandex Cloud размещает
+ровно три постоянно работающих контейнера: Caddy с React SPA, FastAPI и
+PostgreSQL. Публикуются только TCP/80 и TCP/443. Caddy обращается к FastAPI
+через Unix-сокет; PostgreSQL доступен только во внутренней сети Compose.
 
-The MVP has one administrator synchronized from the operator's ignored local
-`.env`. The plaintext password enters the bootstrap command through stdin and
-only an Argon2id hash is stored. Runtime database and AWS secrets are installed
-as root-owned `0400` files. The API entrypoint copies them to sealed anonymous
-memory, permanently drops to UID/GID 10001, and exposes only inherited file
-descriptors to the application. Browser sessions are server-side and use a
-host-only `Secure`, `HttpOnly`, `SameSite=Strict` cookie plus CSRF tokens.
+В MVP один администратор, синхронизируемый из игнорируемого локального `.env`
+оператора. Открытый пароль поступает в команду начальной настройки через stdin;
+хранится только хеш Argon2id. Рабочие секреты БД и AWS устанавливаются как файлы
+`0400`, принадлежащие root. Точка входа API копирует их в запечатанную анонимную
+память, необратимо переходит на UID/GID 10001 и предоставляет приложению только
+унаследованные файловые дескрипторы. Браузерные сессии хранятся на сервере и
+используют cookie только для текущего хоста с `Secure`, `HttpOnly`,
+`SameSite=Strict` и токены CSRF.
 
-The database allowlist and API contain exactly `aws-direct` and `yc-direct`.
-The AWS IAM user may reboot only the exact AWS instance ARN. Its access key is
-created outside Terraform. The web VM service account gets `compute.operator`
-only through an instance-level binding on `yc-direct`; it receives no folder
-role. The web VM, legacy OpenVPN Access Server and every other VM are outside
-the target set.
+Список разрешённых узлов в БД и API содержит ровно `aws-direct` и `yc-direct`.
+Пользователь AWS IAM может перезагрузить только точный ARN экземпляра AWS.
+Ключ доступа создаётся вне Terraform. Сервисный аккаунт веб-ВМ получает
+`compute.operator` только через привязку на уровне экземпляра `yc-direct`;
+роли каталога у него нет. Веб-ВМ, старый OpenVPN Access Server и все другие ВМ
+вне набора целей.
 
-Yandex restart completion is read through the instance-specific Compute API
-operations list. The global operation endpoint is not used because it is not
-authorized by the deliberately instance-scoped binding.
+Завершение перезапуска Yandex определяется по списку операций Compute API
+конкретного экземпляра. Глобальная точка операций не используется: намеренно
+ограниченная экземпляром привязка не даёт на неё прав.
 
-Restart jobs are durable PostgreSQL records. A multi-target job always runs
-AWS before Yandex and advances only after a later authenticated heartbeat has
-a different boot ID and all locally allowlisted containers are healthy. The
-worker persists `dispatching` before the one cloud mutation. A process failure
-while the mutation result is ambiguous becomes `needs_review`; a persisted
-`waiting` target resumes observation without sending another reboot.
+Задания перезапуска — устойчивые записи PostgreSQL. Задание для нескольких
+целей всегда выполняет AWS перед Yandex и продолжается только после того,
+как более поздний аутентифицированный heartbeat содержит другой boot ID и
+все локально разрешённые контейнеры исправны. Воркер сохраняет `dispatching`
+перед единственной облачной операцией изменения. Сбой процесса при неопределённом
+результате операции приводит к `needs_review`; сохранённая цель `waiting`
+возобновляет наблюдение без повторной отправки перезагрузки.
 
-Registration, MFA, PKI, profile generation, cloud discovery, SSH-based VM
-commands and general VM administration are not part of this control plane.
+Регистрация, MFA, PKI, генерация профилей, обнаружение облачных ресурсов,
+команды ВМ по SSH и общее администрирование ВМ не входят в эту панель.
 
-## Consequences
+## Последствия
 
-The panel remains reachable during a VPN outage, at the cost of maintaining a
-small public authentication surface. TLS termination, strict cookies, CSRF,
-least-privilege cloud identities, a two-item database constraint and hidden
-cloud identifiers reduce that surface. There is no HA: the design accepts one
-web VM and one worker for this MVP.
+Панель остаётся доступной при отказе VPN ценой небольшой публичной поверхности
+аутентификации. Завершение TLS, строгие cookie, CSRF, минимальные облачные права,
+ограничение БД двумя узлами и скрытые облачные идентификаторы уменьшают её.
+Высокой доступности нет: для этого MVP приняты одна веб-ВМ и один воркер.
 
-The web VM accepts SSH connections from any IPv4 address so emergency access
-does not depend on a fixed operator network. SSH remains key-authenticated;
-the panel's login and password authenticate only the HTTPS application.
+Веб-ВМ принимает SSH с любого IPv4, чтобы аварийный доступ не зависел от
+фиксированной сети оператора. SSH по-прежнему требует ключ; логин и пароль
+панели аутентифицируют только HTTPS-приложение.
 
-Terraform apply, access-key creation, DNS changes, Ansible deployment,
-heartbeat installation and every real restart remain separate operator-
-approved operations. The heartbeat role installs an outbound-only timer and
-does not edit, reload or restart OpenVPN.
+Применение Terraform, создание ключа доступа, изменения DNS, развёртывание
+Ansible, установка heartbeat и каждый реальный перезапуск остаются отдельными
+операциями с разрешением оператора. Роль heartbeat устанавливает таймер только
+для исходящих запросов и не редактирует, не перезагружает конфигурацию и не
+перезапускает OpenVPN.
 
-The public `veilway.ru.` zone and its apex A record are managed alongside the
-web infrastructure in Yandex Cloud DNS. REG.RU remains the registrar and
-delegates the domain to the authoritative Yandex Cloud name servers only after
-Terraform has created the complete public zone.
+Публичная зона `veilway.ru.` и A-запись корня домена управляются вместе с
+веб-инфраструктурой в Yandex Cloud DNS. REG.RU остаётся регистратором и делегирует
+домен авторитетным серверам имён Yandex Cloud только после создания полной
+публичной зоны через Terraform.

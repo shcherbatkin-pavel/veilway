@@ -1,111 +1,115 @@
-# Profile panel (stage 6)
+# Панель профилей (этап 6)
 
-The browser panel has a responsive dark Veilway interface. ADMIN starts in
-“Профили” and can open “Пользователи”, “Узлы” and “История”; USER starts in
-“Мои профили” and has no administrative navigation or administrative API reads.
-The backend remains the authority for roles, ownership, CSRF and profile state.
-This development stage does not deploy the panel or contact real VPN nodes.
+Панель в браузере имеет адаптивный тёмный интерфейс Veilway. ADMIN начинает
+с «Профили» и может открыть «Пользователи», «Узлы» и «История»; USER начинает
+с «Мои профили» без административной навигации или чтения административного API.
+Бэкенд остаётся определяющим источником ролей, владения, CSRF и состояния профиля.
+Этот этап разработки не развёртывает панель и не обращается к реальным VPN-узлам.
 
-## Connection instructions
+## Инструкции подключения
 
-Both roles have a “Как подключиться” section next to their profile navigation.
-It contains four short steps for Android, iPhone, Windows and Linux, with Android
-selected initially. Android/iPhone link to OpenVPN Connect in the official app
-stores; Windows links to the official download page. Linux covers Ubuntu/Debian
-with terminal installation and a quoted, replaceable path to the downloaded
-profile; it explains the connection-success message and Ctrl+C disconnection.
+У обеих ролей рядом с профилями есть раздел «Как подключиться». Он содержит
+четыре коротких шага для Android, iPhone, Windows и Linux; первоначально выбран
+Android. Android/iPhone ссылаются на OpenVPN Connect в официальных магазинах;
+Windows — на официальную страницу скачивания. Linux описывает Ubuntu/Debian,
+установку в терминале и заменяемый путь к скачанному профилю в кавычках;
+объясняет сообщение успешного подключения и отключение через Ctrl+C.
 
-The guide links back to profiles, explains how to obtain an assigned active
-profile and reminds users not to share their personal file. It makes no API
-requests, does not download profiles automatically and stores platform selection
-only in component state. External links open separately with noopener/noreferrer.
-USER navigation contains only profiles and the guide; administrative navigation
-and API access remain unavailable. Platform buttons work with the keyboard,
-and the guide and navigation wrap on narrow screens.
+Руководство ссылается обратно на профили, объясняет получение назначенного
+активного профиля и напоминает не передавать личный файл. Оно не делает
+API-запросов, автоматически не скачивает профили и хранит выбор платформы
+только в состоянии компонента. Внешние ссылки открываются отдельно с
+noopener/noreferrer. Навигация USER содержит только профили и инструкцию;
+административная навигация и API остаются недоступными. Кнопки платформ
+работают с клавиатуры; инструкция и навигация переносятся на узких экранах.
 
-## Profiles and owners
+## Профили и владельцы
 
-ADMIN can search by device name, mode or owner email, filter by mode/status/owner,
-create a profile with a registered USER or assign its owner later, rename a
-profile, download an active profile and request revocation. The form defaults to
-365 days; PKI checks the actual CA lifetime asynchronously. The panel explains
-failed issuance and a requested lifetime beyond the CA, rather than displaying
-a failed job as an active downloadable profile. New users do not receive a
-profile automatically merely by registering through Google.
+ADMIN ищет по имени устройства, режиму или email владельца, фильтрует по
+режиму/статусу/владельцу, создаёт профиль для зарегистрированного USER или
+назначает владельца позже, переименовывает, скачивает активный профиль и
+запрашивает отзыв. По умолчанию форма задаёт 365 дней; PKI асинхронно проверяет
+реальный срок CA. Панель объясняет неудачный выпуск и превышение срока CA,
+а не показывает неудачное задание как активный профиль для скачивания.
+Одна регистрация через Google автоматически не даёт новому пользователю профиль.
 
-Existing profiles adopted through the [operator migration](legacy-profile-migration.md)
-use these same screens and ownership rules, retain original expiry and download
-bytes, and start without owners. History labels the adoption as an import.
+Существующие профили, добавленные [операторской миграцией](legacy-profile-migration.md),
+используют те же экраны и правила владения, сохраняют исходные срок и байты
+скачивания, первоначально не имеют владельцев. История отмечает добавление как импорт.
 
-A create request uses one UUID idempotency key and an immutable submitted payload
-across uncertain responses. If the response is lost, the dialog retains its
-parameters and retries the same request, even after closing and reopening it.
-It does not silently generate a second key and profile. Validation errors allow
-correction. Double submissions are blocked while the operation is pending.
-Assigning an already assigned profile to a new owner is intentionally unavailable;
-revoke the old profile and create a new one for the new owner. The user list links
-to that user's profiles and supports email search.
+Запрос создания использует один UUID идемпотентности и неизменное отправленное
+содержимое при неопределённых ответах. Если ответ потерян, диалог сохраняет
+параметры и повторяет тот же запрос даже после закрытия и открытия.
+Он не создаёт незаметно второй ключ и профиль. Ошибки проверки можно исправлять.
+Двойная отправка блокируется, пока операция ожидает результата. Назначение
+уже назначенного профиля новому владельцу намеренно недоступно: отзовите старый
+и создайте новый. Список пользователей ссылается на профили пользователя
+и поддерживает поиск по email.
 
-Revocation requires an explicit dialog. Cancellation performs no mutation. After
-acceptance, downloads are disabled while the relevant VPN node applies its CRL.
-The panel shows “Отзыв применяется”, with automatic refresh, until the backend
-reports “Отозван”. It explains that active sessions are not forcibly terminated.
-Issuing, active, expired, revoked and failed profiles have distinct text labels;
-status is never communicated by color alone. An active profile whose expiry has
-passed also becomes unavailable in the browser, without waiting for a poll.
+Отзыв требует явного диалога. Отмена не меняет данные. После подтверждения
+скачивания отключены, пока нужный VPN-узел применяет CRL. Панель показывает
+«Отзыв применяется» с автообновлением, пока бэкенд не сообщит «Отозван».
+Она объясняет, что активные сессии принудительно не завершаются. Выпускаемые,
+активные, истёкшие, отозванные и неудачные профили имеют отдельные текстовые
+метки; статус никогда не передаётся только цветом. Активный профиль с истёкшим
+сроком становится недоступным в браузере без ожидания следующего опроса.
 
-USER sees only the metadata returned by the owner-scoped endpoints: device name,
-VPN mode, status, expiry and download action. An empty account explains that the
-administrator has not assigned profiles yet. USER does not request users, VPN
-nodes, restart history, administrative audit events or CRL delivery details.
-Issuance problems ask USER to contact the administrator rather than offer controls
-that the user cannot perform.
+USER видит только метаданные API с ограничением по владельцу: имя устройства,
+режим VPN, статус, срок и скачивание. Пустой кабинет объясняет, что администратор
+ещё не назначил профили. USER не запрашивает пользователей, VPN-узлы, историю
+перезапусков, административный аудит или детали доставки CRL. При проблемах
+выпуска USER предлагают обратиться к администратору, а не действия вне его прав.
 
-## Nodes, history and failure states
+## Узлы, история и состояния отказа
 
-“Узлы” retains individual/selected and ordered bulk restart operations with an
-explicit confirmation and existing health/active-job gating. “История” contains
-profile audit actions and the existing recent restart history. Restart state and
-errors are translated into understandable Russian labels. Profile history has
-search and action filters. “Узлы” also displays CRL publication problems and
-per-node installation/offline/expiry state from the authenticated delivery API.
+«Узлы» сохраняет отдельные, выбранные и упорядоченные массовые перезапуски
+с явным подтверждением и прежними ограничениями по исправности и активным
+заданиям. «История» содержит аудит профилей и недавнюю историю перезапусков.
+Состояния и ошибки перезапуска переведены в понятные русские метки.
+История профилей имеет поиск и фильтры действий. «Узлы» также показывает
+проблемы публикации CRL и состояние установки, недоступности и истечения срока
+для каждого узла из аутентифицированного API доставки.
 
-Profile, user and audit lists traverse backend pagination; profiles beyond the
-first hundred remain accessible. Reads poll every five seconds without overlapping
-request groups. Leaving a section aborts its reads and suppresses late results.
-Loading, empty and filtered-empty views are separate from unavailable-data views.
-A failed refresh preserves the last snapshot with a warning. Profile and node
-reads share the same polling lifecycle. Each group waits for every request to
-settle; a `401` takes precedence over other failures, removes the account view
-and requests Google sign-in again. Initial session/network failure
-has a retry screen and does not pretend the account is logged out. Error messages
-use fixed local strings and do not render raw server error bodies.
+Списки профилей, пользователей и аудита проходят пагинацию бэкенда;
+профили за первой сотней доступны. Чтение опрашивается каждые пять секунд
+без перекрытия групп запросов. Уход из раздела прерывает его чтение и
+подавляет поздние результаты. Загрузка, пустой список и отсутствие результатов
+фильтра отделены от недоступности данных. Неудачное обновление сохраняет
+последний снимок с предупреждением. Чтение профилей и узлов использует общий
+жизненный цикл опроса. Каждая группа ждёт завершения всех запросов; `401`
+имеет приоритет над другими ошибками, удаляет представление учётной записи
+и снова запрашивает вход Google. Начальный сбой сессии/сети показывает экран
+повтора и не изображает выход из аккаунта. Ошибки используют фиксированные
+локальные строки и не показывают сырые тела ошибок сервера.
 
-Mutation requests send the session CSRF token. Downloads use authenticated POST
-and a temporary Blob URL with the immutable profile UUID filename. Profile bytes
-are never rendered, logged, or stored in local/session storage. Object URLs are
-revoked after dispatch. No analytics, remote fonts, image services or audit
-exports are added. Native modal dialogs contain keyboard focus, support Escape
-when idle and disable dismissal while the request is pending.
+Запросы изменения передают токен CSRF сессии. Скачивание использует
+аутентифицированный POST и временный Blob URL с неизменным UUID профиля
+в имени файла. Байты профиля никогда не показываются, не журналируются
+и не хранятся в local/session storage. Object URL освобождаются после отправки.
+Аналитика, удалённые шрифты, сервисы изображений и экспорт аудита не добавлены.
+Нативные модальные диалоги удерживают фокус клавиатуры, поддерживают Escape
+в ожидании действий и запрещают закрытие во время запроса.
 
-The sidebar becomes a mobile header/navigation; profile rows become labeled
-cards. Action controls remain accessible on touch screens and long owner emails
-wrap or truncate appropriately. No horizontal document scrolling is needed at
-1440, 390 or 320 pixels. Local synthetic screenshots were inspected separately;
-production/user data must not be recorded in repository screenshots.
+Боковая панель становится мобильной шапкой/навигацией; строки профилей —
+карточками с подписями. Действия доступны на сенсорных экранах, длинные email
+владельцев корректно переносятся или сокращаются. При ширине 1440, 390 и
+320 пикселей горизонтальная прокрутка документа не нужна. Локальные снимки
+с искусственными данными проверены отдельно; рабочие/пользовательские данные
+нельзя сохранять в снимках репозитория.
 
-## Verification
+## Проверка
 
-Profile rows, the creation form and the action dialog are separate presentation
-components; their parent retains mutation locks, CSRF handling and the immutable
-creation retry payload. Snapshot indexes resolve profile/user/job metadata and
-owner counts without repeated list scans, preserving the first matching job in
-API order. This refactor does not change filters, sorting or role restrictions.
-The filter controls are a separate component. A pure selection function receives
-the current time explicitly and computes owner scope, matching rows and summary
-counts. Summary counts describe the entire owner scope, independently of search
-or interactive filters; USER search excludes owner metadata. Selection preserves
-API order and does not mutate profile data.
+Строки профилей, форма создания и диалог действий — отдельные компоненты
+представления; родитель сохраняет блокировки изменений, обработку CSRF
+и неизменное содержимое повторного запроса создания. Индексы снимка находят
+метаданные профиля/пользователя/задания и число владельческих профилей без
+повторных обходов списков, сохраняя первое подходящее задание в порядке API.
+Рефакторинг не меняет фильтры, сортировку или ролевые ограничения. Фильтры —
+отдельный компонент. Чистая функция выбора явно получает текущее время
+и вычисляет область владельца, подходящие строки и итоговые числа.
+Итоговые числа описывают всю область владельца независимо от поиска
+или интерактивных фильтров; поиск USER исключает метаданные владельца.
+Выбор сохраняет порядок API и не изменяет данные профилей.
 
 ```bash
 npm --prefix web/frontend run typecheck
@@ -115,29 +119,30 @@ scripts/test-profile-panel.sh --build
 scripts/check.sh
 ```
 
-The browser script builds an isolated test image with the compiled production
-bundle and Playwright 1.63.0. A loopback HTTP server and Chromium run inside that
-container with `--network none`, read-only root, bounded tmpfs and no capabilities.
-The test image is not the deployed web image. It uses a pinned official
-[Playwright Python Docker image](https://playwright.dev/python/docs/docker),
-which includes browser dependencies; the matching Python package is installed
-only inside the test image. There is no host package installation.
+Браузерный скрипт собирает изолированный тестовый образ со скомпилированным
+рабочим пакетом и Playwright 1.63.0. HTTP-сервер на loopback и Chromium работают
+в контейнере с `--network none`, корнем только для чтения, ограниченным tmpfs
+и без capabilities. Тестовый образ не является развёртываемым веб-образом.
+Он использует закреплённый официальный [Docker-образ Playwright Python](https://playwright.dev/python/docs/docker)
+с зависимостями браузера; соответствующий пакет Python устанавливается
+только в тестовый образ. Пакеты на хост не устанавливаются.
 
-Browser fixtures intercept the complete application API with synthetic identities,
-profile metadata and a harmless download string. Checks exercise creation/owner
-selection, assignment, rename, download, cancellation and pending revocation,
-node restart confirmation/history, delivery errors, role isolation, empty/new
-users, all profile states, unavailable PKI, lost creation response/idempotent
-retry, pagination past 100 profiles, loading/recovery, initial session failure,
-expired-session reads/mutations, keyboard dialog dismissal, browser storage,
-Blob URL cleanup and logout/reload. Scenarios run at
-desktop 1440px and with touch/mobile emulation at 390px and 320px; they also detect
-horizontal overflow and uncaught browser exceptions.
+Браузерные тестовые данные перехватывают весь API приложения с искусственными
+пользователями, метаданными профилей и безвредной строкой скачивания. Проверяются
+создание/выбор владельца, назначение, переименование, скачивание, отмена
+и ожидание отзыва, подтверждение/история перезапусков, ошибки доставки,
+изоляция ролей, пустые/новые пользователи, все состояния профиля,
+недоступная PKI, потерянный ответ создания/идемпотентный повтор, пагинация
+свыше 100 профилей, загрузка/восстановление, начальный сбой сессии, чтение/изменения
+при истёкшей сессии, закрытие диалога клавиатурой, хранилище браузера,
+освобождение Blob URL и выход/перезагрузка. Сценарии выполняются на настольной
+ширине 1440px и с мобильной/сенсорной эмуляцией 390px и 320px; также обнаруживают
+горизонтальное переполнение и необработанные исключения браузера.
 
-These are frontend acceptance checks with API fixtures, not live Google OAuth,
-real-node VPN routing or production deployment tests. The backend/PKI integration
-checks from earlier stages remain separate. Broader security/integration checks
-are covered by [stage 7 acceptance](profile-security-acceptance.md); rollout and
-manual production acceptance require separate exact operator approval and stage 8
-preparation. Build output and local screenshots
-remain ignored/temporary. No commit, PR or publication is implied by these commands.
+Это приёмочные проверки фронтенда с имитацией API, а не реальные Google OAuth,
+маршрутизация VPN или рабочее развёртывание. Проверки интеграции бэкенда/PKI
+предыдущих этапов остаются отдельными. Более широкие проверки безопасности
+и интеграции покрывает [приёмка этапа 7](profile-security-acceptance.md);
+развёртывание и ручная рабочая приёмка требуют отдельного точного разрешения
+оператора и подготовки этапа 8. Результаты сборки и локальные снимки остаются
+игнорируемыми/временными. Эти команды не подразумевают коммит, PR или публикацию.

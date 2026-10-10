@@ -1,88 +1,93 @@
-# Google/profile panel rollout and recovery (stage 8)
+# Развёртывание панели Google/профилей и восстановление (этап 8)
 
-For the merged refactoring release, use the separately reviewed
-[API/web-only rollout](api-web-rollout.md). The full web role below also
-quiesces PKI and runs migrations; it is not the point-update procedure.
+Для слитого выпуска с рефакторингом используйте отдельно рассмотренное
+[развёртывание только API/web](api-web-rollout.md). Полная веб-роль ниже
+также останавливает работу PKI и выполняет миграции; это не процедура точечного обновления.
 
-This is the operator runbook for the completed development plan, not permission
-to deploy. Every real Google/cloud/host operation, CA export/import, service
-stop/start, VPN mount change and agent activation needs approval for the exact
-target/action under `AGENTS.md`. Do not execute production commands during a
-coding task. Only the new Veilway panel and dedicated AWS/Yandex nodes are in
-scope; the existing OpenVPN Access Server stays running and unchanged.
+Это операторская инструкция для завершённого плана разработки, а не разрешение
+развернуть систему. Каждая реальная операция Google/облака/хоста, экспорт/импорт
+CA, остановка/запуск сервиса, изменение монтирования VPN и активация агента
+требуют разрешения на точную цель/действие по `AGENTS.md`. Не выполняйте рабочие
+команды в задаче разработки. В объёме только новая панель Veilway и выделенные
+узлы AWS/Yandex; существующий OpenVPN Access Server остаётся работающим и неизменным.
 
-## Release prerequisites
+## Предварительные условия выпуска
 
-Use a reviewed coherent release of backend/frontend/PKI, migrations through
-`0006_legacy_profiles`, agent code and Ansible roles. Publish/merge PRs only after
-separate authorization and the repository's squash-merge checks. The staged
-development worktree is not evidence of a published or deployed release.
+Используйте рассмотренный согласованный выпуск бэкенда/фронтенда/PKI,
+миграций до `0006_legacy_profiles`, кода агентов и ролей Ansible.
+Публикуйте/сливайте PR только после отдельного разрешения и проверок squash merge
+репозитория. Рабочее дерево подготовленной разработки не доказывает
+публикацию или развёртывание выпуска.
 
-Before any apply, record privately: source revision and built image digests,
-intended dedicated hosts, data disk, CA fingerprint, highest used serial/CRL
-number, complete revoked set, publication version/hash/expiry, both node receipts,
-inventory/Compose paths and backup location. Obtain these only through the
-approved operator export/backup procedure and authenticated ADMIN status; do not
-discover existing secrets or dump host journals/service environments. Evidence
-and backups contain sensitive infrastructure/user data and must remain private.
+Перед применением приватно запишите: ревизию исходников и дайджесты собранных
+образов, предполагаемые выделенные хосты, диск данных, отпечаток CA, максимальные
+использованные номера serial/CRL, полный набор отзывов, версию/хеш/срок публикации,
+подтверждения обоих узлов, пути инвентаря/Compose и расположение копии.
+Получайте их только разрешённой операторской процедурой экспорта/копирования
+и через аутентифицированный статус ADMIN; не ищите существующие секреты
+и не выгружайте журналы хоста/окружение служб. Доказательства и копии содержат
+конфиденциальные инфраструктурные/пользовательские данные и должны оставаться закрытыми.
 
-The panel VM and its persistent disk must already be separately provisioned,
-with approved DNS/TLS and least-privilege restart permissions. The role may install
-packages, configure storage/firewall, build images, migrate the DB and stop/start
-panel containers. Approving deployment must cover these concrete actions; it
-never grants approval to modify the existing Access Server or unrelated resources.
+ВМ панели и постоянный диск уже должны быть отдельно созданы с разрешёнными
+DNS/TLS и минимальными правами перезапуска. Роль может устанавливать пакеты,
+настраивать хранилище/межсетевой экран, собирать образы, мигрировать БД и
+останавливать/запускать контейнеры панели. Разрешение развёртывания должно
+покрывать эти конкретные действия; оно никогда не разрешает изменения
+существующего Access Server или посторонних ресурсов.
 
-## Google and protected operator inputs
+## Google и защищённые данные оператора
 
-1. In the approved Google project create an OAuth client of type **Web
-   application**. Configure branding, audience and production availability for
-   the intended accounts. The exact authorized redirect URI is
-   `https://veilway.ru/api/v1/auth/google/callback`, without a trailing slash.
-   It must match the backend callback exactly. This application navigates to
-   the server; it has no browser Google SDK or browser-side client secret.
-   [Google's OIDC reference](https://developers.google.com/identity/openid-connect/reference).
-2. The application requests only `openid email`, with no Gmail mailbox access
-   or offline/refresh-token use. Do not use Google's Testing user list as the
-   VPN authorization boundary: basic identity scopes have an exception to that
-   allowlist. Registration remains USER with no profile access until assignment.
-   [Google's app-state overview](https://developers.google.com/identity/protocols/oauth2/production-readiness/overview).
-3. Copy `.env.example` to ignored `.env`, replace every placeholder privately,
-   and set `0600`. Do not `source` it, use shell history for secrets, paste real
-   email/credentials into commands or store them in inventory/extra-vars files.
-   The wrapper parses an allowlist without shell evaluation and rejects unknown
-   keys, placeholders, bad permissions, endpoints and duplicate agent tokens.
-4. `ADMIN_GOOGLE_EMAIL` is the actual operator's verified Gmail or
-   Google-authoritative Workspace account. Matching is case-insensitive without
-   Gmail dot/plus normalization. First matching login pins Google `sub` in the
-   singleton binding. Editing the email later cannot transfer ADMIN; recovery
-   must preserve that binding. There is no public admin-replacement API.
-5. Store only protected inventory under ignored `deploy/control-inventory.yml`
-   and the dedicated node inventory/host_vars; use `0600`. Use separate random
-   32–256 printable-character credentials for AWS/Yandex heartbeats and CRL
-   agents. Retain the current PostgreSQL password on upgrade: changing its file
-   does not rotate the existing database role password.
+1. В разрешённом проекте Google создайте OAuth-клиент типа **Веб-приложение**.
+   Настройте оформление, аудиторию и рабочую доступность для нужных записей.
+   Точный разрешённый URI перенаправления —
+   `https://veilway.ru/api/v1/auth/google/callback`, без завершающего слеша.
+   Он должен точно совпадать с callback бэкенда. Приложение переходит на сервер;
+   у него нет браузерного Google SDK или секрета клиента в браузере.
+   [Справочник Google OIDC](https://developers.google.com/identity/openid-connect/reference).
+2. Приложение запрашивает только `openid email` без доступа к почте Gmail
+   или автономного доступа/refresh-токенов. Не используйте список пользователей
+   Google Testing как границу VPN-авторизации: базовые области идентификации
+   имеют исключение из него. Регистрация остаётся USER без доступа к профилям
+   до назначения. [Обзор состояний приложения Google](https://developers.google.com/identity/protocols/oauth2/production-readiness/overview).
+3. Скопируйте `.env.example` в игнорируемый `.env`, приватно замените все
+   заполнители и задайте `0600`. Не выполняйте `source`, не используйте историю
+   оболочки для секретов, не вставляйте настоящие email/учётные данные в команды
+   и не храните их в инвентаре/extra-vars. Обёртка разбирает разрешённый список
+   без вычислений оболочки и отклоняет неизвестные ключи, заполнители, неверные
+   права, точки доступа и повторяющиеся токены агентов.
+4. `ADMIN_GOOGLE_EMAIL` — настоящая подтверждённая запись Gmail оператора
+   либо Workspace, для которой Google является доверенным источником.
+   Сравнение нечувствительно к регистру без нормализации точек/plus Gmail.
+   Первый подходящий вход закрепляет Google `sub` в единственной привязке.
+   Позднее редактирование email не передаёт ADMIN; восстановление должно сохранять
+   эту привязку. Публичного API замены администратора нет.
+5. Храните только защищённый инвентарь в игнорируемом `deploy/control-inventory.yml`
+   и инвентаре/host_vars выделенных узлов; используйте `0600`.
+   Для heartbeat и CRL-агентов AWS/Yandex используйте отдельные случайные
+   учётные данные из 32–256 печатных символов. При обновлении сохраняйте пароль
+   PostgreSQL: изменение файла не меняет пароль существующей роли БД.
 
-| Operator input | Protected runtime destination / use |
+| Вход оператора | Защищённое рабочее назначение / использование |
 | --- | --- |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ADMIN_GOOGLE_EMAIL` | Panel `secrets/google_client_id`, `google_client_secret`, `admin_google_email`, root `0400`; API sealed descriptors |
-| `POSTGRES_PASSWORD` | Panel `secrets/postgres_password`, root `0400`; DB initialization and API connection |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Panel root `0400` files; API restart only for the approved exact AWS instance |
-| `AWS_REGION`, `AWS_DIRECT_INSTANCE_ID`, `YC_REGION`, `YC_DIRECT_INSTANCE_ID` | Protected stdin to immutable two-node DB synchronization; no infrastructure values in browser responses |
-| `HEARTBEAT_AWS_DIRECT_TOKEN`, `HEARTBEAT_YC_DIRECT_TOKEN` | Separate node agents; only hashes synchronized into DB |
-| `CRL_AWS_DIRECT_TOKEN`, `CRL_YC_DIRECT_TOKEN` | Separate node CRL agents; only hashes synchronized into DB, not mounted into long-running API |
-| `PKI_CA_PASSPHRASE` | Panel `secrets/pki_ca_passphrase`, root `0600`, PKI-only mount/sealed descriptor |
-| `PKI_YC_ENDPOINT`, `PKI_AWS_ENDPOINT` | PKI-only `secrets/pki_endpoints`, root `0600`; plain IPv4, imported/frozen mapping, Multi-hop uses Yandex |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ADMIN_GOOGLE_EMAIL` | Панель: `secrets/google_client_id`, `google_client_secret`, `admin_google_email`, root `0400`; запечатанные дескрипторы API |
+| `POSTGRES_PASSWORD` | Панель: `secrets/postgres_password`, root `0400`; инициализация БД и соединение API |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Файлы root `0400` панели; API перезапуска только разрешённого точного экземпляра AWS |
+| `AWS_REGION`, `AWS_DIRECT_INSTANCE_ID`, `YC_REGION`, `YC_DIRECT_INSTANCE_ID` | Защищённый stdin неизменной синхронизации двух узлов БД; инфраструктурных значений в ответах браузеру нет |
+| `HEARTBEAT_AWS_DIRECT_TOKEN`, `HEARTBEAT_YC_DIRECT_TOKEN` | Отдельные агенты узлов; в БД синхронизируются только хеши |
+| `CRL_AWS_DIRECT_TOKEN`, `CRL_YC_DIRECT_TOKEN` | Отдельные CRL-агенты узлов; в БД только хеши, без монтирования в постоянный API |
+| `PKI_CA_PASSPHRASE` | Панель: `secrets/pki_ca_passphrase`, root `0600`, монтирование/запечатанный дескриптор только PKI |
+| `PKI_YC_ENDPOINT`, `PKI_AWS_ENDPOINT` | `secrets/pki_endpoints` только PKI, root `0600`; обычные IPv4, импортированное/закреплённое сопоставление, Multi-hop через Yandex |
 
-Default secret root is `/etc/veilway-control/secrets`; it is root `0700`.
-The operator `.env` is consumed on the operator machine, not copied wholesale
-to the host. Ansible uses `no_log` for secret writes/stdin. The deployed
-`/opt/veilway-control/app/.env` contains **only runtime paths**, root `0600`:
-data, API socket, PKI socket and secret roots. It contains no credential values.
-Compose loads this project file for path interpolation; keep it with the manifest
-and use the same settings for maintenance commands.
-[Compose interpolation](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/).
+Корень секретов по умолчанию — `/etc/veilway-control/secrets`, root `0700`.
+Операторский `.env` обрабатывается на машине оператора, не копируется целиком
+на хост. Ansible использует `no_log` при записи секретов и stdin.
+Развёрнутый `/opt/veilway-control/app/.env` содержит **только рабочие пути**,
+root `0600`: данные, сокет API, сокет PKI и корни секретов. Значений учётных
+данных в нём нет. Compose загружает файл проекта для подстановки путей;
+храните его с манифестом и используйте те же настройки в командах обслуживания.
+[Подстановки Compose](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/).
 
-Validation-only commands on the operator checkout contact no host:
+Команды только для проверки в рабочей копии оператора не обращаются к хостам:
 
 ```bash
 scripts/deploy-web-control.py web
@@ -92,50 +97,54 @@ scripts/deploy-web-control.py crl --limit aws-direct
 scripts/deploy-web-control.py crl --limit yc-direct
 ```
 
-`--apply` is the explicit execution switch and must only be added after exact
-approval; never add it during development validation. Public example inventories
-contain documentation addresses only and must not be used for a real apply.
+`--apply` — явный переключатель выполнения, добавляемый только после точного
+разрешения; никогда не добавляйте его при проверке разработки. Публичные примеры
+инвентаря содержат только адреса документации и не подходят для реального применения.
 
-## Ordered handover and cutover
+## Порядок передачи управления и переключения
 
-Scope update 2026-10-06: retain the existing dedicated Veilway CA and existing
-client connectivity; do not replace server certificates or wrapping keys to
-start fresh. CA history and legacy client materials have separate imports.
-Use the [legacy profile migration procedure](legacy-profile-migration.md)
-after importing the same CA to populate USER cabinets without reissuing.
-Development status is tracked in the [migration plan](pki-evolution-plan.md). Future ADMIN CA
-creation/registration, node rollout and retirement are outside this cutover.
+Уточнение объёма от 2026-10-06: сохранить существующий выделенный CA Veilway
+и связность существующих клиентов; не заменять серверные сертификаты или
+ключи обёртки ради нового старта. История CA и старые клиентские материалы
+импортируются отдельно. Используйте [процедуру миграции старых профилей](legacy-profile-migration.md)
+после импорта того же CA, чтобы заполнить кабинеты USER без перевыпуска.
+Статус разработки отслеживается в [плане миграции](pki-evolution-plan.md).
+Будущие создание/регистрация CA через ADMIN, развёртывание на узлах и вывод
+из эксплуатации вне этого переключения.
 
-1. **Freeze the old authority.** Approve an operator maintenance window and
-   stop all writers/automation for the dedicated Veilway CA. Upgrade every
-   operator checkout to the guarded release. In each approved checkout run:
+1. **Заморозьте прежний источник записи.** Разрешите окно обслуживания оператора
+   и остановите все источники записи/автоматизацию выделенного CA Veilway.
+   Обновите все операторские копии до выпуска с защитой. В каждой разрешённой
+   копии выполните:
 
    ```bash
    scripts/veilway-pki handover --confirm-server-managed
    ```
 
-   The command holds `.writer.lock`, waits for guarded writers and creates a
-   private `.server-managed` marker. It does not alter CA material. All local
-   init/server/transit/profile changes then fail before touching CA inputs.
-   Keep the marker on every clone/export of that operator CA. Old program
-   versions and direct OpenSSL invocations do not obey this guard: retire those
-   writers explicitly. There is no automatic unfreeze or fallback authority.
-2. **Take a pre-switch backup and coherent import export.** Reconcile the latest
-   registry/CRL and counters, retain the entire historical `newcerts` set, and
-   record a protected coherent backup before web migration. Prepare exactly the
-   [PKI import allowlist](pki-service.md#manual-import-only-after-approval), with
-   encrypted PKCS#8 CA key and all three endpoint wrapping keys. Do not include
-   legacy client/server private keys or old `.ovpn` in the import bundle.
-3. **Deploy the reviewed panel under exact approval.** The wrapper's web apply
-   quiesces existing API/web/PKI containers before copying code and migrating.
-   DB persists; no node restart happens. It installs allowlisted build inputs,
-   runtime paths/secrets, migrates through 0006, synchronizes the two VM/agent
-   hashes and starts four containers. Migration 0003 logs out everyone and
-   disables legacy password access. Interrupted deployment stays in maintenance;
-   repair forward without restoring stale CA/CRL or starting old writers.
-4. **Import once.** With the separately approved PKI service stop, stage the
-   allowlisted bundle outside Git/build contexts, directory `0700`, files `0600`,
-   numeric owner 10002. On the approved panel host, with default paths:
+   Команда удерживает `.writer.lock`, ждёт защищённые процессы записи и создаёт
+   закрытый маркер `.server-managed`. Материалы CA не меняются. Все локальные
+   изменения init/server/transit/profile затем завершаются ошибкой до чтения
+   входов CA. Сохраняйте маркер в каждом клоне/экспорте операторского CA.
+   Старые версии программ и прямой OpenSSL не соблюдают защиту: явно выведите
+   эти источники записи из использования. Автоматического снятия заморозки
+   или резервного источника записи нет.
+2. **Сделайте копию до переключения и согласованный экспорт импорта.**
+   Сверьте последний реестр/CRL и счётчики, сохраните всю историю `newcerts`
+   и защищённую согласованную копию до веб-миграции. Подготовьте ровно
+   [разрешённый набор импорта PKI](pki-service.md#ручной-импорт-только-после-разрешения)
+   с зашифрованным ключом CA PKCS#8 и всеми тремя ключами обёртки точек доступа.
+   Не включайте старые закрытые клиентские/серверные ключи или `.ovpn`.
+3. **Разверните рассмотренную панель по точному разрешению.** Применение web
+   обёрткой останавливает существующие API/web/PKI до копирования кода и миграции.
+   БД сохраняется; узлы не перезапускаются. Устанавливаются разрешённые входы
+   сборки, рабочие пути/секреты, миграции до 0006, синхронизируются хеши двух
+   ВМ/агентов и запускаются четыре контейнера. Миграция 0003 завершает все
+   сессии и отключает старый парольный доступ. Прерванное развёртывание остаётся
+   в обслуживании; исправляйте вперёд без восстановления старых CA/CRL
+   или запуска старых источников записи.
+4. **Импортируйте один раз.** При отдельно разрешённой остановке PKI разместите
+   комплект вне Git/контекстов сборки, каталог `0700`, файлы `0600`, числовой
+   владелец 10002. На разрешённом хосте панели с путями по умолчанию:
 
    ```bash
    docker compose --file /opt/veilway-control/app/compose.yaml stop pki
@@ -144,61 +153,68 @@ creation/registration, node rollout and retirement are outside this cutover.
    docker compose --file /opt/veilway-control/app/compose.yaml up --detach pki
    ```
 
-   Each stop/import/start needs the specified approval. Import validates complete
-   history, counters, current CRL, encryption/signatures and endpoint keys; it
-   refuses an existing committed store. An empty PKI fails closed until import.
-   Use fixed readiness/error messages, never dump configuration/material.
-   Remove the staging bundle through the approved protected cleanup procedure.
-5. **Bootstrap dedicated CRL agents, separately per node.** Use the validated
-   wrapper with approved `crl --limit NODE --apply`, initially without timer
-   enablement. Bootstrap preserves existing valid CRL/CA and installs isolated
-   agent credentials. It does not restart OpenVPN. Agent installation alone
-   does not prove mount cutover or revocation enforcement.
-6. **Switch dedicated server mounts.** Persist `veilway_crl_agent_managed: true`
-   in both private node inventories, including whichever inventory supplies
-   the general `deploy/site.yml`. Approve the precise config/container changes.
-   Direct, Yandex ingress and AWS transit must use
-   `crl-verify /etc/veilway/crl/crl.pem` and directory bind
-   `/var/lib/veilway-crl:/etc/veilway/crl:ro`. Never mount the individual CRL file.
-   General deployment skips local CRL copying in managed mode; a marker or
-   bootstrapped remote CRL blocks accidentally returning to legacy mode even
-   from another workstation. Do not remove remote CRL to bypass that guard.
-7. **Enable polling only after mount confirmation.** Approve each exact timer
-   activation and use `crl --limit NODE --enable-crl-agent --apply`. The role
-   checks managed inventory, explicit mount acknowledgement and read-only
-   directory mounts. See [full CRL cutover procedure](crl-delivery.md).
-8. **Open issuance only after gates pass.** As ADMIN check publisher state,
-   correct CA, current signed publication and both node receipts, then perform
-   [approved live acceptance](profile-security-acceptance.md#separate-operator-procedure-for-real-vpn-acceptance).
-   Do not issue user access before these gates. Verify ADMIN/USER, own-only
-   download, all modes/expiry and revoked reconnect behavior. New USER remains
-   empty until assigned. Existing legacy profiles enter the cabinet through
-   [legacy profile import](legacy-profile-migration.md); server certificate maintenance needs its own reviewed
-   authoritative procedure, not the disabled workstation signer.
-9. **Take the first post-handover coherent backup.** Preserve the local marker,
-   managed inventories, current publication and all acknowledgement evidence.
-   Declare server PKI the sole authority. Never redeploy a local CRL or restore
-   a pre-handover CA as a quick application rollback.
+   Каждая остановка/импорт/запуск требует указанного разрешения. Импорт проверяет
+   полную историю, счётчики, текущий CRL, шифрование/подписи и ключи точек доступа;
+   отклоняет существующее зафиксированное хранилище. Пустая PKI блокирует операции
+   до импорта. Используйте фиксированные сообщения готовности/ошибки,
+   не выгружайте конфигурацию/материалы. Удалите промежуточный комплект
+   разрешённой защищённой процедурой очистки.
+5. **Подготовьте выделенные CRL-агенты отдельно на каждом узле.** Используйте
+   проверенную обёртку с разрешённым `crl --limit NODE --apply`, сначала без
+   таймера. Подготовка сохраняет действительные CRL/CA и устанавливает
+   изолированные учётные данные агента. OpenVPN не перезапускается.
+   Одна установка агента не доказывает переключение монтирования или применение отзыва.
+6. **Переключите монтирования выделенных серверов.** Сохраните
+   `veilway_crl_agent_managed: true` в обоих закрытых инвентарях узлов,
+   включая инвентарь для общего `deploy/site.yml`. Разрешите точные изменения
+   конфигурации/контейнеров. Direct, вход Yandex и транзит AWS должны использовать
+   `crl-verify /etc/veilway/crl/crl.pem` и монтирование каталога
+   `/var/lib/veilway-crl:/etc/veilway/crl:ro`. Никогда не монтируйте отдельный файл
+   CRL. Общее развёртывание пропускает локальный CRL в управляемом режиме;
+   маркер или установленный удалённый CRL блокирует случайный возврат к старому
+   режиму даже с другой рабочей станции. Не удаляйте удалённый CRL ради обхода защиты.
+7. **Включите опрос только после подтверждения монтирования.** Разрешите
+   активацию каждого конкретного таймера и используйте
+   `crl --limit NODE --enable-crl-agent --apply`. Роль проверяет управляемый
+   инвентарь, явное подтверждение и монтирования каталогов только для чтения.
+   См. [полную процедуру переключения CRL](crl-delivery.md).
+8. **Откройте выпуск только после прохождения условий.** Как ADMIN проверьте
+   издателя, правильный CA, текущую подписанную публикацию и оба подтверждения,
+   затем выполните [разрешённую реальную приёмку](profile-security-acceptance.md#отдельная-операторская-процедура-приёмки-реального-vpn).
+   Не выдавайте доступ до этих условий. Проверьте ADMIN/USER, скачивание только
+   своего, все режимы/срок и повторное подключение после отзыва. Новый USER
+   остаётся пустым до назначения. Старые профили входят в кабинет через
+   [импорт старых профилей](legacy-profile-migration.md); обслуживание серверных
+   сертификатов требует собственной рассмотренной процедуры в единственном
+   актуальном источнике, а не отключённого подписанта рабочей станции.
+9. **Сделайте первую согласованную копию после передачи.** Сохраните локальный
+   маркер, управляемые инвентари, текущую публикацию и все подтверждения.
+   Объявите серверную PKI единственным источником записи. Никогда не
+   развёртывайте локальный CRL и не восстанавливайте CA до передачи как быстрый
+   откат приложения.
 
-## Coherent backup
+## Согласованное резервное копирование
 
-Obtain exact approval for panel maintenance and private backup/export. Use an
-encrypted operator-controlled backup volume with `0700` directory/`0600` outputs;
-protect account metadata, private profiles, CA registry and receipts as secrets.
-Keep CA passphrase and reusable runtime credentials in a separate protected vault.
-Do not export them into the same archive or any public artifact.
+Получите точное разрешение на обслуживание панели и закрытое копирование/экспорт.
+Используйте зашифрованный том под управлением оператора с каталогом `0700`
+и результатами `0600`; защищайте метаданные записей, закрытые профили,
+реестр CA и подтверждения как секреты. Пароль CA и повторно используемые рабочие
+учётные данные храните в отдельном защищённом хранилище. Не экспортируйте их
+в тот же архив или публичные артефакты.
 
-Quiesce API/web/PKI and all other CA writers; wait for graceful in-flight completion.
-Node agents may continue reading an already published valid CRL. Capture their
-version/hash/expiry baseline privately; do not lower it later. With default paths
-on the approved panel host and a prepared encrypted `/private/veilway-backup`:
+Остановите работу API/web/PKI и всех остальных источников записи CA; дождитесь
+корректного завершения текущих операций. Агенты узлов могут читать уже
+опубликованный действительный CRL. Приватно сохраните исходную
+версию/хеш/срок; впоследствии не уменьшайте её. С путями по умолчанию на разрешённом
+хосте панели и подготовленным зашифрованным `/private/veilway-backup`:
 
-For the original three-container panel, stop only `api web` (there is no `pki`
-service), then run the same database dump. Its pre-switch backup pairs that DB
-with the frozen authoritative operator CA backup/export; do not try to archive
-a nonexistent server PKI store. The full `pki.tar` command below applies after
-a committed server import. Retain the initial backup for forward reconciliation,
-without reopening the disabled workstation writer or legacy password login.
+Для исходной панели с тремя контейнерами остановите только `api web`
+(сервиса `pki` нет), затем выполните ту же выгрузку БД. Копия до переключения
+связывает БД с замороженной актуальной операторской копией/экспортом CA;
+не архивируйте несуществующее серверное хранилище PKI. Полная команда `pki.tar`
+ниже применима после зафиксированного серверного импорта. Сохраните исходную
+копию для дальнейшей сверки, не открывая снова отключённую запись рабочей станции
+или старый вход по паролю.
 
 ```bash
 umask 077
@@ -210,35 +226,40 @@ tar --numeric-owner -cpf /private/veilway-backup/pki.tar \
   -C /srv/veilway-control pki
 ```
 
-Run only the approved operations; check command exit status and backup integrity
-before any resumption. `pg_dump` is consistent for PostgreSQL, but it does not
-coordinate with PKI: the common writer freeze is required.
+Выполняйте только разрешённые операции; проверьте код завершения команд
+и целостность копии до возобновления работы. `pg_dump` согласован для
+PostgreSQL, но не координируется с PKI: общая заморозка записи обязательна.
 [PostgreSQL 17 pg_dump](https://www.postgresql.org/docs/17/app-pgdump.html).
 
-The PKI archive must include `CURRENT`, its complete referenced generation,
-registry/newcerts/counters, private profile files, receipts and endpoint wrapping
-keys. Keep ownership 10002, directories `0700`, files `0600`; do not flatten,
-re-encrypt individual keys inconsistently or drop receipts. A CA key alone cannot
-recover issued profiles or safe retries. PostgreSQL backup includes users and
-ADMIN binding, profile owners/jobs/idempotency, restart history, audit, CRL
-publications and durable node acknowledgements. Pair archives by the same frozen
-maintenance point, source revision and CA/publication evidence.
+Архив PKI должен включать `CURRENT`, полное связанное поколение,
+реестр/newcerts/счётчики, закрытые файлы профилей, подтверждения и ключи обёртки
+точек доступа. Сохраняйте владельца 10002, каталоги `0700`, файлы `0600`;
+не уплощайте структуру, не перешифровывайте отдельные ключи несогласованно
+и не отбрасывайте подтверждения. Один ключ CA не восстановит выпущенные
+профили или безопасные повторы. Копия PostgreSQL включает пользователей
+и привязку ADMIN, владельцев/задания/идемпотентность профилей, историю
+перезапусков, аудит, публикации CRL и устойчивые подтверждения узлов.
+Связывайте архивы одной точкой замороженного обслуживания, ревизией кода
+и доказательствами CA/публикаций.
 
-Retain reviewed code/images/Compose plus private runtime-path settings and managed
-inventories. Optional Caddy TLS state is private too; rebuilding ACME state needs
-its own approved operation. Verify an isolated restore before considering a
-backup usable. Securely handle or remove temporary plaintext archives under
-operator policy. Resume only the separately approved panel services afterward.
+Сохраните рассмотренные код/образы/Compose, закрытые настройки рабочих путей
+и управляемые инвентари. Необязательное состояние TLS Caddy тоже закрыто;
+восстановление ACME требует отдельного разрешения. Проверьте изолированное
+восстановление, прежде чем считать копию пригодной. Защищайте или удаляйте
+временные незашифрованные архивы по политике оператора. Затем возобновляйте
+только отдельно разрешённые сервисы панели.
 
-## Restore and rollback
+## Восстановление и откат
 
-1. Keep panel writers and issuance stopped. Preserve the current live state
-   first; do not overwrite it with a candidate restore. Restore into a fresh
-   isolated target, with reviewed image versions and matching migration schema.
-2. Restore the paired full PKI archive and DB dump with original numeric
-   permissions and separately provisioned protected secrets. Do not run
-   `import-ca` over a restored committed store. With a verified empty candidate
-   database already initialized under the approved matching Compose setup:
+1. Сохраняйте запись панели и выпуск остановленными. Сначала сохраните текущее
+   рабочее состояние; не перезаписывайте его кандидатом восстановления.
+   Восстанавливайте в новую изолированную цель с рассмотренными версиями
+   образов и соответствующей схемой миграций.
+2. Восстановите парные полный архив PKI и выгрузку БД с исходными числовыми
+   правами и отдельно подготовленными защищёнными секретами. Не запускайте
+   `import-ca` поверх восстановленного зафиксированного хранилища.
+   Для проверенной пустой БД кандидата, уже инициализированной в разрешённой
+   соответствующей конфигурации Compose:
 
    ```bash
    docker compose --file /opt/veilway-control/app/compose.yaml exec -T db \
@@ -247,53 +268,60 @@ operator policy. Resume only the separately approved panel services afterward.
      < /private/veilway-backup/control.dump
    ```
 
-   This is a candidate-target command, never an instruction to overwrite a live
-   database. Do not add `--clean`, downgrade migrations or delete publications.
+   Это команда для цели-кандидата, а не указание перезаписать рабочую БД.
+   Не добавляйте `--clean`, не откатывайте миграции и не удаляйте публикации.
    [PostgreSQL 17 pg_restore](https://www.postgresql.org/docs/17/app-pgrestore.html).
-3. Reconcile candidate CA fingerprint, complete revoked set, registry/newcerts,
-   highest used serial and CRL counter against the private latest baseline and
-   node-installed versions. Verify profile owner/UUID/job keys, publication
-   hashes, receipts and pinned ADMIN subject. Account for every post-backup issue,
-   revoke, assignment and receipt. If completeness cannot be proven, keep
-   stopped; an old backup cannot reconstruct unknown newer CA operations safely.
-4. Never lower counters or remove a revoked serial. Agents reject rollback,
-   same-version changed bytes and incomplete revoked sets. A stale candidate
-   must be reconciled using authoritative current data under a reviewed repair;
-   changing agent state to accept a rollback is not recovery. Local handover
-   markers and managed inventories remain enabled throughout.
-5. Invalidate restored browser sessions/OAuth attempts under a specifically
-   approved DB operation before reopening the candidate. Preserve `users` and
-   `google_admin_binding`; never bootstrap a different ADMIN merely by editing
-   email. Lost operator Google identity requires a separate reviewed account
-   recovery procedure. Rotate a compromised agent/provider credential separately
-   and synchronize both sides; reissuing unrelated tokens silently breaks delivery.
-6. Validate the candidate through the same local checks and approved acceptance,
-   then separately approve service startup/cutover. Resume durable jobs with
-   their original keys: do not create substitute profiles for ambiguous outcomes.
-   After node acknowledgements, take a new coherent backup. An application-only
-   rollback may reuse a compatible reviewed image with the same newest DB/PKI
-   state; it must not roll back cryptographic state or revive legacy password login.
+3. Сверьте отпечаток CA кандидата, полный набор отзывов, реестр/newcerts,
+   максимальный serial и счётчик CRL с закрытым последним состоянием и
+   установленными на узлах версиями. Проверьте владельца/UUID/ключи заданий
+   профилей, хеши публикаций, подтверждения и закреплённый субъект ADMIN.
+   Учтите каждый выпуск, отзыв, назначение и подтверждение после копии.
+   Если полноту нельзя доказать, оставайтесь остановленными: старая копия
+   не может безопасно восстановить неизвестные новые операции CA.
+4. Никогда не уменьшайте счётчики и не удаляйте отозванный номер. Агенты
+   отклоняют откат, изменённые байты той же версии и неполные отзывы.
+   Устаревший кандидат должен сверяться с актуальными достоверными данными
+   в рассмотренной процедуре исправления; изменение состояния агента ради
+   принятия отката не является восстановлением. Локальные маркеры передачи
+   и управляемые инвентари остаются включёнными всё время.
+5. Аннулируйте восстановленные браузерные сессии/попытки OAuth отдельно
+   разрешённой операцией БД перед открытием кандидата. Сохраните `users`
+   и `google_admin_binding`; никогда не создавайте другого ADMIN простым
+   редактированием email. Потеря Google-записи оператора требует отдельной
+   рассмотренной процедуры восстановления аккаунта. Меняйте скомпрометированные
+   учётные данные агента/провайдера отдельно и синхронизируйте обе стороны;
+   незаметный перевыпуск посторонних токенов нарушает доставку.
+6. Проверьте кандидата теми же локальными проверками и разрешённой приёмкой,
+   затем отдельно разрешите запуск/переключение сервисов. Возобновляйте
+   устойчивые задания с исходными ключами: не создавайте заменяющие профили
+   для неопределённых результатов. После подтверждений узлов сделайте новую
+   согласованную копию. Откат только приложения может использовать совместимый
+   рассмотренный образ с тем же новейшим состоянием БД/PKI; нельзя откатывать
+   криптографическое состояние или возвращать старый парольный вход.
 
-## Local release evidence and limits
+## Локальные подтверждения выпуска и ограничения
 
-`scripts/check.sh` includes three temporary rollout tests: no-contact input
-validation/redaction, flock handover and real Ansible check-mode behavior for
-stale CRL copying/legacy guards. The Ansible fixture includes only authority/PKI
-tasks, uses synthetic files and localhost with `--check`; it does not run host,
-network or service phases. Do not run a general production `--check` against
-real nodes casually: fact gathering still connects to them.
+`scripts/check.sh` включает три временных теста развёртывания: проверку/скрытие
+входов без обращения к хостам, передачу flock и реальное поведение Ansible
+в режиме проверки для устаревшего копирования CRL/защиты старого режима.
+Тестовые данные Ansible включают только задачи authority/PKI, используют
+искусственные файлы и localhost с `--check`; не запускают этапы хоста,
+сети или служб. Не запускайте общий рабочий `--check` на реальных узлах
+без рассмотрения: сбор фактов всё равно подключается к ним.
 
-`scripts/test-pki-service.sh --build` now passes 18 tests, including coherent
-store restore with all modes, receipts, unchanged download/counters/CRL and
-continued monotonic issue/revoke operations. `scripts/test-control-plane.sh --build`
-uses the full backend/PKI/agent/PostgreSQL suite and then exercises
-the actual production API image/migrations/VM sync against disposable Compose.
-Its PostgreSQL smoke also runs actual custom-format `pg_dump`/`pg_restore` and
-checks restored ADMIN binding, revoked profile, node acknowledgement and schema.
-All materials are temporary synthetic fixtures; these checks do not authorize
-or prove actual production backup, Google setup, DNS/TLS or VPN routing.
+`scripts/test-pki-service.sh --build` проходит 18 тестов, включая согласованное
+восстановление хранилища со всеми режимами, подтверждениями, неизменными
+скачиванием/счётчиками/CRL и последующим монотонным выпуском/отзывом.
+`scripts/test-control-plane.sh --build` использует полный набор
+бэкенд/PKI/агент/PostgreSQL, затем проверяет настоящий рабочий образ API,
+миграции и синхронизацию ВМ в одноразовом Compose. Его smoke-тест PostgreSQL
+также выполняет реальные `pg_dump`/`pg_restore` пользовательского формата
+и проверяет восстановленные привязку ADMIN, отозванный профиль, подтверждение
+узла и схему. Все материалы — временные искусственные данные; эти проверки
+не разрешают и не доказывают рабочие копии, настройку Google, DNS/TLS или
+маршрутизацию VPN.
 
-Run release checks from a public clean-input checkout:
+Запускайте проверки выпуска из рабочей копии с чистыми публичными входами:
 
 ```bash
 scripts/check.sh
@@ -303,8 +331,9 @@ scripts/test-profile-panel.sh --build
 python3 scripts/check-public-diff.py --all-public --history
 ```
 
-Docker test builds explicitly obtain dependencies/base images; preload the
-fixed `postgres:17.4-alpine` fixture if missing. ShellCheck is checked only if
-already installed. See [stage 7 evidence and live procedure](profile-security-acceptance.md)
-for browser/proxy security checks and residual live acceptance. Development
-completion, PR publication, deployment and live acceptance are separate statuses.
+Тестовые сборки Docker явно получают зависимости/базовые образы; заранее
+загрузите фиксированный `postgres:17.4-alpine`, если его нет. ShellCheck
+проверяется только если уже установлен. См. [подтверждения этапа 7 и реальную
+процедуру](profile-security-acceptance.md) для безопасности браузера/прокси
+и оставшейся реальной приёмки. Завершение разработки, публикация PR,
+развёртывание и реальная приёмка — отдельные статусы.

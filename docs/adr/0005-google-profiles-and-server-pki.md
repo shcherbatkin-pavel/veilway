@@ -1,86 +1,94 @@
-# ADR 0005: Google identities, owned profiles and authoritative server PKI
+# ADR 0005: Учётные записи Google, владельцы профилей и единая серверная PKI
 
-- Status: accepted
-- Date: 2026-10-05
-- Supersedes ADR 0004's password login, three-container count and exclusion of
-  registration/profile management/PKI; its restart allowlist and cloud permissions
-  remain applicable.
+- Статус: принято
+- Дата: 2026-10-05
+- Заменяет вход по паролю, число контейнеров (три) и исключение регистрации,
+  управления профилями и PKI из ADR 0004; его список разрешённых узлов
+  перезапуска и облачные права остаются применимыми.
 
-## Context
+## Контекст
 
-The operator needs to issue VPN access to individual registered users, expose
-their profile expiry and download, and revoke access without distributing CA
-material across administration processes. The approved staged implementation
-adds these functions to the existing public restart panel.
+Оператору нужно выдавать VPN-доступ отдельным зарегистрированным пользователям,
+показывать срок действия профилей и скачивание, отзывать доступ без
+распространения материалов CA между процессами администрирования. Согласованная
+поэтапная реализация добавляет эти функции в существующую публичную панель перезапусков.
 
-## Decision
+## Решение
 
-`https://veilway.ru` hosts Caddy/React, FastAPI, PostgreSQL and an isolated PKI
-service. Only Caddy publishes TCP/80+443. Caddy/API and API/PKI communicate over
-separate Unix sockets. PKI has no network, Docker socket, cloud credentials or
-access to PostgreSQL; only it mounts private CA/profile storage. Its encrypted
-CA passphrase is a separate protected runtime input. The API receives private
-profiles only through bounded authenticated download operations.
+`https://veilway.ru` размещает Caddy/React, FastAPI, PostgreSQL и изолированный
+сервис PKI. Только Caddy публикует TCP/80+443. Caddy/API и API/PKI общаются через
+отдельные Unix-сокеты. У PKI нет сети, сокета Docker, облачных учётных данных
+или доступа к PostgreSQL; только она монтирует закрытое хранилище CA и профилей.
+Пароль зашифрованного CA — отдельный защищённый вход времени выполнения.
+API получает закрытые профили только через ограниченные аутентифицированные
+операции скачивания.
 
-Google authorization-code OIDC uses only `openid email`. Registration is automatic
-and gives USER without VPN access. The configured verified, Google-authoritative
-operator email bootstraps one ADMIN and pins its Google `sub` in PostgreSQL;
-later email/config changes cannot transfer that role. Password login is disabled.
-Sessions remain server-side, with Secure/HttpOnly host cookies and session-bound
-CSRF. USER visibility is filtered by owner in SQL, including jobs and downloads.
-Only ADMIN can create, assign, rename or revoke profiles and manage the two nodes.
+Google OIDC с кодом авторизации использует только `openid email`. Регистрация
+автоматическая и даёт USER без VPN-доступа. Настроенный подтверждённый email
+оператора, для которого Google является доверенным источником, первоначально
+создаёт одного ADMIN и закрепляет его Google `sub` в PostgreSQL; последующие
+изменения email или конфигурации не могут передать эту роль. Вход по паролю
+отключён. Сессии остаются серверными, с cookie хоста Secure/HttpOnly и CSRF,
+привязанным к сессии. Видимость USER фильтруется по владельцу в SQL, включая
+задания и скачивания. Только ADMIN создаёт, назначает, переименовывает и отзывает
+профили и управляет двумя узлами.
 
-The original stages 1–8 managed only new profiles. The 2026-10-06 scope extension
-adds [explicit operator import of existing profiles](../legacy-profile-migration.md)
-without reissuing or changing existing client files. Profiles use immutable UUID identities, unique
-keys per device/mode, explicit expiry (default 365 days, bounded by CA lifetime),
-durable idempotency keys and immutable assigned owners. Imported registry history
-preserves legacy certificates/revocations without adopting legacy users or
-private profiles automatically. Separate offline import validates original
-materials; metadata synchronization creates unassigned records and ADMIN
-explicitly assigns registered USER owners. Downloads may repeat while active
-and are never cached.
+Исходные этапы 1–8 управляли только новыми профилями. Расширение объёма от
+2026-10-06 добавляет [явный операторский импорт существующих профилей](../legacy-profile-migration.md)
+без перевыпуска или изменения клиентских файлов. Профили используют неизменные
+UUID, уникальные ключи на устройство/режим, явный срок действия (по умолчанию
+365 дней, в пределах срока CA), устойчивые к сбоям ключи идемпотентности и
+неизменных назначенных владельцев. Импорт истории реестра сохраняет старые
+сертификаты и отзывы, но автоматически не добавляет старых пользователей или
+закрытые профили. Отдельный автономный импорт проверяет исходные материалы;
+синхронизация метаданных создаёт записи без владельцев, а ADMIN явно назначает
+зарегистрированных USER. Пока профиль активен, его можно скачивать повторно;
+скачивания никогда не кэшируются.
 
-The existing dedicated Veilway CA is imported once; no replacement CA is generated.
-After the approved handover, the server store is the single CA writer. Full
-registry/newcerts, serial/CRL counters and revocations are preserved. Local CLI
-writers serialize using a shared flock and are disabled by a persistent private
-`.server-managed` marker, set under that same lock. This marker must accompany
-all operator copies; it has no automatic undo. Server/legacy certificate
-maintenance needs a separately reviewed authoritative procedure, never resuming
-the stale local CA.
+Существующий выделенный CA Veilway импортируется один раз; новый CA для замены
+не создаётся. После согласованной передачи серверное хранилище — единственный
+источник записи CA. Полный реестр/newcerts, счётчики serial/CRL и отзывы сохраняются.
+Локальная запись CLI сериализуется общим flock и отключается постоянным закрытым
+маркером `.server-managed`, установленным под той же блокировкой. Этот маркер
+должен сопровождать все операторские копии; автоматической отмены нет.
+Обслуживание серверных и старых сертификатов требует отдельно рассмотренной
+процедуры в единственном актуальном источнике; устаревший локальный CA не возобновляется.
 
-CRLs are signed full publications with monotonic versions and preserved revoked
-sets. Dedicated outgoing agents atomically install them into directory mounts.
-`revoking` blocks downloads immediately; `revoked` waits for the required node's
-valid durable receipt. Agents never restart VPN servers or forcibly end existing
-sessions. General VPN deployment skips local CRL copying in managed mode and
-rejects legacy mode after local handover or remote agent bootstrap, protecting
-against an old inventory/workstation overwriting revocations.
+CRL публикуются как подписанные полные списки с монотонными версиями и сохранёнными
+наборами отзывов. Выделенные исходящие агенты атомарно устанавливают их в
+монтируемые каталоги. `revoking` сразу блокирует скачивание; `revoked` ждёт
+корректного устойчивого подтверждения нужного узла. Агенты никогда не перезапускают
+VPN-серверы и не завершают активные сессии принудительно. Общее развёртывание VPN
+пропускает копирование локальных CRL в управляемом режиме и отклоняет старый
+режим после локальной передачи или начальной установки удалённого агента,
+защищая отзывы от перезаписи старым инвентарём или рабочей станцией.
 
-The panel deployment quiesces existing API/web/PKI containers before replacing
-code and applying migrations; PostgreSQL persists. An operator-approved coherent
-backup must precede deployment. Backup/recovery pairs PostgreSQL with the full
-PKI store and node/version evidence. Restoring an old database or CA independently,
-lowering counters, discarding receipts or deleting revocations is prohibited.
-Unprovable post-backup changes keep writers stopped for operator reconciliation.
+Развёртывание панели останавливает работу существующих контейнеров API/web/PKI
+перед заменой кода и применением миграций; PostgreSQL сохраняется. Перед
+развёртыванием нужна разрешённая оператором согласованная резервная копия.
+Копирование и восстановление связывают PostgreSQL с полным хранилищем PKI и
+подтверждениями узлов/версий. Запрещено независимо восстанавливать старую БД или
+CA, уменьшать счётчики, отбрасывать подтверждения или удалять отзывы. Если
+изменения после резервной копии нельзя доказать, запись остаётся остановленной
+до сверки оператором.
 
-## Consequences
+## Последствия
 
-The panel VM's protected disk and encrypted backups now contain private CA and
-client material. This deliberately replaces the earlier workstation-only CA
-rule; VPN nodes still never receive the CA private key. UID/DAC separation,
-encrypted CA storage, minimal RPC and explicit maintenance reduce exposure but
-do not remove the panel host trust boundary. The operator must keep runtime
-passphrases separate from backups and prevent simultaneous authorities.
+Защищённый диск ВМ панели и зашифрованные резервные копии теперь содержат закрытые
+материалы CA и клиентов. Это намеренно заменяет прежнее правило CA только на
+рабочей станции; VPN-узлы по-прежнему никогда не получают закрытый ключ CA.
+Разделение UID/DAC, шифрование CA, минимальный RPC и явное обслуживание уменьшают
+риски, но не устраняют границу доверия к хосту панели. Оператор обязан хранить
+рабочие пароли отдельно от копий и не допускать одновременных источников записи.
 
-There is no HA, MFA, billing, general cloud discovery or public role mutation
-API. ADMIN account replacement is not implemented as a self-service flow.
-CA/server-certificate renewal and revocation of imported legacy identities are
-not public profile API operations. The system remains limited to the two
-dedicated VPN nodes; existing OpenVPN Access Server is untouched.
+Нет высокой доступности, MFA, биллинга, общего обнаружения облачных ресурсов
+или публичного API изменения ролей. Замена ADMIN не реализована как
+самообслуживание. Продление CA/серверных сертификатов и отзыв импортированных
+старых идентификаторов не являются операциями публичного API профилей.
+Система ограничена двумя выделенными VPN-узлами; существующий OpenVPN Access
+Server остаётся без изменений.
 
-Development completion does not authorize Google provisioning, CA export/import,
-host deployment, CRL mount changes, timer activation or real VPN connections.
-See [rollout and recovery](../profile-rollout.md) and
-[security/live acceptance](../profile-security-acceptance.md).
+Завершение разработки не разрешает настройку Google, экспорт/импорт CA,
+развёртывание на хостах, изменения монтирования CRL, активацию таймеров или
+реальные VPN-подключения. См. [развёртывание и восстановление](../profile-rollout.md)
+и [безопасность и приёмку на реальной инфраструктуре](../profile-security-acceptance.md).

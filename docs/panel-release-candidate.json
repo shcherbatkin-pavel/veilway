@@ -9,7 +9,7 @@
     "docs/panel-release-candidate.json",
     "docs/panel-release-candidate.md"
   ],
-  "selection": "Git-visible regular files under web/, deploy/, scripts/, docs/ plus README.md, AGENTS.md and .env.example; no ignored inputs; report and manifest excluded.",
+  "selection": "Обычные файлы, видимые Git, в web/, deploy/, scripts/, docs/, а также README.md, AGENTS.md и .env.example; без игнорируемых входных данных; отчёт и манифест исключены.",
   "files": [
     {
       "path": ".env.example",

@@ -1,138 +1,140 @@
-# ADR 0003: Fail-closed Yandex ingress and AWS egress multi-hop
+# ADR 0003: Multi-hop с входом Yandex, выходом AWS и блокировкой при отказе
 
-- Status: Accepted
-- Date: 2026-08-25
-- Depends on: ADR 0001 and the rejected trial in ADR 0002
+- Статус: принято
+- Дата: 2026-08-25
+- Зависит от: ADR 0001 и отклонённого эксперимента ADR 0002
 
-## Context
+## Контекст
 
-`yc-direct` passed client acceptance. The independently healthy `aws-direct`
-endpoint passes its complete data channel when reached through another tunnel,
-but direct OpenVPN data is filtered on the observed operator network on both
-UDP/1194 and UDP/443. Raw TCP/443 would not reproduce HTTPS and is not selected
-as another port-only experiment.
+`yc-direct` прошёл клиентскую приёмку. Независимо исправная точка `aws-direct`
+проходит полную проверку канала данных при доступе через другой туннель,
+но прямые данные OpenVPN фильтруются в наблюдаемой сети оператора и на UDP/1194,
+и на UDP/443. Обычный TCP/443 не воспроизводит HTTPS и не выбран как ещё один
+эксперимент только с портом.
 
-The existing dedicated Yandex and AWS VMs already reserve client pool
-`10.242.30.0/24`, Yandex UDP/1195 for a future ingress, and AWS UDP/1196 for a
-future transit. Multi-hop can bypass the filtered client-to-AWS path without
-changing client applications or involving any old host.
+Существующие выделенные ВМ Yandex и AWS уже резервируют клиентский пул
+`10.242.30.0/24`, Yandex UDP/1195 для будущего входа и AWS UDP/1196 для будущего
+транзита. Multi-hop может обойти фильтруемый путь клиента к AWS без изменения
+клиентских приложений и без участия старых хостов.
 
-## Decision
+## Решение
 
-Add an independent `yc-aws-multihop` mode on the two existing dedicated VMs:
+Добавить независимый режим `yc-aws-multihop` на двух существующих выделенных ВМ:
 
 ```text
-Ubuntu or iPhone
-  -> OpenVPN UDP/1195 on the Yandex static IPv4
-  -> encrypted OpenVPN transit from Yandex to AWS UDP/1196
-  -> AWS-filtered internet egress and AWS DNS recursion
+Ubuntu или iPhone
+  -> OpenVPN UDP/1195 на статическом IPv4 Yandex
+  -> зашифрованный транзит OpenVPN от Yandex к AWS UDP/1196
+  -> выход в интернет с фильтрацией AWS и рекурсивный DNS AWS
 ```
 
-Keep both Direct listeners on UDP/1194. The multi-hop client ingress is a
-separate OpenVPN server on Yandex with its own tunnel interface, server
-identity, `tls-crypt-v2` key, client pool, and profiles. Yandex initiates a
-separate OpenVPN client session to an AWS transit server. The AWS security
-group permits UDP/1196 only from the Yandex node's static public IPv4 `/32`;
-Yandex UDP/1195 is the only new public client ingress.
+Сохранить оба слушателя Direct на UDP/1194. Вход multi-hop-клиентов — отдельный
+сервер OpenVPN на Yandex со своим туннельным интерфейсом, серверным идентификатором,
+ключом `tls-crypt-v2`, клиентским пулом и профилями. Yandex инициирует отдельную
+клиентскую сессию OpenVPN к транзитному серверу AWS. Группа безопасности AWS
+разрешает UDP/1196 только со статического публичного IPv4 `/32` узла Yandex;
+Yandex UDP/1195 — единственный новый публичный вход клиентов.
 
-Use `10.242.40.0/29` only for the inter-node transit. AWS assigns a stable
-transit address to the single Yandex transit identity and installs both the
-kernel route and OpenVPN `iroute` for `10.242.30.0/24`. The persistent AWS ULA
-`/48` supplies a separate `:30::/64` for multi-hop clients. IPv6 is carried
-inside the IPv4 inter-cloud OpenVPN transport even though the Yandex VPC itself
-is IPv4-only, then NAT66 egresses from AWS.
+Использовать `10.242.40.0/29` только для межузлового транзита. AWS назначает
+стабильный транзитный адрес единственному идентификатору транзита Yandex
+и устанавливает маршрут ядра и OpenVPN `iroute` для `10.242.30.0/24`.
+Постоянный ULA `/48` AWS выделяет отдельный `:30::/64` для multi-hop-клиентов.
+IPv6 передаётся внутри межоблачного транспорта OpenVPN IPv4, хотя VPC Yandex
+поддерживает только IPv4, а затем выходит из AWS через NAT66.
 
-AWS Unbound also listens on the AWS transit tunnel address and accepts queries
-from the multi-hop client pools. Multi-hop profiles receive that address as
-their only DNS resolver. Yandex does not recurse or forward multi-hop DNS using
-its own internet path.
+AWS Unbound также слушает адрес транзитного туннеля AWS и принимает запросы
+из пулов multi-hop-клиентов. Их профили получают этот адрес как единственный
+DNS-резолвер. Yandex не выполняет рекурсивные запросы и не пересылает DNS
+multi-hop через собственный выход в интернет.
 
-All OpenVPN processes continue to use host networking in separate
-Compose-managed containers. Each instance has a unique public port and tunnel
-interface, so Docker publishes no ports and creates no bridge NAT. Ansible
-continues to own one atomic host nftables ruleset per VM.
+Все процессы OpenVPN продолжают использовать сеть хоста в отдельных контейнерах
+Compose. У каждого экземпляра уникальные публичный порт и туннельный интерфейс,
+поэтому Docker не публикует порты и не создаёт NAT bridge. Ansible по-прежнему
+управляет одним атомарным набором правил nftables хоста на каждой ВМ.
 
-## Fail-closed routing contract
+## Контракт маршрутизации с блокировкой при отказе
 
-The Yandex node must never provide fallback egress for the multi-hop pools:
+Узел Yandex никогда не должен предоставлять резервный выход для multi-hop-пулов:
 
-- its nftables forward chain permits multi-hop client sources only between the
-  multi-hop ingress and transit interfaces;
-- it contains no Yandex masquerade rule for the multi-hop IPv4 or IPv6 pools;
-- dedicated IPv4 and IPv6 policy tables contain the transit default while the
-  tunnel is usable and an explicit unreachable default beneath it;
-- private, VPC, link-local, metadata, multicast, and reserved destinations are
-  denied before transit forwarding;
-- loss of the AWS transit therefore causes internet and DNS failure rather
-  than lookup fall-through to the Yandex WAN route.
+- цепочка forward nftables разрешает источники multi-hop-клиентов только между
+  интерфейсами входа multi-hop и транзита;
+- правило masquerade Yandex для IPv4/IPv6-пулов multi-hop отсутствует;
+- выделенные таблицы правил IPv4/IPv6 содержат транзитный маршрут по умолчанию,
+  пока туннель работоспособен, и явный недоступный маршрут по умолчанию ниже него;
+- частные адреса, VPC, link-local, метаданные, multicast и зарезервированные
+  назначения запрещаются до транзитной пересылки;
+- потеря транзита AWS приводит к отказу интернета и DNS, а не к продолжению
+  поиска маршрута через WAN Yandex.
 
-AWS applies the same destination denies before forwarding transit traffic to
-its WAN interface, then owns IPv4 masquerade and IPv6 NAT66 for the multi-hop
-pools. Return traffic is accepted only as established or related traffic or on
-the explicit transit route.
+AWS применяет те же запреты назначений до пересылки транзитного трафика
+в WAN, затем выполняет IPv4 masquerade и IPv6 NAT66 для multi-hop-пулов.
+Ответный трафик принимается только как установленный или связанный либо по
+явному транзитному маршруту.
 
-## PKI and operator interface
+## PKI и интерфейс оператора
 
-The offline CA creates three new identities without reusing Direct private
-material:
+Автономный CA создаёт три новых идентификатора без повторного использования
+закрытых материалов Direct:
 
-- `yc-multihop-ingress` server;
-- `aws-transit` server;
-- `yc-transit` client with the only transit `tls-crypt-v2` client key.
+- сервер `yc-multihop-ingress`;
+- сервер `aws-transit`;
+- клиент `yc-transit` с единственным транзитным клиентским ключом `tls-crypt-v2`.
 
-The operator lifecycle adds two device profiles:
+В операторский жизненный цикл добавляются два профиля устройств:
 
 ```text
 profile create --device ubuntu --mode yc-aws-multihop
 profile create --device iphone --mode yc-aws-multihop
 ```
 
-Those profiles use the Yandex static endpoint on UDP/1195 and unique client
-certificates and `tls-crypt-v2` keys. Revocation continues to use the shared
-offline CRL and never places CA or client private keys on either VM.
+Эти профили используют статическую точку доступа Yandex на UDP/1195,
+уникальные клиентские сертификаты и ключи `tls-crypt-v2`. Отзыв продолжает
+использовать общий автономный CRL; закрытые ключи CA и клиентов никогда
+не помещаются ни на одну из ВМ.
 
-## Infrastructure and deployment sequencing
+## Порядок изменения инфраструктуры и развёртывания
 
-Terraform roots remain independent. The Yandex stack adds only the reviewed
-UDP/1195 ingress rule. The AWS stack accepts an operator-supplied Yandex static
-IPv4 `/32` and adds only the reviewed UDP/1196 transit rule. No stack reads the
-other stack's state automatically, and neither VM receives a cloud IAM role.
+Корневые модули Terraform остаются независимыми. Стек Yandex добавляет только
+рассмотренное входное правило UDP/1195. Стек AWS принимает заданный оператором
+статический IPv4 `/32` Yandex и добавляет только рассмотренное правило транзита
+UDP/1196. Ни один стек не читает автоматически состояние другого, ни одна ВМ
+не получает облачной роли IAM.
 
-Deployment is staged and explicitly approved:
+Развёртывание выполняется по этапам с явным разрешением:
 
-1. validate both Terraform plans and their exact security-group changes;
-2. deploy and verify the AWS transit listener and AWS routing/DNS policy;
-3. deploy the Yandex stack; Compose waits for a healthy transit client before
-   starting the multi-hop ingress, while nftables and policy routing remain
-   fail-closed throughout;
-4. verify the Yandex transit and multi-hop ingress;
-5. create and import the two multi-hop profiles;
-6. run acceptance with every unrelated VPN disabled.
+1. Проверить оба плана Terraform и точные изменения групп безопасности.
+2. Развернуть и проверить транзитный слушатель AWS и политику маршрутизации/DNS AWS.
+3. Развернуть стек Yandex; Compose ждёт исправного транзитного клиента перед
+   запуском входа multi-hop, а nftables и маршрутизация по правилам всё время
+   блокируют трафик при отказе.
+4. Проверить транзит Yandex и вход multi-hop.
+5. Создать и импортировать два профиля multi-hop.
+6. Выполнить приёмку с отключёнными посторонними VPN.
 
-Direct containers and profiles remain available throughout. Rollback removes
-the multi-hop containers, routes, policy rules, PKI copies, and UDP/1195 and
-UDP/1196 ingress rules without replacing either VM or changing Direct pools.
+Контейнеры и профили Direct остаются доступными на всех этапах. Откат удаляет
+контейнеры multi-hop, маршруты, правила маршрутизации, копии PKI и входные правила
+UDP/1195 и UDP/1196 без замены ВМ или изменения пулов Direct.
 
-## Acceptance criteria
+## Критерии приёмки
 
-- Ubuntu and iPhone IPv4, IPv6, and DNS egress are observed through AWS.
-- The Yandex public address is never observed as multi-hop client egress.
-- Both cloud VPCs, metadata endpoints, private ranges, and link-local ranges
-  remain unreachable from the client.
-- Stopping or breaking transit in an explicitly approved failure test removes
-  internet and DNS access for the multi-hop profile without Yandex fallback.
-- `yc-direct` remains healthy while multi-hop is working and while transit is
-  unavailable.
-- Repeated deployment is idempotent, reboot restores the intended state, and
-  no secrets appear in Terraform state, Git, Ansible output, or container logs.
+- Выход IPv4, IPv6 и DNS Ubuntu и iPhone наблюдается через AWS.
+- Публичный адрес Yandex никогда не наблюдается как выход multi-hop-клиента.
+- Обе облачные VPC, точки метаданных, частные и link-local-диапазоны остаются
+  недоступны клиенту.
+- Остановка или нарушение транзита в явно разрешённом тесте отказа убирает
+  доступ к интернету и DNS для multi-hop-профиля без резервного выхода Yandex.
+- `yc-direct` остаётся исправным и при работающем multi-hop, и при недоступном транзите.
+- Повторное развёртывание идемпотентно, перезагрузка восстанавливает нужное
+  состояние, секреты не попадают в состояние Terraform, Git, вывод Ansible
+  или логи контейнеров.
 
-## Consequences
+## Последствия
 
-- Multi-hop adds latency and makes both dedicated VMs availability dependencies.
-- Yandex terminates the client tunnel before traffic is re-encrypted for AWS;
-  this is a routing design, not an end-to-end opaque relay through Yandex.
-- AWS Direct remains useful from networks that do not filter it, but it is not
-  the selected operator path on the currently observed network.
-- If the Yandex-to-AWS transit is also filtered, a camouflage protocol or an
-  independently reachable relay requires a new ADR; more public port changes
-  are not an acceptable fallback.
+- Multi-hop увеличивает задержку и делает доступность зависимой от обеих выделенных ВМ.
+- Yandex завершает клиентский туннель перед повторным шифрованием трафика для AWS;
+  это схема маршрутизации, а не сквозной непрозрачный ретранслятор через Yandex.
+- AWS Direct полезен в сетях без фильтрации, но не выбран как путь оператора
+  в текущей наблюдаемой сети.
+- Если транзит Yandex–AWS тоже фильтруется, протокол маскировки или независимо
+  доступный ретранслятор требуют нового ADR; очередная смена публичных портов
+  не является допустимым резервным решением.

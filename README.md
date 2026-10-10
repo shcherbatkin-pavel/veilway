@@ -1,88 +1,96 @@
 # Veilway
 
-Veilway is a self-hosted VPN service with Direct and fail-closed multi-hop
-routing and a public profile/restart control plane.
+Veilway — VPN-сервис для самостоятельного размещения с прямым выходом в интернет
+(Direct), маршрутизацией через несколько узлов (multi-hop), которая блокирует
+трафик при отказе транзита (fail-closed), и публичной панелью управления
+профилями и перезапусками.
 
-The prototype has one operator and a baseline client set consisting of an
-Ubuntu laptop and an iPhone. The operator can explicitly provision additional
-device profiles through the server PKI after the approved handover; local PKI
-tools are limited to bootstrap before that handover. The web application provides
-Google registration/sign-in with ADMIN and USER roles. Veilway
-deploys OpenVPN 2.6 containers to new, dedicated Ubuntu 24.04 LTS virtual
-machines in Yandex Cloud and AWS. The implemented modes provide direct internet
-access through either provider and a Yandex-ingress, AWS-egress multi-hop path.
-The web application manages restart operations for the two dedicated VPN VMs
-for ADMIN. The profile API supports issuing profiles, assigning USER owners,
-repeatable owner-only downloads and local revocation through an isolated PKI.
-Signed CRL delivery and the [browser profile cabinet](docs/profile-panel.md) are implemented in the
-[profile management plan](docs/profile-management-plan.md).
+У прототипа один оператор, а базовый набор клиентов состоит из ноутбука Ubuntu
+и iPhone. После согласованной передачи управления оператор может явно выпускать
+профили дополнительных устройств через серверную PKI — инфраструктуру открытых
+ключей. Локальные инструменты PKI используются только для начальной подготовки
+до этой передачи. Веб-приложение поддерживает регистрацию и вход через Google
+с ролями ADMIN и USER. Veilway развёртывает контейнеры OpenVPN 2.6 на новых
+выделенных виртуальных машинах Ubuntu 24.04 LTS в Yandex Cloud и AWS.
+Реализованы прямой выход через каждого провайдера и multi-hop с входом через
+Yandex и выходом через AWS. ADMIN может перезапускать две выделенные VPN-ВМ.
+API профилей поддерживает выпуск профилей, назначение владельцев USER,
+повторные скачивания только владельцем и локальный отзыв через изолированную PKI.
+Доставка подписанных списков отозванных сертификатов (CRL) и
+[личный кабинет профилей в браузере](docs/profile-panel.md) реализованы в рамках
+[плана управления профилями](docs/profile-management-plan.md).
 
-## Current iteration
+## Текущая итерация
 
-This repository contains the greenfield architecture, independent Terraform
-stacks for both clouds, an Ansible deployment, Docker Compose configuration,
-and local PKI/profile tooling. Applying infrastructure or connecting to a host
-is always a separate, explicit operator action. The existing OpenVPN Access
-Server runs on old infrastructure outside the Veilway target and must remain
-unchanged.
+Репозиторий содержит архитектуру новой системы, независимые стеки Terraform
+для обоих облаков, развёртывание через Ansible, конфигурацию Docker Compose
+и локальные инструменты PKI и профилей. Применение инфраструктуры или подключение
+к хосту всегда требует отдельного явного действия оператора. Существующий
+OpenVPN Access Server работает на старой инфраструктуре вне целевой системы
+Veilway и должен оставаться без изменений.
 
-- [Prototype requirements](docs/requirements.md)
-- [Development roadmap](docs/roadmap.md)
-- [Greenfield architecture ADR](docs/adr/0001-greenfield-direct-vpn.md)
-- [Rejected AWS UDP/443 trial ADR](docs/adr/0002-aws-direct-udp-443.md)
-- [Fail-closed multi-hop ADR](docs/adr/0003-yc-aws-fail-closed-multihop.md)
-- [Public restart control plane ADR](docs/adr/0004-public-restart-control-plane.md)
-- [Google identities and authoritative server PKI ADR](docs/adr/0005-google-profiles-and-server-pki.md)
-- [Migration of existing VPN profiles without reissuing](docs/legacy-profile-migration.md)
-- [Profile panel rollout, backup and recovery](docs/profile-rollout.md)
-- [Security and live acceptance](docs/profile-security-acceptance.md)
-- [Restart control plane guide](docs/control-plane.md)
-- [Isolated PKI service and manual import](docs/pki-service.md)
-- [Profile API and durable PKI jobs](docs/profile-api.md)
-- [Google sign-in and profile management plan](docs/profile-management-plan.md)
-- [Deployment guide](docs/deployment.md)
-- [Safe VM audit guide](docs/audit.md)
+- [Требования к прототипу](docs/requirements.md)
+- [Дорожная карта разработки](docs/roadmap.md)
+- [ADR: архитектура новой системы](docs/adr/0001-greenfield-direct-vpn.md)
+- [ADR: отклонённый эксперимент AWS UDP/443](docs/adr/0002-aws-direct-udp-443.md)
+- [ADR: multi-hop с блокировкой при отказе](docs/adr/0003-yc-aws-fail-closed-multihop.md)
+- [ADR: публичная панель перезапусков](docs/adr/0004-public-restart-control-plane.md)
+- [ADR: учётные записи Google и единая серверная PKI](docs/adr/0005-google-profiles-and-server-pki.md)
+- [Миграция существующих VPN-профилей без перевыпуска](docs/legacy-profile-migration.md)
+- [Развёртывание панели профилей, резервное копирование и восстановление](docs/profile-rollout.md)
+- [Безопасность и приёмка на реальной инфраструктуре](docs/profile-security-acceptance.md)
+- [Руководство по панели перезапусков](docs/control-plane.md)
+- [Изолированный сервис PKI и ручной импорт](docs/pki-service.md)
+- [API профилей и устойчивые к сбоям задания PKI](docs/profile-api.md)
+- [План входа через Google и управления профилями](docs/profile-management-plan.md)
+- [Руководство по развёртыванию](docs/deployment.md)
+- [Руководство по безопасному аудиту ВМ](docs/audit.md)
 
-Run `./scripts/check.sh` for local static checks and
-`./scripts/container-smoke.sh` after building the pinned application image.
-`./scripts/pki-smoke.py` exercises the six baseline identities, additional
-sanitized device identifiers, the transit identity, remote-update behavior,
-and revocation using temporary test-only key material.
-The check runner never starts containers or installs tooling. It validates
-shell/Python syntax, local expiry and parser contracts, Terraform and Ansible
-syntax when available, Compose exposure, frontend checks when
-local dependencies exist, and the Git ignore policy. Credential scanning reads
-only changed Git-visible regular files and prints filenames rather than values.
+Запустите `./scripts/check.sh` для локальных статических проверок и
+`./scripts/container-smoke.sh` после сборки образа приложения с закреплённой версией.
+`./scripts/pki-smoke.py` проверяет шесть базовых идентификаторов, дополнительные
+обезличенные идентификаторы устройств, транзитный идентификатор, обновление
+удалённого адреса и отзыв на временном ключевом материале только для тестов.
+Скрипт проверок не запускает контейнеры и не устанавливает инструменты. Он проверяет
+синтаксис Bash/Python, локальные контракты срока действия и парсеров, синтаксис
+Terraform и Ansible при наличии инструментов, доступность сервисов Compose извне,
+фронтенд при наличии локальных зависимостей и правила исключения файлов из Git.
+Сканирование учётных данных читает только изменённые обычные файлы, видимые Git,
+и выводит имена файлов вместо значений.
 
-PKI functions live in `scripts/lib/pki/`; source files only define functions.
-The `veilway-pki` CLI retains the protected storage paths, interactive CA
-passphrase and existing command contract. AWS diagnostics execute commands in
-the shell entrypoint and parse synthetic-testable input in `scripts/lib/`.
+Функции PKI находятся в `scripts/lib/pki/`; исходные файлы только определяют функции.
+CLI `veilway-pki` сохраняет защищённые пути хранения, интерактивный ввод пароля CA
+и существующий контракт команд. Диагностика AWS выполняет команды в точке входа
+оболочки и разбирает входные данные в `scripts/lib/`, где парсеры можно проверить
+на искусственных данных.
 
-Container smoke tests are separate operator-invoked commands. Backend tests use
-mocked providers and cannot restart real VMs. Refactoring these tools does not
-authorize deployment or any change to cloud resources.
+Контейнерные smoke-тесты запускаются отдельными командами оператора. Тесты бэкенда
+используют имитации провайдеров и не могут перезапускать реальные ВМ. Рефакторинг
+этих инструментов не разрешает развёртывание или изменения облачных ресурсов.
 
-`./scripts/test-pki-service.sh --build` tests the autonomous PKI with temporary
-synthetic material, concurrent/replayed jobs, crash recovery and UID isolation.
+`./scripts/test-pki-service.sh --build` проверяет автономную PKI на временных
+искусственных материалах, параллельных и повторных заданиях, восстановлении
+после сбоя и изоляции UID.
 
-## Safety status
+## Состояние безопасности
 
-The repository does not contain cloud credentials, Terraform state, PKI private
-keys, client profiles, host inventory, or audit reports. The checked-in
-configuration is inert until an operator supplies local inputs and explicitly
-runs Terraform and Ansible. Do not point the deployment inventory at the old
-VMs.
+Репозиторий не содержит облачных учётных данных, состояния Terraform, закрытых
+ключей PKI, клиентских профилей, инвентаря хостов или отчётов аудита. Сохранённая
+конфигурация не действует, пока оператор не предоставит локальные входные данные
+и явно не запустит Terraform и Ansible. Не указывайте старые ВМ в инвентаре
+развёртывания.
 
-## Sensitive audit data
+## Конфиденциальные данные аудита
 
-Audit reports contain network topology, addresses, routes, service state, and
-firewall rules. They are stored under the Git-ignored `audit-results/`
-directory, must be reviewed before copying, and must never be committed,
-published, or attached to a public issue or pull request.
+Отчёты аудита содержат топологию сети, адреса, маршруты, состояние служб и правила
+межсетевого экрана. Они хранятся в игнорируемом Git каталоге `audit-results/`,
+требуют проверки перед копированием и никогда не должны попадать в коммиты,
+публикации или вложения публичных issue и pull request.
 
-## License
+## Лицензия
 
-Veilway is licensed under the [MIT License](LICENSE).
+Veilway распространяется по [лицензии MIT](LICENSE).
+[Русский перевод лицензии](docs/license-ru.md) приведён для ознакомления.
 
-Signed CRL delivery and dedicated-node cutover: [docs/crl-delivery.md](docs/crl-delivery.md).
+Доставка подписанных CRL и переключение выделенных узлов:
+[руководство по CRL](docs/crl-delivery.md).

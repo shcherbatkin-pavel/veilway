@@ -1,175 +1,188 @@
-# Signed CRL delivery (stage 5)
+# Доставка подписанных CRL (этап 5)
 
-This stage is developed and locally verified. It has not been deployed to real
-nodes. The existing OpenVPN Access Server is outside this deployment. Browser
-views of delivery errors and the “Отзыв применяется” label are implemented in
-[stage 6](profile-panel.md); the authenticated API and `revoking` state remain
-the source of truth.
+Этап разработан и проверен локально. Он не развёрнут на реальных узлах.
+Существующий OpenVPN Access Server вне этого развёртывания. Отображение ошибок
+доставки и метка «Отзыв применяется» реализованы в [этапе 6](profile-panel.md);
+аутентифицированный API и состояние `revoking` остаются источником истины.
 
-## Publication and completion
+## Публикация и завершение
 
-The isolated PKI socket now supports `{"operation":"crl"}`. It exports only the
-full PEM CRL and public CA certificate, with bounded framing; no CA key, password,
-server key, client key or profile is included. The PKI serializes export with
-issue/revoke using its existing filesystem lock. It refreshes the signed CRL
-when its last update is at least 24 hours old or less than 24 hours remain before
-expiry. Each local revoke also generates a CRL. New CRLs last seven days. Refresh
-uses the same fsynced generation transaction and monotonically increasing CRL
-counter as revocation; old revoked serials remain in the full list.
+Изолированный сокет PKI поддерживает `{"operation":"crl"}`. Он экспортирует
+только полный PEM CRL и публичный сертификат CA в сообщениях ограниченного
+размера; ключ CA, пароль, серверные и клиентские ключи и профили не включены.
+PKI сериализует экспорт с выпуском/отзывом существующей файловой блокировкой.
+Она обновляет подписанный CRL, если с последнего обновления прошло не менее
+24 часов или до истечения срока осталось менее 24 часов. Каждый локальный
+отзыв также создаёт CRL. Новые CRL действуют семь дней. Обновление использует
+ту же транзакцию поколения с fsync и монотонно растущий счётчик CRL, что и
+отзыв; старые отозванные номера остаются в полном списке.
 
-The API's CRL worker polls PKI at the existing worker interval (three seconds by
-default). A PostgreSQL singleton row lock serializes publication across API
-processes. Before storing public CRL bytes, it checks CA validity, CA/CRL signing
-usage, issuer, signature, CRL validity and a positive 64-bit CRL number. Delta and
-indirect CRLs are rejected. The first published public CA fingerprint is pinned;
-subsequent CA changes, lower versions, changed bytes at the same version and
-lists omitting previously revoked serials fail publication. Errors are fixed
-codes rather than exception text or material. The last valid published version
-can still be delivered during a publisher outage; an expired version returns
-`503` and never completes new revocations.
+Воркер CRL API опрашивает PKI с существующим интервалом воркера (по умолчанию
+три секунды). Блокировка единственной строки PostgreSQL сериализует публикацию
+между процессами API. До сохранения публичных байтов CRL проверяются
+действительность CA, назначение CA/CRL для подписи, издатель, подпись, срок CRL
+и положительный 64-битный номер CRL. Дельта-CRL и непрямые CRL отклоняются.
+Первый опубликованный отпечаток публичного CA закрепляется; последующая
+смена CA, меньшие версии, изменённые байты той же версии и списки без ранее
+отозванных номеров блокируют публикацию. Ошибки — фиксированные коды вместо
+текста исключений или материалов. Последняя действительная версия может
+доставляться при отказе издателя; истёкшая возвращает `503` и никогда
+не завершает новые отзывы.
 
-A local revoke job records its CRL number and succeeds independently of delivery.
-The profile remains `revoking` and downloads stop immediately. Only a receipt
-for a known, unexpired publication with its exact SHA-256 can unlock completion.
-The worker verifies that the receipt version is at least the revoke version and
-contains that profile's certificate serial. AWS Direct requires `aws-direct`;
-Yandex Direct and Yandex/AWS Multi-hop require `yc-direct`. Each node receives the
-same complete common-CA CRL, including historical revocations. A receipt from the
-other node cannot complete the profile. Completion sets `revoked` and appends
-`revoke_result/succeeded` to the existing audit journal.
+Локальное задание отзыва записывает номер CRL и успешно завершается независимо
+от доставки. Профиль остаётся `revoking`, скачивания прекращаются сразу.
+Только подтверждение известной неистёкшей публикации с точным SHA-256 может
+разрешить завершение. Воркер проверяет, что версия подтверждения не ниже версии
+отзыва и содержит серийный номер сертификата профиля. AWS Direct требует
+`aws-direct`; Yandex Direct и Yandex/AWS Multi-hop — `yc-direct`.
+Каждый узел получает один и тот же полный CRL общего CA, включая исторические
+отзывы. Подтверждение другого узла не завершает профиль. Завершение устанавливает
+`revoked` и добавляет `revoke_result/succeeded` в существующий журнал аудита.
 
-Pending revocations survive API restarts and unavailable nodes. No timeout changes
-them to successful. An acknowledgement proves the file installation at that
-moment; it does not prove continuous node availability or recall already active
-VPN sessions. CRL enforcement blocks new TLS connections, including reconnects.
-No management-socket session termination is performed.
+Ожидающие отзывы переживают перезапуски API и недоступность узлов.
+Таймаут не делает их успешными. Подтверждение доказывает установку файла
+в этот момент, но не непрерывную доступность узла и не отзыв активных
+VPN-сессий. Применение CRL блокирует новые TLS-подключения, включая повторные.
+Завершение сессий через management-сокет не выполняется.
 
-## Authentication and API
+## Аутентификация и API
 
-All paths below use `/api/v1`. Agent endpoints require a separate per-node
-`Authorization: Bearer …` token. Browser sessions and heartbeat credentials are
-not accepted as agent authentication. The provisioning CLI reads exactly two
-raw tokens from protected stdin and stores SHA-256 digests only:
+Все пути ниже используют `/api/v1`. Точки агентов требуют отдельный токен
+`Authorization: Bearer …` для каждого узла. Браузерные сессии и учётные данные
+heartbeat не подходят для аутентификации агентов. CLI настройки читает ровно
+два исходных токена из защищённого stdin и хранит только дайджесты SHA-256:
 
 ```text
 veilway-control sync-crl-agents
-stdin JSON: {"aws-direct":"<separate protected token>","yc-direct":"<separate protected token>"}
+JSON в stdin: {"aws-direct":"<отдельный защищённый токен>","yc-direct":"<отдельный защищённый токен>"}
 ```
 
-Tokens must be distinct, contain 32–256 printable non-whitespace characters and
-differ from both heartbeat credentials. Rotating them invalidates old agent
-authentication; already installed CRL receipts remain durable. Never paste real
-tokens into commands, public docs, issue descriptions or logs.
+Токены должны отличаться, содержать 32–256 печатных непробельных символов
+и отличаться от обоих heartbeat-токенов. Их смена аннулирует старую
+аутентификацию агента; подтверждения уже установленных CRL сохраняются.
+Никогда не вставляйте настоящие токены в команды, публичные документы,
+описания issue или логи.
 
-| Method/path | Purpose |
+| Метод/путь | Назначение |
 | --- | --- |
-| `GET /crl-agents/{slug}/bundle` | Latest valid full CRL: `version`, `sha256`, `crl_base64` |
-| `POST /crl-agents/{slug}/receipt` | Exact installed `version` and `sha256`; `204`, idempotent |
-| `POST /crl-agents/{slug}/error` | Fixed code: `transport_unavailable`, `invalid_bundle`, `installation_failed` |
-| `GET /crl-delivery` | ADMIN session only; publisher error, latest version/expiry and both node states |
+| `GET /crl-agents/{slug}/bundle` | Последний действительный полный CRL: `version`, `sha256`, `crl_base64` |
+| `POST /crl-agents/{slug}/receipt` | Точные установленные `version` и `sha256`; `204`, идемпотентно |
+| `POST /crl-agents/{slug}/error` | Фиксированный код: `transport_unavailable`, `invalid_bundle`, `installation_failed` |
+| `GET /crl-delivery` | Только сессия ADMIN; ошибка издателя, последняя версия/срок и состояние обоих узлов |
 
-Responses use `no-store`; agent responses also use `no-referrer`. Wrong node or
-credential returns `401`; an unknown, expired, incorrect or lower receipt returns
-`409`. Administrator delivery status distinguishes `unconfigured`, `pending`,
-`current`, `offline` (no contact for two minutes), `expired` and `error`. USER
-cannot read this endpoint. There is no unauthenticated CRL or CA download.
+Ответы используют `no-store`; ответы агентам также `no-referrer`.
+Неверный узел или токен возвращает `401`; неизвестное, истёкшее, неверное
+или более старое подтверждение — `409`. Административный статус доставки
+различает `unconfigured`, `pending`, `current`, `offline` (нет контакта две
+минуты), `expired` и `error`. USER не может читать эту точку.
+Неаутентифицированного скачивания CRL или CA нет.
 
-## Restricted node installer
+## Ограниченный установщик на узле
 
-`deploy/roles/veilway_crl_agent/files/veilway-crl-agent` is a one-shot Python agent
-using Ubuntu's `python3-cryptography` and an outbound HTTPS connection to the fixed
-`https://veilway.ru` origin. It validates the TLS hostname and certificate, ignores
-proxy environment variables, rejects redirects, bounds responses and accepts
-only the fixed protocol fields. The server cannot choose destinations, filenames,
-shell commands or CA trust anchors. The timer polls fifteen seconds after startup
-and fifteen seconds after each invocation; errors retry on subsequent polls.
+`deploy/roles/veilway_crl_agent/files/veilway-crl-agent` — однократный Python-агент
+с Ubuntu `python3-cryptography` и исходящим HTTPS-соединением к фиксированному
+источнику `https://veilway.ru`. Он проверяет имя хоста и сертификат TLS,
+игнорирует переменные прокси, запрещает перенаправления, ограничивает ответы
+и принимает только фиксированные поля протокола. Сервер не может выбирать
+назначения, имена файлов, команды оболочки или доверенные CA. Таймер опрашивает
+через 15 секунд после запуска и после каждого вызова; ошибки повторяются
+при следующих опросах.
 
-The root-owned configuration consists of a fixed node slug, token file and the
-existing common public CA copied once into `/etc/veilway-crl-agent`. The account
-is UID/GID 10004, without the VPN key-reading group. It has no inbound listener,
-Docker socket, capabilities or access to `/etc/veilway/pki`; systemd makes the
-filesystem read-only except for `/var/lib/veilway-crl`. Runtime code writes only
-`crl.pem` and temporary candidates in that directory, never service configuration.
+Конфигурация root состоит из фиксированного slug узла, файла токена
+и существующего общего публичного CA, один раз скопированного в
+`/etc/veilway-crl-agent`. Учётная запись имеет UID/GID 10004 без группы чтения
+ключей VPN. У неё нет входящего слушателя, сокета Docker, capabilities или
+доступа к `/etc/veilway/pki`; systemd делает файловую систему доступной только
+для чтения, кроме `/var/lib/veilway-crl`. Код пишет только `crl.pem` и временные
+кандидаты в этот каталог, никогда конфигурацию служб.
 
-The directory is owned by `veilway-crl:veilway`, mode `2750` (group 900); the
-setgid bit makes replacement files retain OpenVPN's reader group. CRL files are
-`0640`, so the separate OpenVPN UID/GID 900 can read them without granting the
-agent access to server keys. With managed CRLs, Direct, Yandex ingress and AWS
-transit server containers also receive supplementary group 900 at startup.
-OpenVPN initially reads the CRL as root before dropping privileges; the
-capability-restricted root process otherwise cannot traverse the agent-owned
-directory. This adds no capabilities and does not apply to the Yandex transit
-client or DNS containers. The agent locks the directory inode, validates the
-existing signed CRL as its durable anti-rollback state, writes a bounded candidate,
-fsyncs it, renames atomically and fsyncs the directory. Missing, symlinked or
-invalid installed files fail rather than bootstrap from a remotely supplied file.
-An expired installed CRL may be replaced by a newer valid one. Older versions,
-same-version changed bytes and missing revoked serials are rejected. It rereads
-and validates the installed file before sending the receipt. A lost receipt causes
-the next poll to acknowledge the same installed version without replacing it.
+Каталог принадлежит `veilway-crl:veilway`, права `2750` (группа 900); setgid
+сохраняет группу чтения OpenVPN у заменённых файлов. CRL имеет `0640`, чтобы
+отдельный UID/GID OpenVPN 900 мог читать без доступа агента к серверным ключам.
+При управляемых CRL контейнеры серверов Direct, входа Yandex и транзита AWS
+также получают дополнительную группу 900 при запуске. OpenVPN первоначально
+читает CRL как root до сброса привилегий; иначе root с ограниченными capabilities
+не может пройти в каталог агента. Это не добавляет capabilities и не касается
+транзитного клиента Yandex или DNS-контейнеров. Агент блокирует inode каталога,
+проверяет установленный подписанный CRL как устойчивое состояние защиты от
+отката, пишет ограниченный кандидат, синхронизирует его, атомарно переименовывает
+и синхронизирует каталог. Отсутствующие, символически связанные или неверные
+файлы приводят к отказу, а не к начальной установке удалённого файла.
+Истёкший CRL можно заменить новым действительным. Старые версии, изменённые
+байты той же версии и отсутствие отозванных номеров отклоняются.
+Перед подтверждением агент перечитывает и проверяет установленный файл.
+При потере подтверждения следующий опрос подтверждает ту же версию без замены.
 
-## Operator cutover — separate exact approval required
+## Переключение оператором — требуется отдельное точное разрешение
 
-Follow the ordered [CA handover, panel rollout and recovery](profile-rollout.md)
-first. General node deployment now refuses legacy CRL mode after a local handover
-marker or remote agent bootstrap, and skips local CRL copying in managed mode.
-Preserve `veilway_crl_agent_managed: true` in every applicable private inventory.
+Сначала следуйте [порядку передачи CA, развёртывания панели и восстановления](profile-rollout.md).
+Общее развёртывание узла отклоняет старый режим CRL после локального маркера
+передачи или установки удалённого агента и пропускает копирование локального CRL
+в управляемом режиме. Сохраняйте `veilway_crl_agent_managed: true`
+в каждом применимом закрытом инвентаре.
 
-The following is a prepared procedure, not authorization to execute it. Obtain
-approval for the concrete target and each host/service/configuration change.
-Never target the existing Access Server. Keep local credentials in Git-ignored
-`.env` with mode `0600`, and target only the two dedicated inventory hosts.
+Ниже подготовленная процедура, а не разрешение выполнить её. Получите
+разрешение на конкретную цель и каждое изменение хоста/службы/конфигурации.
+Никогда не нацеливайтесь на существующий Access Server. Храните локальные
+учётные данные в игнорируемом Git `.env` с `0600`; используйте только два
+выделенных хоста инвентаря.
 
-1. Add two independent random `CRL_AWS_DIRECT_TOKEN` / `CRL_YC_DIRECT_TOKEN` values
-   to protected operator configuration. An approved web deployment migrates to
-   `0005_crl_delivery` and synchronizes their hashes from protected stdin. Agent
-   credentials are not mounted into the long-running API or PKI containers.
-2. Approve the CRL bootstrap on each dedicated node. Run the operator wrapper
-   for component `crl`, initially without `--enable-crl-agent`. This installs the
-   Python dependency, isolated account, executable, protected CA/token/config,
-   systemd files and initial CRL directory. It does not start a fresh timer. The
-   bootstrap copies the existing common CA and CRL from `/etc/veilway/pki` without
-   overwriting any installed versions. Validate the initial CRL against the same
-   CA and ensure it is current before a VPN mount cutover.
-3. Separately approve updating the dedicated OpenVPN configuration and recreating
-   the affected dedicated VPN containers. Set `veilway_crl_agent_managed: true`
-   in the private inventory. Rendered server configs use
-   `crl-verify /etc/veilway/crl/crl.pem`; Compose mounts the **directory**
-   `/var/lib/veilway-crl:/etc/veilway/crl:ro`. This covers Direct, Yandex ingress and
-   AWS transit server configurations. Mounting the individual `crl.pem` file
-   would retain its old inode after rename. Do not run the whole node playbook
-   casually: it also contains separately protected network/service operations.
-4. Confirm the directory mount and effective `crl-verify` path for every relevant
-   running dedicated server. Then approve timer activation and invoke the wrapper
-   with `--enable-crl-agent`. The role requires the managed inventory flag and
-   mount acknowledgement and inspects only the fixed dedicated container mounts;
-   it refuses activation unless every server has the read-only directory bind.
-   It never restarts OpenVPN, changes routes or touches Access Server.
-5. Check authenticated `/crl-delivery`, publisher state and both exact installed
-   version/hash receipts. Perform a separately approved real-node acceptance test
-   with temporary profiles: reconnect fails after revocation; another profile
-   still connects; unavailable-node revocations remain pending. Record results
-   privately and remove temporary VPN material according to operator policy.
+1. Добавьте два независимых случайных `CRL_AWS_DIRECT_TOKEN` /
+   `CRL_YC_DIRECT_TOKEN` в защищённую конфигурацию оператора. Разрешённое
+   веб-развёртывание мигрирует до `0005_crl_delivery` и синхронизирует хеши
+   через защищённый stdin. Учётные данные агентов не монтируются в постоянно
+   работающие контейнеры API или PKI.
+2. Разрешите начальную установку CRL на каждом выделенном узле. Запустите
+   операторскую обёртку для компонента `crl`, сначала без `--enable-crl-agent`.
+   Она устанавливает зависимость Python, изолированную запись, исполняемый файл,
+   защищённые CA/токен/конфигурацию, файлы systemd и начальный каталог CRL.
+   Новый таймер не запускается. Подготовка копирует существующие общие CA
+   и CRL из `/etc/veilway/pki`, не перезаписывая установленные версии.
+   Проверьте исходный CRL тем же CA и убедитесь в его актуальности перед
+   переключением монтирования VPN.
+3. Отдельно разрешите обновление конфигурации выделенного OpenVPN и пересоздание
+   затронутых выделенных VPN-контейнеров. Задайте `veilway_crl_agent_managed: true`
+   в закрытом инвентаре. Серверные конфигурации используют
+   `crl-verify /etc/veilway/crl/crl.pem`; Compose монтирует **каталог**
+   `/var/lib/veilway-crl:/etc/veilway/crl:ro`. Это касается Direct, входа Yandex
+   и транзитного сервера AWS. Монтирование одного файла `crl.pem` сохраняло бы
+   старый inode после переименования. Не запускайте весь playbook узла без
+   рассмотрения: он содержит и отдельно защищённые операции сети/служб.
+4. Подтвердите монтирование каталога и фактический путь `crl-verify` для каждого
+   соответствующего работающего выделенного сервера. Затем разрешите активацию
+   таймера и запустите обёртку с `--enable-crl-agent`. Роль требует управляемый
+   флаг инвентаря и подтверждение монтирования, проверяет только фиксированные
+   монтирования выделенных контейнеров; отказывает, пока у каждого сервера
+   нет каталога только для чтения. Она никогда не перезапускает OpenVPN,
+   не меняет маршруты и не трогает Access Server.
+5. Проверьте аутентифицированный `/crl-delivery`, состояние издателя и точные
+   подтверждения версии/хеша обоих узлов. Выполните отдельно разрешённую приёмку
+   на реальных узлах с временными профилями: повторное подключение после отзыва
+   не проходит; другой профиль подключается; отзывы недоступного узла остаются
+   ожидающими. Запишите результаты приватно и удалите временные VPN-материалы
+   по политике оператора.
 
-Validation-only wrapper commands contact no host:
+Команды обёртки только для проверки не обращаются к хостам:
 
 ```bash
 scripts/deploy-web-control.py crl --limit aws-direct
 scripts/deploy-web-control.py crl --limit yc-direct --enable-crl-agent
 ```
 
-`--apply` invokes the selected Ansible playbook and must only be added after exact
-approval. There is no automatic production cutover in this development stage.
-Do not remove or roll back the installed CRL. OpenVPN checks CRLs for new peers,
-but a **missing CRL file allows connections with a warning**; therefore bootstrap
-must precede changing the mount, and installation always preserves the existing
-file on errors. See the [OpenVPN 2.6 manual](https://build.openvpn.net/man/openvpn-2.6/openvpn.8.html).
-Restore procedures must preserve maximum published/acknowledged versions, common
-CA fingerprint and the complete revoked set. Migration downgrade refuses to
-discard nonempty publications or agent records. A CA change or corrupt local
-state requires an operator-preserving repair rather than automatic rollback.
+`--apply` вызывает выбранный playbook Ansible и добавляется только после точного
+разрешения. Автоматического рабочего переключения на этом этапе разработки нет.
+Не удаляйте и не откатывайте установленный CRL. OpenVPN проверяет CRL для новых
+клиентов, но **отсутствующий файл CRL разрешает подключения с предупреждением**;
+поэтому начальная установка должна предшествовать смене монтирования,
+а при ошибках установка всегда сохраняет существующий файл.
+См. [руководство OpenVPN 2.6](https://build.openvpn.net/man/openvpn-2.6/openvpn.8.html).
+Восстановление должно сохранять максимальные опубликованные/подтверждённые
+версии, отпечаток общего CA и полный набор отзывов. Откат миграции отказывается
+удалять непустые публикации или записи агентов. Смена CA или повреждённое
+локальное состояние требуют операторского исправления с сохранением данных,
+а не автоматического отката.
 
-## Local verification
+## Локальная проверка
 
 ```bash
 scripts/check.sh
@@ -177,24 +190,26 @@ scripts/test-profile-api.sh --build
 scripts/test-crl-mount.sh --build
 ```
 
-The backend suite uses disposable PostgreSQL when explicitly supplied through
-`VEILWAY_TEST_POSTGRES_URL`; otherwise real PostgreSQL migration/concurrency
-checks are visibly skipped. Integration images contain only synthetic CA fixtures.
-The true OpenVPN 2.6 test uses loopback and `dev null`, so it needs no TUN device,
-network capabilities or host route changes. It accepts a profile, installs its
-revocation through the agent, rejects its reconnect and accepts another profile
-with the same server PID. The mount script uses two binds of one disposable
-public-CRL directory (writer RW, VPN reader RO) to test rename visibility directly.
-This is a TLS/CRL acceptance check, not a packet-routing or live-node test.
+Тесты бэкенда используют одноразовый PostgreSQL при явном
+`VEILWAY_TEST_POSTGRES_URL`; иначе реальные проверки миграций/параллелизма
+PostgreSQL явно пропускаются. Интеграционные образы содержат только искусственные
+CA. Настоящий тест OpenVPN 2.6 использует loopback и `dev null`, поэтому не
+требует TUN, сетевых capabilities или изменения маршрутов хоста. Он принимает
+профиль, устанавливает отзыв через агент, отклоняет повторное подключение
+и принимает другой профиль с тем же PID сервера. Скрипт монтирования использует
+два bind-монтирования одного временного каталога публичного CRL (писатель RW,
+читатель VPN RO) для прямой проверки видимости переименования.
+Это приёмка TLS/CRL, а не маршрутизации пакетов или реальных узлов.
 
-CA/key/profile fixtures and transport logs remain temporary and protected; no
-production material is read, generated artifacts committed or external audit
-service used. CRLs are limited to 64 KiB and publications retained for version
-history; exceeding that bound requires a separately reviewed protocol change,
-not truncated delivery. Other tests cover signature/expiry rejection, monotonic
-versions and revoked sets, daily renewal, both target rules, wrong/heartbeat
-credentials, lost acknowledgements, missing/symlink files, durable receipts,
-operator token synchronization and migration downgrade protection.
+Тестовые CA/ключи/профили и транспортные логи остаются временными и защищёнными;
+рабочие материалы не читаются, созданные артефакты не коммитятся, внешний
+сервис аудита не используется. CRL ограничены 64 КиБ, публикации хранятся
+для истории версий; превышение требует отдельно рассмотренного изменения
+протокола, а не усечённой доставки. Остальные тесты покрывают отказ по
+подписи/сроку, монотонность версий и отзывов, ежедневное обновление, оба правила
+целей, неверные/heartbeat-токены, потерянные подтверждения, отсутствующие
+файлы/символические ссылки, устойчивые подтверждения, синхронизацию токенов
+оператором и защиту отката миграции.
 
-Implementation references: [cryptography X.509](https://cryptography.io/en/latest/x509/reference/)
-and [OpenSSL ca](https://docs.openssl.org/3.0/man1/openssl-ca/).
+Источники реализации: [cryptography X.509](https://cryptography.io/en/latest/x509/reference/)
+и [OpenSSL ca](https://docs.openssl.org/3.0/man1/openssl-ca/).

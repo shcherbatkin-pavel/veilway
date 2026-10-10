@@ -1,99 +1,101 @@
-# ADR 0001: Greenfield Direct VPN architecture
+# ADR 0001: Архитектура нового Direct VPN
 
-- Status: Accepted; multi-hop reservation extended by ADR 0003
-- Date: 2026-08-20
+- Статус: принято; резервирование для multi-hop расширено ADR 0003
+- Дата: 2026-08-20
 
-## Context
+## Контекст
 
-Veilway needs internet-only VPN access for one Ubuntu laptop and one iPhone,
-with Yandex Cloud and AWS as independent direct egress providers. The service
-will run on new dedicated VMs. Old audit reports remain private and are not
-deployment inputs.
+Veilway нужен VPN с доступом только в интернет для одного ноутбука Ubuntu и
+одного iPhone; Yandex Cloud и AWS выступают независимыми провайдерами прямого
+выхода. Сервис будет работать на новых выделенных ВМ. Старые отчёты аудита
+остаются закрытыми и не используются как входные данные развёртывания.
 
-Sanitized audit conclusions showed the same operational pattern on both old
-hosts: IPv4 forwarding was enabled, reverse-path filtering was loose, IPv6
-forwarding was disabled, and Docker and NAT rules shared the firewall. These
-facts do not need to be reproduced, but they demonstrate that forwarding,
-reverse-path filtering, and firewall ownership must be explicit and testable.
+Обезличенные выводы аудита показали одинаковую схему на обоих старых хостах:
+пересылка IPv4 включена, фильтрация обратного пути ослаблена, пересылка IPv6
+отключена, правила Docker и NAT совместно используют межсетевой экран. Эти
+настройки не требуется воспроизводить, но они показывают, что пересылка,
+фильтрация обратного пути и управление межсетевым экраном должны быть явными
+и проверяемыми.
 
-Yandex Cloud VPC currently provides only IPv4 networking. AWS VPC supports a
-dual-stack subnet and public IPv6 for EC2. OpenVPN Access Server in Docker is
-not selected because the community OpenVPN daemon provides the required
-protocol without licensing or the Access Server Docker IPv6 limitations.
+Yandex Cloud VPC на момент решения предоставляет только IPv4. AWS VPC поддерживает
+подсеть с IPv4/IPv6 и публичный IPv6 для EC2. OpenVPN Access Server в Docker
+не выбран: общественный демон OpenVPN предоставляет нужный протокол без
+лицензирования и ограничений Docker-версии Access Server по IPv6.
 
-## Decision
+## Решение
 
-Use two new Ubuntu 24.04 LTS VMs created by independent Terraform roots. An
-explicit Ansible playbook configures each VM and deploys an OpenVPN 2.6 and
-Unbound Compose stack. Terraform never runs remote provisioners and never
-contains VPN credentials.
+Использовать две новые ВМ Ubuntu 24.04 LTS, созданные независимыми корневыми
+модулями Terraform. Явный playbook Ansible настраивает каждую ВМ и развёртывает
+стек Compose с OpenVPN 2.6 и Unbound. Terraform никогда не запускает удалённые
+provisioner и не содержит учётных данных VPN.
 
-The containers use host networking. No ports are published through a Docker
-bridge, so Docker does not add a second DNAT or forwarding policy. Ansible owns
-one complete nftables ruleset and the required sysctl settings. The OpenVPN
-container gets `/dev/net/tun`, `NET_ADMIN`, `SETUID`/`SETGID` for its privilege
-drop, and `KILL` so PID 1 can forward stop signals afterward. It drops every
-other capability and uses a read-only root filesystem.
+Контейнеры используют сеть хоста. Порты не публикуются через Docker bridge,
+поэтому Docker не добавляет вторую политику DNAT или пересылки. Ansible управляет
+одним полным набором правил nftables и необходимыми sysctl. Контейнер OpenVPN
+получает `/dev/net/tun`, `NET_ADMIN`, `SETUID`/`SETGID` для сброса привилегий
+и `KILL`, чтобы PID 1 мог затем передавать сигналы остановки. Все остальные
+capabilities удаляются, корневая файловая система доступна только для чтения.
 
-Both nodes listen for OpenVPN/UDP on port 1194 over their static public IPv4.
-This ADR originally reserved UDP/1195 on Yandex and UDP/1196 on AWS without
-opening them. ADR 0003 later activated those ports for the separately accepted
-multi-hop phase. SSH is allowed only from an operator-provided CIDR list.
+Оба узла слушают OpenVPN/UDP на порту 1194 своего статического публичного IPv4.
+Этот ADR первоначально резервировал UDP/1195 на Yandex и UDP/1196 на AWS,
+не открывая их. Позднее ADR 0003 активировал эти порты для отдельно принятого
+этапа multi-hop. SSH разрешён только со списка CIDR, заданного оператором.
 
-AWS enables only the minimum IMDS configuration needed for Ubuntu cloud-init
-to install the selected EC2 public SSH key on first boot: IMDSv2 tokens are
-required, the response hop limit is one, and metadata tags and the IPv6
-endpoint are disabled. The VM has no IAM profile. This host-local bootstrap
-path does not replace the separate firewall rule that denies forwarded VPN
-traffic to metadata destinations.
+AWS включает только минимальную конфигурацию IMDS, нужную Ubuntu cloud-init
+для установки выбранного публичного SSH-ключа EC2 при первом запуске:
+токены IMDSv2 обязательны, предел переходов ответа — один, теги метаданных
+и точка доступа IPv6 отключены. ВМ не имеет профиля IAM. Этот локальный путь
+начальной подготовки не заменяет отдельное правило межсетевого экрана,
+запрещающее пересылаемый VPN-трафик к адресам метаданных.
 
-The address plan is:
+План адресов:
 
-| Purpose | Address range |
+| Назначение | Диапазон адресов |
 | --- | --- |
-| `yc-direct` clients | `10.242.10.0/24` |
-| `aws-direct` clients | `10.242.20.0/24` |
-| Multi-hop clients, reserved by this ADR | `10.242.30.0/24` |
-| AWS IPv6 clients | deployment-generated ULA `/64` from a persistent `/48` |
+| Клиенты `yc-direct` | `10.242.10.0/24` |
+| Клиенты `aws-direct` | `10.242.20.0/24` |
+| Клиенты multi-hop, зарезервированные этим ADR | `10.242.30.0/24` |
+| Клиенты AWS IPv6 | создаваемый при развёртывании ULA `/64` из постоянного `/48` |
 
-Preflight validation rejects overlaps between VPN pools, VPC CIDRs, and each
-other. Forwarding to private, link-local, metadata, multicast, and reserved
-destinations is denied before general internet egress. IPv4 uses masquerading
-on both nodes. AWS also uses NAT66 from its client ULA to the VM's public IPv6.
-The exact public IPv6 assigned to the AWS ENI is transferred only through the
-protected Terraform state and ignored Ansible inventory, then configured as a
-`/128` by a managed Netplan overlay. `systemd-networkd` processes router
-advertisements in userspace to install the default route, while kernel RA and
-SLAAC remain disabled. The server address does not depend on DHCPv6. Inventory
-must therefore be regenerated after AWS instance replacement.
+Предварительная проверка отклоняет пересечения VPN-пулов и CIDR VPC между собой.
+Пересылка к частным, link-local, служебным адресам метаданных, multicast и
+зарезервированным адресам запрещается до общего выхода в интернет. IPv4 использует
+masquerade на обоих узлах. AWS также использует NAT66 из клиентского ULA в публичный
+IPv6 ВМ. Точный публичный IPv6, назначенный AWS ENI, передаётся только через
+защищённое состояние Terraform и игнорируемый инвентарь Ansible, затем настраивается
+как `/128` управляемой конфигурацией Netplan. `systemd-networkd` обрабатывает
+объявления маршрутизатора в пользовательском пространстве для установки маршрута
+по умолчанию; RA ядра и SLAAC остаются отключёнными. Адрес сервера не зависит
+от DHCPv6. Поэтому после замены экземпляра AWS инвентарь необходимо создать заново.
 
-`yc-direct` pushes an IPv4 default route, tunnel DNS, and IPv6 blocking.
-`aws-direct` pushes IPv4 and IPv6 defaults and tunnel DNS. Both modes push
-OpenVPN's `block-local` redirect flag so that the client's directly connected
-LAN is routed into the tunnel, except for the LAN gateway required to reach the
-VPN endpoint. Unbound accepts DNS only from tunnel clients, performs recursion
-over the selected exit node, and does not log queries.
+`yc-direct` передаёт клиенту маршрут IPv4 по умолчанию, DNS туннеля и блокировку
+IPv6. `aws-direct` передаёт маршруты IPv4/IPv6 по умолчанию и DNS туннеля.
+Оба режима передают флаг перенаправления OpenVPN `block-local`, чтобы локальная
+сеть клиента направлялась в туннель, кроме шлюза LAN, необходимого для связи
+с VPN-сервером. Unbound принимает DNS только от клиентов туннеля, выполняет
+рекурсивные запросы через выбранный выходной узел и не журналирует запросы.
 
-An offline ECDSA root CA signs unique server and client certificates. Each
-device and mode receives a distinct certificate and `tls-crypt-v2` key. Server
-nodes never receive the CA private key or client private keys. Profiles and
-Terraform state are local sensitive artifacts excluded from Git.
+Автономный корневой CA ECDSA подписывает уникальные серверные и клиентские
+сертификаты. Каждая пара устройства и режима получает отдельные сертификат
+и ключ `tls-crypt-v2`. Серверные узлы никогда не получают закрытый ключ CA
+или закрытые клиентские ключи. Профили и состояние Terraform — локальные
+конфиденциальные артефакты, исключённые из Git.
 
-## Consequences
+## Последствия
 
-- The Direct MVP produces four profiles: Ubuntu and iPhone for each direct
-  mode. Switching mode means selecting another profile.
-- Yandex direct mode cannot provide IPv6 egress and must fail closed for IPv6.
-- Host networking makes nftables and sysctl part of the deployment contract,
-  but avoids ambiguous Docker bridge and NAT interaction.
-- ADR 0003 later added separate OpenVPN instances and policy routing without
-  changing the direct address pools or Direct public ports.
-- The old OpenVPN Access Server remains outside all state, inventory, playbooks,
-  and rollback procedures.
+- MVP Direct создаёт четыре профиля: Ubuntu и iPhone для каждого прямого режима.
+  Переключение режима означает выбор другого профиля.
+- Прямой режим Yandex не даёт выхода IPv6 и обязан блокировать IPv6 при невозможности связи.
+- Сеть хоста делает nftables и sysctl частью контракта развёртывания, но устраняет
+  неоднозначное взаимодействие Docker bridge и NAT.
+- ADR 0003 позднее добавил отдельные экземпляры OpenVPN и маршрутизацию по
+  правилам, не меняя прямые адресные пулы и публичные порты Direct.
+- Старый OpenVPN Access Server остаётся вне любого состояния, инвентаря,
+  playbook и процедур отката.
 
-## References
+## Источники
 
-- [Yandex Cloud VM network interfaces](https://yandex.cloud/en/docs/compute/concepts/network)
-- [AWS VPC IP addressing](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-ip-addressing.html)
-- [OpenVPN 2.6 manual](https://openvpn.net/community-docs/community-articles/openvpn-2-6-manual.html)
-- [OpenVPN Connect for iOS IPv6 support](https://openvpn.net/connect-docs/ios-faqs.html)
+- [Сетевые интерфейсы ВМ Yandex Cloud](https://yandex.cloud/en/docs/compute/concepts/network)
+- [IP-адресация AWS VPC](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-ip-addressing.html)
+- [Руководство OpenVPN 2.6](https://openvpn.net/community-docs/community-articles/openvpn-2-6-manual.html)
+- [Поддержка IPv6 в OpenVPN Connect для iOS](https://openvpn.net/connect-docs/ios-faqs.html)
