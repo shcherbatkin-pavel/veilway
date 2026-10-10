@@ -1,83 +1,86 @@
-# Veilway development roadmap
+# Дорожная карта разработки Veilway
 
-Later phases are intentionally gated by the findings and design decisions from
-earlier phases. Completing a phase does not authorize changes to production or
-prototype infrastructure.
+Поздние этапы намеренно зависят от выводов и проектных решений предыдущих.
+Завершение этапа не разрешает изменения рабочей инфраструктуры или инфраструктуры прототипа.
 
-## 1. Audit and requirements
+## 1. Аудит и требования
 
-Document the prototype, contributor safety rules, and deployment constraints.
-The read-only diagnostics of the old Yandex Cloud and AWS Ubuntu VMs are
-complete; their sensitive reports remain private and outside Git. Their
-sanitized conclusions inform isolation, forwarding, and firewall ownership but
-do not constrain the new dedicated VMs. This phase is complete.
+Описать прототип, правила безопасности для участников и ограничения развёртывания.
+Диагностика старых Ubuntu-ВМ Yandex Cloud и AWS в режиме только чтения завершена;
+конфиденциальные отчёты остаются закрытыми и вне Git. Обезличенные выводы помогают
+определить изоляцию, пересылку трафика и управление межсетевым экраном, но не
+ограничивают новые выделенные ВМ. Этап завершён.
 
-## 2. Greenfield architecture ADR
+## 2. ADR архитектуры новой системы
 
-Define OpenVPN 2.6 containers on new dedicated VMs, independent Terraform
-stacks, Ansible deployment, host networking, nftables ownership, DNS, address
-pools, PKI boundaries, and IPv4/IPv6 behavior. The checked-in ADR completes the
-design; review remains required before applying infrastructure.
+Определить контейнеры OpenVPN 2.6 на новых выделенных ВМ, независимые стеки
+Terraform, развёртывание Ansible, сеть хоста, управление nftables, DNS, пулы
+адресов, границы PKI и поведение IPv4/IPv6. Сохранённый ADR завершает проектирование;
+перед применением инфраструктуры всё ещё требуется ревью.
 
-## 3. Direct VPN MVP
+## 3. MVP прямого VPN
 
-Implement and validate Terraform, Ansible, Docker Compose, `yc-direct`, and
-`aws-direct` on explicitly approved new infrastructure. Completion requires
-IPv4 egress through both providers, IPv6 egress through AWS, IPv6 leak blocking
-through Yandex, tunnel-only DNS, private-network isolation, working profile
-revocation, no credential material in Git or logs, and no contact with old VMs.
+Реализовать и проверить Terraform, Ansible, Docker Compose, `yc-direct` и
+`aws-direct` на явно разрешённой новой инфраструктуре. Для завершения нужны
+выход IPv4 через обоих провайдеров, выход IPv6 через AWS, блокировка утечек IPv6
+через Yandex, DNS только через туннель, изоляция частных сетей, работающий отзыв
+профилей, отсутствие учётных данных в Git и логах и отсутствие контактов со старыми ВМ.
 
-`yc-direct` passed acceptance. `aws-direct` passed server, nested-transport,
-PKI, DNS, and forwarding checks, but its data channel is filtered on the
-operator's direct network path on both UDP/1194 and UDP/443. ADR 0002 records
-the rejected port trial. This path-specific result prevents full Direct
-acceptance but does not require changing or deleting the dedicated AWS node.
+`yc-direct` прошёл приёмку. `aws-direct` прошёл проверки сервера, вложенного
+транспорта, PKI, DNS и пересылки, но его канал данных фильтруется на прямом сетевом
+пути оператора и на UDP/1194, и на UDP/443. ADR 0002 фиксирует отклонённый
+эксперимент с портом. Этот результат для конкретного пути мешает полной приёмке
+Direct, но не требует изменения или удаления выделенного узла AWS.
 
-## 4. Multi-Hop
+## 4. Маршрутизация multi-hop
 
-ADR 0003 is accepted and `yc-aws-multihop` is implemented. The original
-requirement for client-path acceptance of both Direct modes is waived only for
-the documented AWS path-filtering condition: the same AWS endpoint passes when
-reached through an existing tunnel. Automated Ubuntu acceptance passed IPv4,
-IPv6, DNS, path MTU, private/metadata isolation, and cleanup through Yandex
-ingress and AWS egress. Manual iPhone acceptance passed IPv4 and IPv6 on both
-Wi-Fi and mobile networks, including recovery after disconnect. Both deployed
-roles are idempotent and their read-only verifiers pass.
+ADR 0003 принят, `yc-aws-multihop` реализован. Исходное требование приёмки обоих
+режимов Direct с клиентского пути снято только для документированного случая
+фильтрации пути AWS: та же точка доступа AWS проходит проверки через существующий
+туннель. Автоматическая приёмка Ubuntu подтвердила IPv4, IPv6, DNS, MTU пути,
+изоляцию частных адресов и метаданных, а также очистку при входе через Yandex
+и выходе через AWS. Ручная приёмка iPhone подтвердила IPv4 и IPv6 в Wi-Fi
+и мобильной сети, включая восстановление после отключения. Обе развёрнутые роли
+идемпотентны; их проверки в режиме только чтения проходят.
 
-## 5. Public restart control plane
+## 5. Публичная панель перезапусков
 
-The implemented first web phase is a public, authenticated single-operator
-restart dashboard for only `aws-direct` and `yc-direct`, described in ADR 0004
-and the control-plane guide. It provides outbound heartbeats and sequential
-restart jobs; a combined job waits for AWS recovery before restarting Yandex.
-Authentication, CSRF protection, the two-node allowlist, audit-safe responses,
-and handling ambiguous mutations are covered by local tests. Live acceptance
-and each real restart remain separate, explicit operator actions.
+Первый реализованный веб-этап — публичная панель перезапусков с аутентификацией
+для одного оператора и только узлов `aws-direct` и `yc-direct`, описанная
+в ADR 0004 и руководстве по панели. Она обеспечивает исходящие сигналы состояния
+(heartbeat) и последовательные задания перезапуска; общее задание ждёт
+восстановления AWS перед перезапуском Yandex. Аутентификация, защита CSRF,
+список из двух разрешённых узлов, безопасные для аудита ответы и обработка
+неопределённых результатов изменений покрыты локальными тестами. Приёмка на
+реальной инфраструктуре и каждый реальный перезапуск остаются отдельными явно
+разрешёнными действиями оператора.
 
-The original restart-only phase is superseded for identities/profiles/PKI by
-[ADR 0005](adr/0005-google-profiles-and-server-pki.md). Its two-node restart
-allowlist and cloud-permission boundaries remain in force.
+Исходный этап только для перезапусков заменён в части учётных записей, профилей
+и PKI [ADR 0005](adr/0005-google-profiles-and-server-pki.md). Его список двух
+разрешённых узлов и границы облачных прав остаются в силе.
 
-The agreed next web iteration is tracked in the
-[Google sign-in and profile management implementation plan](profile-management-plan.md).
-Its eight development stages have been executed individually; their status
-and validation results are recorded in that document. Use the
-[rollout, backup and recovery runbook](profile-rollout.md) after separate exact
-approval. After handover the server PKI is the sole CA writer; local tools are
-disabled and general node deployment cannot overwrite managed CRLs.
+Согласованная следующая веб-итерация отслеживается в
+[плане реализации входа через Google и управления профилями](profile-management-plan.md).
+Её восемь этапов разработки выполнены по отдельности; статусы и результаты
+проверок записаны в этом документе. Используйте
+[инструкцию по развёртыванию, резервному копированию и восстановлению](profile-rollout.md)
+после отдельного точного разрешения. После передачи управления серверная PKI —
+единственный источник записи CA; локальные инструменты отключены, а общее
+развёртывание узлов не может перезаписать управляемые CRL.
 
-The 2026-10-06 scope update preserves the existing CA and working legacy
-client profiles during the panel upgrade. Explicit offline profile import and
-metadata synchronization into USER accounts are implemented; CA import alone
-does not adopt private profiles or assign owners.
-See the [migration and CA lifecycle plan](pki-evolution-plan.md) for individually
-tracked stages M1–M4. ADMIN-driven CA registration, node rollout and retirement
-are future stages C1–C4, with continued old-client compatibility as a release gate.
+Уточнение объёма от 2026-10-06 сохраняет существующий CA и рабочие старые
+клиентские профили при обновлении панели. Реализованы явный автономный импорт
+профилей и синхронизация метаданных в учётные записи USER; импорт одного CA
+не добавляет закрытые профили и не назначает владельцев.
+См. [план миграции и жизненного цикла CA](pki-evolution-plan.md) с отдельными
+этапами M1–M4. Регистрация CA администратором, развёртывание на узлах и вывод CA
+из эксплуатации — будущие этапы C1–C4; сохранение совместимости старых клиентов
+остаётся условием выпуска.
 
-## 6. Hardening and operations
+## 6. Усиление защиты и эксплуатация
 
-Add encrypted remote state, backup and recovery, upgrades, monitoring,
-security tests, threat-model review, and operator documentation. Completion
-requires a tested rollback path and clean secret scan. Migrating or retiring
-the old OpenVPN Access Server is a separate project requiring explicit scope
-and approval.
+Добавить зашифрованное удалённое состояние, резервное копирование и восстановление,
+обновления, мониторинг, проверки безопасности, ревью модели угроз и документацию
+оператора. Для завершения нужны проверенный путь отката и чистый результат
+сканирования секретов. Миграция или вывод старого OpenVPN Access Server из
+эксплуатации — отдельный проект с явным согласованием объёма и разрешением.

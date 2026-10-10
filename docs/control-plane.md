@@ -1,290 +1,291 @@
-# Restart control plane operator guide
+# Руководство оператора по панели перезапусков
 
-The implementation under `web/` provides Google sign-in, ADMIN/USER sessions,
-and administrative restart control for `aws-direct` and `yc-direct`.
-The isolated PKI and public profile API are implemented in stages 3–4;
-Signed [CRL delivery](crl-delivery.md) is implemented; [the browser cabinet](profile-panel.md) is implemented. None of the commands in this guide are run by the
-repository or test suite automatically.
+Реализация в `web/` предоставляет вход через Google, сессии ADMIN/USER и
+административное управление перезапусками `aws-direct` и `yc-direct`.
+Изолированная PKI и публичный API профилей реализованы на этапах 3–4;
+подписанная [доставка CRL](crl-delivery.md) и [кабинет в браузере](profile-panel.md)
+также реализованы. Репозиторий и тесты не запускают команды этого руководства автоматически.
 
-For the current release use [profile rollout, handover and recovery](profile-rollout.md)
-and [ADR 0005](adr/0005-google-profiles-and-server-pki.md). Historical stage
-descriptions below do not authorize reverting to password login or local CA writes.
+Для текущего выпуска используйте [развёртывание профилей, передачу управления
+и восстановление](profile-rollout.md) и [ADR 0005](adr/0005-google-profiles-and-server-pki.md).
+Исторические описания этапов ниже не разрешают возврат к входу по паролю
+или локальной записи CA.
 
-## Components and API
+## Компоненты и API
 
-The steady state is four containers, including the network-isolated PKI:
+В рабочем состоянии четыре контейнера, включая PKI без сети:
 
 ```text
-Internet -> Caddy + React -> Unix socket -> FastAPI -> PostgreSQL
+Интернет -> Caddy + React -> Unix-сокет -> FastAPI -> PostgreSQL
                                            |       -> AWS EC2 API
-                                           |       -> private Unix socket -> PKI
+                                           |       -> закрытый Unix-сокет -> PKI
                                            `-------> Yandex Compute API
-VPN nodes ------------ outbound heartbeat --------> FastAPI
+VPN-узлы ------------ исходящий heartbeat --------> FastAPI
 ```
 
-The versioned API provides login, session and logout endpoints, the two-VM
-status list, restart job creation/history/detail, and authenticated agent
-heartbeats. The schema contains `User`, `UserSession`, `VpnVm`,
-`VmHeartbeat`, `RestartJob`, `RestartTarget`, `VpnProfile`, `ProfileJob`,
-`OAuthLoginAttempt`, and `GoogleAdminBinding`.
-Profile models store metadata only; the PKI keeps private material in exclusive
-storage. The [profile API](profile-api.md) connects it to PostgreSQL jobs;
-[CRL delivery](crl-delivery.md) is implemented; deployment and real-node acceptance require separate exact approval.
-Responses never include
-instance IDs, IP addresses, heartbeat tokens, credentials or cloud request
-IDs.
+Версионированный API предоставляет вход, сессию и выход, список состояния двух ВМ,
+создание, историю и детали заданий перезапуска и аутентифицированные heartbeat
+агентов. Схема содержит `User`, `UserSession`, `VpnVm`, `VmHeartbeat`,
+`RestartJob`, `RestartTarget`, `VpnProfile`, `ProfileJob`, `OAuthLoginAttempt`
+и `GoogleAdminBinding`. Модели профилей хранят только метаданные; PKI держит
+закрытые материалы в собственном исключительном хранилище.
+[API профилей](profile-api.md) связывает его с заданиями PostgreSQL;
+[доставка CRL](crl-delivery.md) реализована; развёртывание и приёмка на реальных
+узлах требуют отдельного точного разрешения. Ответы никогда не включают
+ID экземпляров, IP, токены heartbeat, учётные данные или ID облачных запросов.
 
-### User model foundation (stage 1)
+### Основа модели пользователей (этап 1)
 
-This section describes migration 0002. Stage 2 below supersedes its password
-login behavior; the current backend has no password login endpoint.
+Этот раздел описывает миграцию 0002. Этап 2 ниже заменяет её поведение входа
+по паролю; у текущего бэкенда нет точки входа по паролю.
 
-Migration `0002_users_and_profiles` renames the legacy administrator/session
-tables and restart-author column in place. It preserves UUIDs, password hashes,
-session hashes and restart history. Existing identities become active `ADMIN`
-users with no Google subject or email; new identities default to `USER`.
-Google identities are unique by subject, never automatically matched to a
-legacy login or an email alone. Google sign-in is not enabled by this stage.
+Миграция `0002_users_and_profiles` переименовывает старые таблицы администратора
+и сессий, а также столбец автора перезапуска на месте. Она сохраняет UUID,
+хеши паролей и сессий, историю перезапусков. Существующие учётные записи становятся
+активными `ADMIN` без субъекта Google и email; новые по умолчанию получают `USER`.
+Учётные записи Google уникальны по субъекту, никогда автоматически не связываются
+со старым логином или только email. Этот этап не включает вход через Google.
 
-Password login, session and logout remain available. VM status and all restart
-endpoints require `ADMIN`; mutations also require CSRF. Role and active status
-are checked against the database on every request. There is no public role
-mutation endpoint. Shared profile queries filter by owner in SQL for `USER`
-and return `404` for inaccessible or absent profiles; the public profile API
-will be added in stage 4.
+Вход по паролю, сессия и выход остаются доступны. Статус ВМ и все точки
+перезапуска требуют `ADMIN`; изменения также требуют CSRF. Роль и активность
+проверяются по БД в каждом запросе. Публичной точки изменения роли нет.
+Общие запросы профилей фильтруют владельца в SQL для `USER` и возвращают `404`
+для недоступных или отсутствующих профилей; публичный API добавляется на этапе 4.
 
-The `bootstrap-admin` CLI remains restricted to legacy identities. Changing
-the operator login disables previous legacy identities instead of deleting
-historical job authors. Credential changes revoke legacy sessions while
-preserving Google users and their sessions. Routine redeployment with unchanged
-credentials preserves sessions.
+CLI `bootstrap-admin` остаётся ограниченным старыми учётными записями.
+Изменение логина оператора отключает прежние старые записи вместо удаления
+исторических авторов заданий. Изменения учётных данных отзывают старые сессии,
+сохраняя пользователей Google и их сессии. Обычное повторное развёртывание
+с неизменными учётными данными сохраняет сессии.
 
-Applying the migration to an existing installation is a separately approved
-operator action. Before applying, back up the database and deploy the matching
-backend code with the migration. Downgrade to the old schema is allowed only
-while all users are active legacy administrators and the profile tables are
-empty; otherwise it fails without deleting data or reactivating disabled
-credentials. Later rollback requires an operator migration that preserves
-identities, profiles and revocations.
+Применение миграции к существующей установке — отдельное разрешённое действие
+оператора. Перед применением сделайте резервную копию БД и разверните
+соответствующий код бэкенда вместе с миграцией. Откат к старой схеме разрешён
+только пока все пользователи — активные старые администраторы, а таблицы
+профилей пусты; иначе он завершается ошибкой без удаления данных или повторной
+активации отключённых учётных данных. Поздний откат требует операторской
+миграции с сохранением пользователей, профилей и отзывов.
 
-Backend tests use SQLite with foreign keys enabled. Migration tests additionally
-require an explicitly supplied `VEILWAY_TEST_POSTGRES_URL` pointing only at a
-disposable local PostgreSQL 17 database. Each test creates and removes its own
-schema; never supply a production database URL. Without that test URL the
-migration tests are reported as skipped, not passed.
+Тесты бэкенда используют SQLite с включёнными внешними ключами. Тесты миграций
+дополнительно требуют явно заданного `VEILWAY_TEST_POSTGRES_URL` только к
+одноразовой локальной БД PostgreSQL 17. Каждый тест создаёт и удаляет свою
+схему; никогда не задавайте URL рабочей БД. Без тестового URL тесты миграций
+отмечаются как пропущенные, а не пройденные.
 
-### Google registration and sign-in (stage 2)
+### Регистрация и вход через Google (этап 2)
 
-The browser navigates to `GET /api/v1/auth/google/start`, then Google returns
-to `GET /api/v1/auth/google/callback`. The server exchanges the authorization
-code, validates the ID token using pinned PyJWT with Google's fixed HTTPS JWKS
-endpoint, and redirects to `/` with a new server-side session. It requests only
-`openid email`, never Gmail/Drive access or offline access. See
-[Google OIDC](https://developers.google.com/identity/openid-connect/openid-connect).
+Браузер переходит на `GET /api/v1/auth/google/start`, затем Google возвращает
+его на `GET /api/v1/auth/google/callback`. Сервер обменивает код авторизации,
+проверяет ID-токен закреплённой версией PyJWT через фиксированную HTTPS-точку
+JWKS Google и перенаправляет на `/` с новой серверной сессией. Запрашиваются
+только `openid email`, никогда доступ к Gmail/Drive или автономный доступ.
+См. [Google OIDC](https://developers.google.com/identity/openid-connect/openid-connect).
 
-Login attempts last at most ten minutes. PostgreSQL stores only state, nonce
-and browser-cookie hashes; callback consumes an attempt atomically before
-exchanging the code. OAuth uses a separate Secure, HttpOnly, `SameSite=Lax`
-`__Host-veilway_oauth` cookie; the session remains Secure, HttpOnly and
-`SameSite=Strict`. Invalid, expired, duplicate or replayed callbacks fail with
-a fixed error redirect. Google access/refresh/ID tokens are not persisted.
+Попытки входа живут не более десяти минут. PostgreSQL хранит только хеши state,
+nonce и cookie браузера; callback атомарно использует попытку до обмена кода.
+OAuth использует отдельную cookie `__Host-veilway_oauth` с Secure, HttpOnly
+и `SameSite=Lax`; сессия остаётся Secure, HttpOnly и `SameSite=Strict`.
+Некорректные, истёкшие, дублированные или повторно воспроизведённые callback
+завершаются перенаправлением с фиксированной ошибкой. Токены Google
+access/refresh/ID не сохраняются.
 
-First login creates a Google identity by `sub`. The configured administrator
-email must be verified and Google-authoritative (Gmail or the matching Workspace
-hosted domain); arbitrary third-party email ownership is insufficient for
-admin bootstrap. See [Google's email authority guidance](https://developers.google.com/identity/sign-in/web/backend-auth).
-The singleton database binding is locked during account resolution and pins
-ADMIN to the first matching Google identity. All other identities receive USER,
-even if their email later matches the configured admin address. A bound account
-retains its identity and role when its verified email changes; editing the
-configuration alone does not transfer admin rights. Administrator replacement
-requires a separately designed operator procedure; there is no public role API.
+Первый вход создаёт учётную запись Google по `sub`. Настроенный email
+администратора должен быть подтверждён, а Google — доверенным источником
+для него (Gmail или соответствующий домен Workspace); владения произвольным
+сторонним email недостаточно для первоначального ADMIN.
+См. [рекомендации Google о доверии к email](https://developers.google.com/identity/sign-in/web/backend-auth).
+Единственная привязка в БД блокируется при определении учётной записи и
+закрепляет ADMIN за первой подходящей записью Google. Все остальные получают
+USER, даже если их email позже совпадёт с настроенным адресом ADMIN.
+Привязанная запись сохраняет идентичность и роль при изменении подтверждённого
+email; изменение конфигурации само по себе не передаёт права администратора.
+Замена администратора требует отдельно спроектированной операторской процедуры;
+публичного API ролей нет.
 
-`GET /api/v1/auth/session` returns `user_id`, `email`, `role`, and `csrf_token`
-with `Cache-Control: no-store`. Logout requires CSRF. USER sees an account
-screen and does not load infrastructure APIs; ADMIN retains the dashboard.
-The [profile cabinet](profile-panel.md) is implemented in stage 6.
+`GET /api/v1/auth/session` возвращает `user_id`, `email`, `role` и `csrf_token`
+с `Cache-Control: no-store`. Выход требует CSRF. USER видит экран учётной записи
+и не загружает API инфраструктуры; ADMIN сохраняет панель управления.
+[Кабинет профилей](profile-panel.md) реализован на этапе 6.
 
-Migration `0003_google_sign_in` invalidates all prior sessions, disables legacy
-password identities and resets any preexisting Google roles to USER. Legacy
-UUIDs, password hashes and restart authors remain in the database. The old
-`POST /api/v1/auth/login` endpoint is removed; the legacy `bootstrap-admin`
-CLI is not used by deployment and cannot grant access through Google. Downgrade
-does not restore sessions or reactivate passwords; once the admin is bound,
-downgrade refuses to discard the binding.
+Миграция `0003_google_sign_in` аннулирует все прежние сессии, отключает старые
+парольные записи и сбрасывает ранее существовавшие роли Google в USER.
+Старые UUID, хеши паролей и авторы перезапусков остаются в БД. Старая точка
+`POST /api/v1/auth/login` удалена; прежний CLI `bootstrap-admin` не используется
+развёртыванием и не может предоставить доступ через Google. Откат не
+восстанавливает сессии или пароли; после привязки ADMIN он отказывается удалять привязку.
 
-Caddy skips OAuth access logs; both access and runtime error logs omit request objects.
-The backend entrypoint already disables Uvicorn access logging. Do not enable
-raw request, token-response or debug-body logging for authentication.
+Caddy не ведёт журнал доступа OAuth; журналы доступа и ошибок времени выполнения
+не содержат объектов запросов. Точка входа бэкенда уже отключает журналы доступа
+Uvicorn. Не включайте журналы сырых запросов, ответов с токенами или отладочных
+тел запросов аутентификации.
 
-#### Prepare Google inputs before an approved deployment
+#### Подготовка данных Google перед разрешённым развёртыванием
 
-1. After explicit approval, create a Google OAuth client of type **Web
-   application** and configure its consent screen/audience. Set the authorized
-   redirect URI to `https://veilway.ru/api/v1/auth/google/callback` exactly.
-   Make its audience available to intended users before live registration
-   acceptance. Basic identity scopes have an exception to the Testing allowlist;
-   do not treat it as access control. See the current [rollout guide](profile-rollout.md).
-2. Update the protected local `.env` to the current `.env.example` contract:
-   replace `ADMIN_LOGIN`/`ADMIN_PASSWORD` with `GOOGLE_CLIENT_ID`,
-   `GOOGLE_CLIENT_SECRET`, and `ADMIN_GOOGLE_EMAIL`. Use the operator's actual
-   Google email privately; matching is case-insensitive, without Gmail dot or
-   plus-alias rewriting. Retain the other infrastructure inputs.
-3. The deployment wrapper validates without contacting hosts unless `--apply`
-   is passed. After separately approved deployment, three additional root-only
-   runtime files are installed: `google_client_id`, `google_client_secret`,
-   `admin_google_email`. Compose passes file paths only; the entrypoint loads
-   them into sealed descriptors before dropping privileges.
-4. Back up the database and review migration 0003 before applying it with the
-   matching backend/frontend images. Switching logs everyone out. Verify the
-   operator's first Google login yields ADMIN and another account yields USER.
-   Verify legacy password login fails and history remains readable by ADMIN.
+1. После явного разрешения создайте OAuth-клиент Google типа **Веб-приложение**
+   и настройте экран согласия и аудиторию. Укажите разрешённый URI перенаправления
+   точно `https://veilway.ru/api/v1/auth/google/callback`. Обеспечьте доступ
+   аудитории предполагаемым пользователям перед приёмкой реальной регистрации.
+   Базовые области идентификации имеют исключение из списка Testing;
+   не считайте его контролем доступа. См. текущую [инструкцию развёртывания](profile-rollout.md).
+2. Обновите защищённый локальный `.env` по текущему контракту `.env.example`:
+   замените `ADMIN_LOGIN`/`ADMIN_PASSWORD` на `GOOGLE_CLIENT_ID`,
+   `GOOGLE_CLIENT_SECRET` и `ADMIN_GOOGLE_EMAIL`. Настоящий email оператора Google
+   задавайте приватно; сравнение нечувствительно к регистру, без преобразования
+   точек Gmail и plus-алиасов. Сохраните остальные инфраструктурные данные.
+3. Обёртка развёртывания проверяет данные без контакта с хостами, пока не задан
+   `--apply`. После отдельно разрешённого развёртывания устанавливаются три
+   дополнительных файла только для root: `google_client_id`,
+   `google_client_secret`, `admin_google_email`. Compose передаёт только пути;
+   точка входа загружает их в запечатанные дескрипторы до сброса привилегий.
+4. Скопируйте БД и рассмотрите миграцию 0003 перед применением с соответствующими
+   образами бэкенда/фронтенда. Переключение завершит все сессии. Проверьте, что
+   первый вход оператора Google даёт ADMIN, другая запись — USER. Старый вход
+   по паролю должен не работать, а история — оставаться доступной ADMIN.
 
-No Google project, real secret, host or deployment is changed by local tests.
+Локальные тесты не изменяют проект Google, реальные секреты, хосты или развёртывание.
 
-## 1. Provision in separately approved stages
+## 1. Создание ресурсов отдельными разрешёнными этапами
 
-Review and apply `infra/yandex-web` separately. It creates the new public web
-VM, isolated network, TCP/22+80+443 security group, static IPv4, public Cloud
-DNS zone with the `veilway.ru` apex A record, service account and persistent
-data disk attached with `auto_delete=false`. Its instance-level IAM binding must name only
-the existing `yc-direct` ID. Before applying, inspect existing
-`compute.operator` access bindings on that VM: the Terraform binding is
-authoritative for that role.
+Отдельно рассмотрите и примените `infra/yandex-web`. Он создаёт новую публичную
+веб-ВМ, изолированную сеть, группу безопасности TCP/22+80+443, статический IPv4,
+публичную зону Cloud DNS с A-записью корня `veilway.ru`, сервисный аккаунт
+и постоянный диск данных с `auto_delete=false`. Привязка IAM на уровне экземпляра
+должна указывать только существующий ID `yc-direct`. Перед применением проверьте
+существующие привязки доступа `compute.operator` этой ВМ: привязка Terraform
+определяет полный состав доступа для этой роли.
 
-Because that role is intentionally scoped to one instance, the backend checks
-Yandex restart completion through the instance-specific Compute API operations
-list. It must not use the global operation endpoint or broaden the service
-account binding to the folder merely to read operation status.
+Поскольку роль намеренно ограничена одним экземпляром, бэкенд проверяет
+завершение перезапуска Yandex через список операций Compute API конкретного
+экземпляра. Нельзя использовать глобальную точку операций или расширять
+привязку сервисного аккаунта до каталога только ради чтения статуса операции.
 
-Review and apply `infra/aws-management` separately. It creates an IAM user and
-policy but no access key. The planned `RebootInstances` resource must be the
-single `aws-direct` ARN and status reads must be limited to one region. Create
-the access key manually only after that policy has been reviewed; store it in
-the local `.env`, never in Terraform state or command arguments.
+Отдельно рассмотрите и примените `infra/aws-management`. Он создаёт пользователя
+IAM и политику без ключа доступа. Ресурс `RebootInstances` в плане должен быть
+единственным ARN `aws-direct`, чтение статуса — ограничено одним регионом.
+Создайте ключ вручную только после ревью политики; храните его в локальном `.env`,
+никогда в состоянии Terraform или аргументах команд.
 
-After applying the Cloud DNS resources, delegate `veilway.ru` at REG.RU to the
-authoritative name servers returned by the Terraform `dns_name_servers`
-output. Do not change registrar NS records before the public zone and apex A
-record exist. Wait until public resolution is correct before deploying Caddy
-so production ACME validation can succeed.
+После применения ресурсов Cloud DNS делегируйте `veilway.ru` в REG.RU
+авторитетным серверам из выходного значения Terraform `dns_name_servers`.
+Не меняйте NS у регистратора до создания публичной зоны и A-записи корня.
+Дождитесь корректного публичного разрешения имён перед развёртыванием Caddy,
+чтобы рабочая проверка ACME могла пройти.
 
-## 2. Prepare protected local inputs
+## 2. Подготовка защищённых локальных данных
 
-Copy `.env.example` to `.env`, replace every placeholder, and protect it:
+Скопируйте `.env.example` в `.env`, замените все заполнители и защитите файл:
 
 ```sh
 chmod 0600 .env
 cp deploy/control-inventory.example.yml deploy/control-inventory.yml
 ```
 
-Replace the documentation-only addresses in the ignored inventory. The
-`control_web` host must be only the new web VM. The `direct_vpn` group must
-contain only `aws-direct` and `yc-direct`, with an explicit list of containers
-whose health the outbound agent will inspect.
+Замените адреса-примеры в игнорируемом инвентаре. Хост `control_web` должен
+быть только новой веб-ВМ. Группа `direct_vpn` должна содержать только
+`aws-direct` и `yc-direct` с явным списком контейнеров, состояние которых
+проверяет исходящий агент.
 
-The wrapper rejects unknown `.env` keys, missing values, an unsafe file mode,
-or a file not ignored by Git. Without `--apply` it validates locally and does
-not contact any host:
+Обёртка отклоняет неизвестные ключи `.env`, пустые значения, небезопасные права
+или файл, не игнорируемый Git. Без `--apply` она проверяет данные локально
+и не обращается к хостам:
 
 ```sh
 python3 scripts/deploy-web-control.py web
 python3 scripts/deploy-web-control.py heartbeat
 ```
 
-## 3. Deploy only after explicit approval
+## 3. Развёртывание только после явного разрешения
 
-The following are two distinct mutating operations. Run each only after its
-inventory and scope have been approved:
+Ниже две отдельные операции изменения. Запускайте каждую только после
+согласования её инвентаря и границ:
 
 ```sh
 python3 scripts/deploy-web-control.py web --apply
 python3 scripts/deploy-web-control.py heartbeat --apply
 ```
 
-The web role formats only the Terraform-attached empty `virtio-data` disk,
-mounts it at `/srv/veilway-control`, installs six root-owned `0400` application
-secret/input files, runs Alembic, synchronizes the exact two VM
-records through protected stdin, and starts the four containers. The two PKI-only
-runtime inputs use root-owned `0600` files. PKI requires a separately approved
-manual import before it can serve; see [PKI service](pki-service.md). It never
-copies the complete `.env`.
+Веб-роль форматирует только пустой диск `virtio-data`, подключённый Terraform,
+монтирует его в `/srv/veilway-control`, устанавливает шесть файлов секретов
+и входных данных приложения `0400`, принадлежащих root, запускает Alembic,
+синхронизирует ровно две записи ВМ через защищённый stdin и запускает четыре
+контейнера. Два входа только для PKI используют файлы `0600` root.
+Для работы PKI требуется отдельно разрешённый ручной импорт; см.
+[сервис PKI](pki-service.md). Полный `.env` никогда не копируется.
 
-On upgrade the role first stops existing API/web and, if present, PKI before
-replacing application code or migrating. This supports both the original
-three-container panel and the current four-container panel. Take the approved
-coherent backup first. The deployed project `.env` stores only path interpolation,
-not credentials. Follow the [ordered rollout](profile-rollout.md) for CA/agent cutover.
+При обновлении роль сначала останавливает существующие API/web и PKI,
+если он есть, перед заменой кода или миграцией. Это поддерживает и исходную
+панель с тремя контейнерами, и текущую с четырьмя. Сначала сделайте разрешённую
+согласованную резервную копию. Развёрнутый `.env` проекта хранит только
+подстановки путей, не учётные данные. Для переключения CA/агентов следуйте
+[порядку развёртывания](profile-rollout.md).
 
-The PostgreSQL password initializes the database cluster and must remain
-unchanged during routine redeployments. Rotating it requires a separate,
-explicit database-password procedure; merely editing `.env` intentionally
-causes migration to fail rather than silently desynchronizing the database
-role and API secret.
+Пароль PostgreSQL инициализирует кластер БД и должен оставаться неизменным
+при обычных повторных развёртываниях. Его смена требует отдельной явной
+процедуры; простое редактирование `.env` намеренно приводит к ошибке миграции,
+а не к незаметной рассинхронизации роли БД и секрета API.
 
-The heartbeat role installs only a small read-only Docker inspector and a
-15-second systemd timer. It reads boot ID and uptime from `/proc`, reads the
-status of the explicitly listed containers, and sends one outbound HTTPS
-request. It has no listener or command endpoint and does not change or restart
-OpenVPN. To install one node separately, append `--limit aws-direct` or
-`--limit yc-direct`.
+Роль heartbeat устанавливает только небольшой инспектор Docker с чтением
+и таймер systemd на 15 секунд. Она читает boot ID и uptime из `/proc`, статус
+явно перечисленных контейнеров и отправляет один исходящий HTTPS-запрос.
+У неё нет слушателя или точки команд; она не изменяет и не перезапускает OpenVPN.
+Для установки одного узла добавьте `--limit aws-direct` или `--limit yc-direct`.
 
-## 4. Acceptance before a real restart
+## 4. Приёмка перед реальным перезапуском
 
-Before using the restart button, verify all of the following manually:
+Перед использованием кнопки перезапуска вручную проверьте всё следующее:
 
-- `https://veilway.ru` is reachable without either VPN;
-- the browser receives a valid certificate and the API/database expose no TCP
-  ports;
-- both dashboard cards have fresh healthy heartbeats;
-- the AWS credentials pass an operator-run `RebootInstances` DryRun for only
-  `aws-direct` and cannot target another instance;
-- the Yandex service account has no folder role and its instance binding names
-  only `yc-direct`;
-- the web VM and the legacy OpenVPN Access Server are absent from the managed
-  VM table and all IAM target lists.
+- `https://veilway.ru` доступен без обоих VPN;
+- браузер получает действительный сертификат, API и БД не открывают TCP-порты;
+- обе карточки панели имеют свежие исправные heartbeat;
+- учётные данные AWS проходят запущенный оператором `RebootInstances` DryRun
+  только для `aws-direct` и не могут нацелиться на другой экземпляр;
+- сервисный аккаунт Yandex не имеет роли каталога, его привязка указывает
+  только `yc-direct`;
+- веб-ВМ и старый OpenVPN Access Server отсутствуют в таблице управляемых ВМ
+  и всех списках целей IAM.
 
-A real restart is a further explicit action in the UI. For both targets, the
-job waits up to 15 minutes for AWS to return with a new healthy boot ID before
-dispatching the Yandex restart. `failed` stops the sequence. `needs_review`
-means the cloud mutation outcome was ambiguous and the worker deliberately did
-not retry it.
+Реальный перезапуск — следующее отдельное явное действие в интерфейсе.
+Для обеих целей задание ждёт до 15 минут возвращения AWS с новым исправным
+boot ID, прежде чем отправить перезапуск Yandex. `failed` останавливает
+последовательность. `needs_review` означает неопределённый результат облачной
+операции, которую воркер намеренно не повторял.
 
-## Local verification
+## Локальная проверка
 
-The normal test suite uses SQLite plus mocked cloud providers and cannot call
-real cloud mutations. Run it in the dedicated test containers; `--build` is an
-explicit acknowledgement that Docker may fetch the pinned base images and
-package dependencies when they are not cached locally:
+Обычные тесты используют SQLite и имитации облачных провайдеров и не могут
+вызывать реальные облачные изменения. Запускайте их в выделенных тестовых
+контейнерах; `--build` явно подтверждает, что Docker может загрузить
+закреплённые базовые образы и зависимости пакетов, если их нет локально:
 
 ```sh
 ./scripts/test-control-plane.sh --build
 ```
 
-The runner executes backend pytest without network access or a writable root
-filesystem, builds the pinned frontend stage, validates the Compose exposure,
-and then runs the disposable PostgreSQL integration check. To run only the
-PostgreSQL check (it builds images and creates then removes local containers),
-use:
+Скрипт запускает pytest бэкенда без сети и записи в корневую файловую систему,
+собирает закреплённый этап фронтенда, проверяет доступность сервисов Compose
+извне, затем запускает интеграционную проверку одноразового PostgreSQL.
+Чтобы запустить только проверку PostgreSQL (она собирает образы, создаёт
+и затем удаляет локальные контейнеры), используйте:
 
 ```sh
 python3 scripts/control-postgres-smoke.py
 ```
 
-## Worker readiness and recovery
+## Готовность воркеров и восстановление
 
-`GET /api/healthz` remains a liveness check returning `{"status":"ok"}`.
-`GET /api/readyz` returns HTTP 200 with `{"status":"ready"}` only while all
-three background worker tasks have started and remain running. Before startup,
-during shutdown or after an unexpected task exit it returns HTTP 503 with
-`{"status":"unavailable"}`. This checks task lifetimes, not database, cloud or
-PKI availability; transient outages handled inside a running worker do not by
-themselves make readiness fail. Responses contain no exception details.
+`GET /api/healthz` остаётся проверкой работоспособности с `{"status":"ok"}`.
+`GET /api/readyz` возвращает HTTP 200 с `{"status":"ready"}` только пока
+все три фоновые задачи воркеров запущены и продолжают работать. До запуска,
+при остановке или неожиданном выходе задачи он возвращает HTTP 503 с
+`{"status":"unavailable"}`. Проверяются жизненные циклы задач, а не доступность
+БД, облаков или PKI; временные отказы, обработанные работающим воркером,
+сами по себе не нарушают готовность. Ответы не содержат подробностей исключений.
 
-Unexpected restart-worker failure is not retried automatically. An operator must
-inspect the durable job state and any ambiguous dispatch before explicitly
-approving recovery/restart. On the next approved application startup, interrupted
-dispatches are marked for review rather than rebooted again. PKI workers retain
-their original job keys and lease recovery; CRL polling retains its own retry
-policy. Application shutdown signals every worker and waits for all in-flight
-operations, including threaded PKI calls, without cancelling them.
+Неожиданный сбой воркера перезапусков автоматически не повторяется. Оператор
+должен проверить устойчивое состояние задания и неопределённую отправку,
+прежде чем явно разрешить восстановление/перезапуск. При следующем разрешённом
+запуске приложения прерванные отправки помечаются для проверки, а не приводят
+к повторной перезагрузке. Воркеры PKI сохраняют исходные ключи заданий
+и восстановление аренды; опрос CRL сохраняет собственную политику повторов.
+Остановка приложения сигнализирует каждому воркеру и ждёт все текущие операции,
+включая вызовы PKI в потоках, не отменяя их.

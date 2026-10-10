@@ -1,11 +1,11 @@
-# Profile security and integration acceptance (stage 7)
+# Приёмка безопасности и интеграции профилей (этап 7)
 
-Local acceptance completed on 2026-10-05. This records development checks;
-production deployment and live acceptance have not been performed.
+Локальная приёмка завершена 2026-10-05. Здесь записаны проверки разработки;
+рабочее развёртывание и приёмка на реальной инфраструктуре не выполнялись.
 
-## Repeatable local checks
+## Повторяемые локальные проверки
 
-Run from the repository root with Docker available:
+Запускайте из корня репозитория при доступном Docker:
 
 ```bash
 scripts/test-profile-security.sh --build
@@ -18,131 +18,141 @@ scripts/check.sh
 python3 scripts/check-public-diff.py --all-public --history
 ```
 
-The PostgreSQL fixture image `postgres:17.4-alpine` must already be available
-locally; explicitly preload it with `docker pull postgres:17.4-alpine` if needed.
-The test run uses `--pull never` for this fixture.
+Тестовый образ PostgreSQL `postgres:17.4-alpine` уже должен быть локально;
+при необходимости явно загрузите его через `docker pull postgres:17.4-alpine`.
+Для этих тестовых данных используется `--pull never`.
 
-Builds explicitly download pinned dependencies/base images when needed. Tests
-do not contact Google, clouds or VPN hosts. The security wrapper creates a
-disposable PostgreSQL with `--network none`, no published ports, no host data
-mounts and database storage in tmpfs. The test container shares only that
-container's isolated loopback. An EXIT trap stops and removes PostgreSQL.
-An interrupted host or killed wrapper may require stopping its specifically
-named `veilway-security-postgres-*` test container; do not stop other containers.
+Сборки явно загружают закреплённые зависимости/базовые образы при необходимости.
+Тесты не обращаются к Google, облакам или VPN-хостам. Обёртка безопасности
+создаёт одноразовый PostgreSQL с `--network none`, без опубликованных портов
+и монтирования данных хоста, с БД в tmpfs. Тестовый контейнер разделяет только
+его изолированный loopback. Обработчик EXIT останавливает и удаляет PostgreSQL.
+Сбой хоста или принудительное завершение обёртки могут потребовать остановки
+её конкретного тестового контейнера `veilway-security-postgres-*`;
+не останавливайте другие контейнеры.
 
-The production frontend build performs typecheck, unit tests and bundle build.
-Browser acceptance serves the compiled bundle on isolated loopback with API
-fixtures. The proxy test parses the actual production Caddy configuration,
-then changes only its site address to isolated HTTP loopback to avoid ACME.
-It uses the production `NET_BIND_SERVICE` capability required by the Caddy
-binary, no host ports or mounts, and stops its temporary container in finally.
+Рабочая сборка фронтенда выполняет проверку типов, модульные тесты и сборку
+пакета. Браузерная приёмка обслуживает скомпилированный пакет на изолированном
+loopback с тестовым API. Тест прокси разбирает настоящую рабочую конфигурацию
+Caddy, затем меняет только адрес сайта на изолированный HTTP loopback,
+избегая ACME. Он использует рабочую capability `NET_BIND_SERVICE`, нужную
+бинарному файлу Caddy, не открывает порты хоста и не монтирует его каталоги,
+останавливает временный контейнер в finally.
 
-## Requirement evidence
+## Подтверждение требований
 
-| Requirement | Authoritative local coverage |
+| Требование | Определяющее локальное покрытие |
 | --- | --- |
-| Roles and infrastructure isolation | `test_access.py`: unauthenticated/USER/ADMIN matrix, forged role header, legacy password endpoint disabled, live role/deactivation checks; `test_profiles.py`: owner/stranger/unassigned profiles and jobs |
-| Mass assignment | Strict profile request schemas; create validation cases and `test_stage7_security.py` reject extra rename/assignment/revoke fields without changing profile/job state |
-| CSRF and session substitution | Session-bound CSRF hashes; missing/wrong/cross-session tokens fail, owner token still works, inactive identity rejected |
-| OAuth replay and token substitution | `test_oidc.py`: browser-bound single-use state, expiry/replay, actual RSA signature verification, issuer/audience/nonce/expiry/claims, algorithm/key rejection, fixed callback, pinned ADMIN subject |
-| Concurrent issue and replay | `test_profile_postgres.py` uses real PostgreSQL row locks: duplicate create, competing owner assignment, single worker claim, revoke replay, expired lease fencing; PKI tests exercise concurrent serial allocation and repeat issue |
-| Crash recovery and outages | Worker loss after PKI/before DB commit reuses the durable key; real PKI process crashes before/after commit; transient PKI retry and database outage recovery; CRL lost-ack retry and pending-node gating |
-| Secret persistence | All tables of disposable OAuth/profile integration databases inspected for actual synthetic ID/access/refresh tokens, client secret and downloaded private VPN material; only hashes/metadata persist in these flows |
-| Error/log disclosure | Captured fixture logs exclude tokens/private profile blocks; PKI framing/metadata reject unexpected material; validation responses contain a fixed message instead of rejected input; production Uvicorn access logs disabled; actual Caddy requests with CSRF/cookie/OAuth canaries do not leak into runtime/access logs |
-| Cache and browser storage | API success and handled 401/403/404/409/422 responses have `no-store`; actual Caddy gateway 502 has safe headers and fixed body; browser requests use `cache: no-store`, no local/session storage, IndexedDB, CacheStorage or service worker registrations; Blob URL is revoked; logout/reload removes profiles |
-| Git and local artifacts | Ignore-policy checks plus credential-pattern scan of all public working files and objects reachable from local Git refs; staged diff empty at acceptance; source/diff review |
-| VPN revocation | Backend suite runs actual synthetic OpenVPN TLS reconnect with loopback/`dev null`: revoked certificate rejected, another accepted, same server PID; production routing deferred to the procedure below |
+| Роли и изоляция инфраструктуры | `test_access.py`: матрица без сессии/USER/ADMIN, поддельный заголовок роли, отключённая старая парольная точка, проверки текущей роли/деактивации; `test_profiles.py`: профили и задания владельца/постороннего/без владельца |
+| Массовое присваивание полей | Строгие схемы запросов профилей; проверки создания и `test_stage7_security.py` отклоняют лишние поля переименования/назначения/отзыва без изменения профиля/задания |
+| CSRF и подмена сессии | Хеши CSRF, привязанные к сессии; отсутствующие/неверные/чужие токены не проходят, токен владельца работает, неактивная запись отклоняется |
+| Повтор OAuth и подмена токена | `test_oidc.py`: одноразовый state с привязкой к браузеру, срок/повтор, настоящая проверка RSA-подписи, издатель/аудитория/nonce/срок/поля, отказ по алгоритму/ключу, фиксированный callback, закреплённый субъект ADMIN |
+| Параллельный выпуск и повтор | `test_profile_postgres.py` с реальными блокировками строк PostgreSQL: дублированное создание, конкурирующие назначения, единственный захват воркера, повтор отзыва, блокирование истёкшей аренды; PKI проверяет параллельное выделение номеров и повтор выпуска |
+| Восстановление после сбоя и отказы | Потеря воркера после PKI/до фиксации БД повторно использует устойчивый ключ; реальные сбои PKI до/после фиксации; повторы временных сбоев PKI и восстановление БД; повтор потерянного подтверждения CRL и ожидание узла |
+| Сохранение секретов | Все таблицы одноразовых интеграционных БД OAuth/профилей проверены на реальные искусственные ID/access/refresh-токены, секрет клиента и скачанные закрытые VPN-материалы; сохраняются только хеши/метаданные |
+| Раскрытие в ошибках/логах | Записанные тестовые логи не содержат токенов/закрытых блоков профиля; формат/метаданные PKI отклоняют неожиданные материалы; ответы проверки содержат фиксированное сообщение вместо отклонённых данных; журналы доступа рабочего Uvicorn отключены; настоящие запросы Caddy с контрольными CSRF/cookie/OAuth не попадают в рабочие логи и журналы доступа |
+| Кэш и хранилище браузера | Успешные ответы API и обработанные 401/403/404/409/422 имеют `no-store`; реальный Caddy 502 — безопасные заголовки и фиксированное тело; запросы браузера используют `cache: no-store`, нет local/session storage, IndexedDB, CacheStorage или регистрации service worker; Blob URL освобождается; выход/перезагрузка удаляют профили |
+| Git и локальные артефакты | Проверки игнорирования и шаблонов учётных данных всех публичных рабочих файлов и объектов, достижимых из локальных Git refs; индекс пуст при приёмке; ревью исходников/изменений |
+| Отзыв VPN | Бэкенд запускает настоящее искусственное повторное TLS-подключение OpenVPN с loopback/`dev null`: отозванный сертификат отклонён, другой принят, PID сервера тот же; рабочая маршрутизация отложена до процедуры ниже |
 
-Final local results: **164 backend/integration tests passed without skips**,
-**17 PKI smoke tests passed**, **13 frontend unit tests passed**,
-**24 Chromium scenarios passed** at 1440/390/320 px, production build and proxy
-check passed, `scripts/check.sh` passed. Four Terraform roots and seven Ansible
-playbooks passed local validation/syntax checks. ShellCheck was unavailable and
-explicitly skipped; it was not installed. Two third-party TestClient/AnyIO
-deprecation warnings remain and do not affect these assertions.
+Итоговые локальные результаты: **164 теста бэкенда/интеграции прошли без пропусков**,
+**17 smoke-тестов PKI прошли**, **13 модульных тестов фронтенда прошли**,
+**24 сценария Chromium прошли** при ширине 1440/390/320 px; рабочая сборка,
+проверка прокси и `scripts/check.sh` прошли. Четыре корневых модуля Terraform
+и семь playbook Ansible прошли локальную проверку/проверку синтаксиса.
+ShellCheck отсутствовал и явно пропущен; его не устанавливали. Остались два
+предупреждения устаревания сторонних TestClient/AnyIO, не влияющие на эти проверки.
 
-The public-file/history scanner checks known private-key/certificate blocks,
-wrapped OpenVPN key blocks and common AWS/GitHub/Google token forms. It emits
-only paths/object IDs, never matches. It is a heuristic, not proof that arbitrary
-passwords or unfamiliar secret formats cannot exist. Only reachable local Git
-refs are covered; ignored operator files, unreachable objects, external copies
-and remote-only history are outside this inspection. Do not read those files
-or publish audit output to extend this audit implicitly.
+Сканер публичных файлов/истории проверяет известные блоки закрытых ключей
+и сертификатов, блоки ключей OpenVPN и распространённые формы токенов
+AWS/GitHub/Google. Он выводит только пути/ID объектов, никогда совпавшие значения.
+Это эвристика, не доказательство отсутствия произвольных паролей или неизвестных
+форматов секретов. Покрыты только достижимые локальные Git refs; игнорируемые
+операторские файлы, недостижимые объекты, внешние копии и история только на
+сервере вне проверки. Не читайте эти файлы и не публикуйте результаты аудита,
+чтобы неявно расширить его.
 
-Application data intentionally includes user email, profile metadata, hashed
-session/agent credentials and signed public CRL/CA publication data. These are
-not private keys or reusable provider credentials. Private CA/client material
-belongs to isolated PKI storage and the authenticated download response.
-User-supplied profile names are metadata; operators must not paste secrets into
-names. Browser download tests deliberately create a harmless file: saving an
-authorized `.ovpn` to a user's Downloads folder is expected behavior, distinct
-from browser/application cache. Protect that file under operator/user policy.
+Данные приложения намеренно включают email пользователя, метаданные профиля,
+хеши учётных данных сессий/агентов и подписанные публичные CRL/CA.
+Это не закрытые ключи и не повторно используемые учётные данные провайдеров.
+Закрытые материалы CA/клиентов принадлежат изолированной PKI и
+аутентифицированному ответу скачивания. Пользовательские имена профилей —
+метаданные; оператор не должен вставлять секреты в имена. Браузерные тесты
+скачивания намеренно создают безвредный файл: сохранение разрешённого `.ovpn`
+в «Загрузки» пользователя — ожидаемое поведение, отдельное от кэша браузера
+или приложения. Защищайте файл по политике оператора/пользователя.
 
-## Separate operator procedure for real VPN acceptance
+## Отдельная операторская процедура приёмки реального VPN
 
-This procedure is a deliverable, not authorization to execute it. Before any
-real operation obtain exact approval for the selected environment, accounts,
-profile issuance/revocations, connections and any planned fault injection.
-Deployment, Google setup, CA import, CRL-agent installation and mount cutover
-must already have their own approvals and follow [CRL delivery](crl-delivery.md)
-and [PKI](pki-service.md). Do not connect automatically or inspect host journals,
-service environments, private keys, existing VPN directories or cloud metadata.
-The existing OpenVPN Access Server is outside the procedure and stays unchanged.
+Эта процедура — результат работы, а не разрешение выполнить её. Перед
+реальной операцией получите точное разрешение на выбранное окружение,
+учётные записи, выпуск/отзыв профилей, подключения и планируемые имитации отказа.
+Развёртывание, настройка Google, импорт CA, установка CRL-агента и переключение
+монтирования уже должны иметь собственные разрешения и следовать
+[доставке CRL](crl-delivery.md) и [PKI](pki-service.md). Не подключайтесь
+автоматически и не проверяйте журналы хоста, окружение служб, закрытые ключи,
+существующие каталоги VPN или облачные метаданные. Существующий OpenVPN Access
+Server вне процедуры и остаётся неизменным.
 
-1. Select the separately deployed Veilway panel and dedicated new VPN nodes.
-   Confirm the approved CA/CRL bootstrap and agent state through the ADMIN API.
-   Keep actual addresses, account email and evidence in protected operator
-   records, outside this public repository. Do not include profiles/tokens in
-   screenshots or HTTP captures.
-2. Sign in with the approved operator Google account: it must be ADMIN. Sign
-   in separately with two test Google accounts: both must be USER. A fresh USER
-   must have an empty cabinet and no infrastructure sections or requests.
-   Confirm Google requests only identity scopes, without Gmail mailbox access.
-3. ADMIN issues two temporary profiles per mode (`yc-direct`, `aws-direct`,
-   `yc-aws-multihop`) for the first test USER, with a short duration within the
-   remaining CA lifetime. Confirm issuance reaches active, owner/scope/expiry
-   match, downloads repeat, and the second USER cannot list/detail/download
-   these profiles or their jobs. Direct checks use protected local tools and
-   valid own-session CSRF, never copied operator cookies.
-4. On approved disposable client devices connect each mode separately. Check
-   the expected egress and private DNS behavior against the approved network
-   design, DNS leak expectations, transit path and application traffic. Do not
-   alter node routes/firewalls or reuse existing Access Server profiles.
-   Loopback TLS tests do not prove these packet-routing properties.
-5. Revoke one profile per mode. Download must be blocked immediately while
-   the UI says «Отзыв применяется». Final `revoked` must wait for the required
-   node's valid acknowledgement: AWS for AWS Direct; Yandex for Yandex Direct
-   and Multi-hop. After acknowledgement disconnect that test client and attempt
-   a new connection: it must fail. The second, unrevoked profile must reconnect.
-   Existing sessions are not forcibly disconnected by CRL delivery; a successful
-   session established before revocation is not evidence of a reconnect defect.
-6. If explicitly approved for a staging environment, exercise a PKI outage,
-   unavailable CRL target and worker loss. Record issuing/queued or revoking
-   behavior, then recovery with the same profile/job and complete monotonic CRL.
-   Otherwise leave this live fault-injection check pending; local coverage above
-   is the evidence for development acceptance. Never stop production services
-   or nodes just to simulate these conditions.
-7. Exercise a short-lived profile until expiry, then confirm expired status,
-   denied download and rejected new VPN connection. Log out and reload the
-   browser; profiles must disappear. Inspect only this test browser's storage
-   and response headers for cache/storage behavior. Explicitly requested
-   downloads must be removed from test devices under operator policy.
-8. Revoke remaining temporary profiles and wait for acknowledgements. Remove
-   downloaded test material securely under operator policy. Preserve the CA
-   registry, revoked serials, latest CRL and durable acknowledgements: temporary
-   acceptance profiles must not be undone by rolling back or deleting history.
-   Record each check as passed/failed/pending, with time and profile UUIDs only
-   in private operator evidence. Stop acceptance on a mismatch and repair under
-   a separate approved operation; do not restart existing Access Server or
-   silently weaken CRL enforcement.
+1. Выберите отдельно развёрнутую панель Veilway и выделенные новые VPN-узлы.
+   Подтвердите разрешённую начальную установку CA/CRL и состояние агентов
+   через ADMIN API. Настоящие адреса, email и доказательства храните в
+   защищённых операторских записях вне публичного репозитория. Не включайте
+   профили/токены в снимки или записи HTTP.
+2. Войдите разрешённой операторской записью Google: она должна получить ADMIN.
+   Отдельно войдите двумя тестовыми записями Google: обе должны получить USER.
+   Новый USER должен иметь пустой кабинет без разделов и запросов инфраструктуры.
+   Подтвердите, что Google запрашивает только области идентификации без доступа
+   к почтовому ящику Gmail.
+3. ADMIN выпускает два временных профиля на режим (`yc-direct`, `aws-direct`,
+   `yc-aws-multihop`) для первого тестового USER с коротким сроком в пределах
+   остатка срока CA. Подтвердите активный статус после выпуска, соответствие
+   владельца/области/срока, повторное скачивание и невозможность второму USER
+   просматривать или скачивать профили и задания. Прямые проверки используют
+   защищённые локальные инструменты и корректный CSRF собственной сессии,
+   никогда скопированные cookie оператора.
+4. На разрешённых одноразовых клиентских устройствах подключите каждый режим
+   отдельно. Проверьте ожидаемый выход и поведение закрытого DNS по согласованной
+   сетевой схеме, ожиданиям утечек DNS, транзитному пути и трафику приложений.
+   Не меняйте маршруты/межсетевые экраны узлов и не используйте профили
+   существующего Access Server. TLS-тесты loopback не доказывают эти свойства
+   маршрутизации пакетов.
+5. Отзовите один профиль на режим. Скачивание должно блокироваться сразу,
+   пока интерфейс показывает «Отзыв применяется». Финальный `revoked` должен
+   ждать действительного подтверждения нужного узла: AWS для AWS Direct,
+   Yandex для Yandex Direct и Multi-hop. После подтверждения отключите клиента
+   и попробуйте подключиться заново: попытка должна не пройти. Второй,
+   неотозванный профиль должен подключиться. Активные сессии принудительно
+   не завершаются доставкой CRL; успешная сессия, установленная до отзыва,
+   не доказывает дефект повторного подключения.
+6. Если явно разрешено для тестового окружения, проверьте отказ PKI,
+   недоступную цель CRL и потерю воркера. Запишите поведение выпуска/очереди
+   или отзыва, затем восстановление с тем же профилем/заданием и полным
+   монотонным CRL. Иначе оставьте реальную имитацию отказов ожидающей;
+   локальное покрытие выше подтверждает приёмку разработки. Никогда
+   не останавливайте рабочие службы или узлы лишь для имитации этих условий.
+7. Дождитесь истечения короткого профиля, затем проверьте статус истечения,
+   запрет скачивания и отказ нового VPN-подключения. Выйдите и перезагрузите
+   браузер: профили должны исчезнуть. Проверяйте только хранилище тестового
+   браузера и заголовки ответов для поведения кэша/хранения. Явно запрошенные
+   скачивания удаляются с тестовых устройств по политике оператора.
+8. Отзовите остальные временные профили и дождитесь подтверждений. Безопасно
+   удалите скачанные тестовые материалы по политике оператора. Сохраните
+   реестр CA, отозванные номера, последний CRL и устойчивые подтверждения:
+   временные приёмочные профили нельзя отменять откатом или удалением истории.
+   Запишите каждую проверку как пройденную/неудачную/ожидающую с временем
+   и UUID профилей только в закрытых операторских доказательствах.
+   При несоответствии остановите приёмку и исправляйте отдельной разрешённой
+   операцией; не перезапускайте существующий Access Server и не ослабляйте CRL молча.
 
-Node restarts are not required by this live procedure. Restart UI behavior is
-covered with fixtures; any real restart needs approval for the exact node/action.
-Actual Google/provider integration, TLS termination/ACME, routing/DNS, operator
-backup/recovery and dedicated-node deployment remain live acceptance concerns.
-Stage 8 provides the [rollout and recovery runbook](profile-rollout.md).
-The test counts above record stage-7 acceptance; stage 8 adds rollout and
-backup/restore checks without performing production deployment.
+Эта реальная процедура не требует перезапусков узлов. Поведение интерфейса
+перезапуска покрыто тестовыми данными; реальный перезапуск требует разрешения
+на точный узел/действие. Реальная интеграция Google/провайдеров, завершение
+TLS/ACME, маршрутизация/DNS, операторское копирование/восстановление и
+развёртывание выделенных узлов остаются вопросами реальной приёмки.
+Этап 8 предоставляет [инструкцию развёртывания и восстановления](profile-rollout.md).
+Числа тестов выше фиксируют приёмку этапа 7; этап 8 добавляет проверки
+развёртывания и копирования/восстановления без рабочего развёртывания.
 
-Caddy's error-route behavior follows its official
-[handle_errors documentation](https://caddyserver.com/docs/caddyfile/directives/handle_errors).
+Обработка ошибок Caddy следует официальной
+[документации handle_errors](https://caddyserver.com/docs/caddyfile/directives/handle_errors).

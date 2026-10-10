@@ -1,47 +1,46 @@
-# Safe Ubuntu VM audit
+# Безопасный аудит Ubuntu-ВМ
 
-The audit script collects read-only networking and service diagnostics from the
-host on which it is run. It never connects to a VM, sends data, installs
-packages, or changes routes, firewall rules, services, or configuration.
+Скрипт аудита собирает диагностику сети и служб только чтением на хосте,
+где запущен. Он никогда не подключается к ВМ, не отправляет данные,
+не устанавливает пакеты и не меняет маршруты, правила межсетевого экрана,
+службы или конфигурацию.
 
-Audit reports are sensitive. They can contain hostnames, public and private IP
-addresses, routing tables, listening ports, service state, and firewall rules.
-They are not suitable for a public repository, issue, pull request, paste, or
-chat message.
+Отчёты аудита конфиденциальны. Они могут содержать имена хостов, публичные
+и частные IP, таблицы маршрутизации, открытые порты, состояние служб и правила
+межсетевого экрана. Они не подходят для публичного репозитория, issue,
+pull request, публикации текста или сообщения в чате.
 
-## What is collected
+## Что собирается
 
-- Ubuntu release and kernel information.
-- Interface, address, route, policy-routing, and IP-forwarding state.
-- Installed OpenVPN, OpenVPN Access Server, and WireGuard package versions.
-- Limited systemd state for relevant services, without journals or service
-  environment values.
-- Listening TCP and UDP sockets without process command lines.
-- WireGuard interface presence without keys or peer configuration.
-- UFW status and, when explicitly requested, privileged nftables and iptables
-  rulesets.
+- Сведения о выпуске Ubuntu и ядре.
+- Состояние интерфейсов, адресов, маршрутов, маршрутизации по правилам и пересылки IP.
+- Версии установленных пакетов OpenVPN, OpenVPN Access Server и WireGuard.
+- Ограниченное состояние systemd нужных служб без журналов и значений окружения.
+- Слушающие сокеты TCP/UDP без командных строк процессов.
+- Наличие интерфейса WireGuard без ключей или конфигурации узлов.
+- Статус UFW и, по явному запросу, привилегированные наборы правил nftables и iptables.
 
-The script does not read VPN configuration directories, keys, certificates,
-client profiles, shell history, cloud instance metadata, process command
-lines, service environments, or system journals.
+Скрипт не читает каталоги конфигурации VPN, ключи, сертификаты, клиентские профили,
+историю оболочки, метаданные облачного экземпляра, командные строки процессов,
+окружение служб или системные журналы.
 
-## Prepare the script manually
+## Подготовка скрипта вручную
 
-Review `scripts/audit-vm.sh` before using it. Manually place the repository on
-each VM, or copy only the reviewed script over SSH while preserving a
-`scripts/` directory. From the repository root on your trusted local machine,
-replace `<vm-user>` and `<vm-host>` and run:
+Просмотрите `scripts/audit-vm.sh` перед использованием. Вручную разместите
+репозиторий на каждой ВМ либо скопируйте только проверенный скрипт по SSH,
+сохранив каталог `scripts/`. В корне репозитория на доверенной локальной машине
+замените `<vm-user>` и `<vm-host>` и выполните:
 
 ```sh
 ssh <vm-user>@<vm-host> 'mkdir -p -- "$HOME/veilway/scripts"'
 scp scripts/audit-vm.sh <vm-user>@<vm-host>:veilway/scripts/audit-vm.sh
 ```
 
-Verify the SSH hostname, account, and host-key fingerprint before accepting a
-new connection. Run these commands separately for each VM; do not use wildcards
-or copy the local `audit-results/` directory.
+Проверьте имя хоста SSH, учётную запись и отпечаток ключа хоста перед принятием
+нового подключения. Выполняйте эти команды отдельно для каждой ВМ; не используйте
+маски и не копируйте локальный каталог `audit-results/`.
 
-Then connect to the selected VM and run these commands in `~/veilway`:
+Затем подключитесь к выбранной ВМ и выполните команды в `~/veilway`:
 
 ```sh
 ssh <vm-user>@<vm-host>
@@ -50,20 +49,20 @@ chmod +x scripts/audit-vm.sh
 ./scripts/audit-vm.sh
 ```
 
-The first run does not invoke `sudo`. Missing tools and permission-denied
-diagnostics are recorded and do not stop the remaining checks.
+Первый запуск не вызывает `sudo`. Отсутствующие инструменты и отказ в доступе
+при диагностике записываются и не останавливают остальные проверки.
 
-## Optional privileged firewall audit
+## Необязательный привилегированный аудит межсетевого экрана
 
-If the unprivileged report is insufficient, inspect the warning and command
-list emitted by:
+Если непривилегированного отчёта недостаточно, изучите предупреждение и список
+команд, выводимые при запуске:
 
 ```sh
 ./scripts/audit-vm.sh --sudo
 ```
 
-This mode may ask for the operator's sudo password. It only uses `sudo` for the
-following read-only commands when their underlying utilities are available:
+Этот режим может запросить пароль sudo оператора. Он использует `sudo` только
+для следующих команд чтения, если соответствующие утилиты доступны:
 
 ```text
 ufw status verbose
@@ -72,28 +71,30 @@ iptables-save
 ip6tables-save
 ```
 
-The script does not call `sudo -v`; it neither installs tools nor modifies
-sudoers. The `--sudo` flag is explicit consent to run the displayed commands.
+Скрипт не вызывает `sudo -v`, не устанавливает инструменты и не меняет sudoers.
+Флаг `--sudo` — явное согласие на выполнение показанных команд.
 
-## Review and handle results
+## Проверка и обработка результатов
 
-Each run creates `audit-results/<hostname>-<UTC timestamp>/report.txt` in the
-repository root. The directory has mode `0700` and the report has mode `0600`.
-The whole `audit-results/` tree is ignored by Git.
+Каждый запуск создаёт `audit-results/<hostname>-<UTC timestamp>/report.txt`
+в корне репозитория. Права каталога — `0700`, отчёта — `0600`.
+Всё дерево `audit-results/` игнорируется Git.
 
-Before copying a report:
+Перед копированием отчёта:
 
-1. Read it on the VM and confirm that it contains only expected diagnostics.
-2. Look for unexpected credential material or sensitive firewall comments.
-3. Note the exact result directory printed by the script. Do not replace it
-   with a wildcard or copy the entire remote `audit-results/` directory.
+1. Прочитайте его на ВМ и убедитесь, что он содержит только ожидаемую диагностику.
+2. Проверьте отсутствие неожиданных учётных данных и конфиденциальных комментариев
+   межсетевого экрана.
+3. Запишите точный каталог результатов, показанный скриптом. Не заменяйте его
+   маской и не копируйте весь удалённый каталог `audit-results/`.
 
-### Copy a reviewed result to the local machine
+### Копирование проверенного результата на локальную машину
 
-Run the following commands on your trusted local machine, not on the VM.
-Replace `<vm-host>` with the VM's verified SSH hostname or IP address and
-`<result-directory>` with the exact directory name printed by the script. If
-the VM account is not `ubuntu`, replace that username and its home path too.
+Выполните следующие команды на доверенной локальной машине, а не на ВМ.
+Замените `<vm-host>` проверенным именем хоста SSH или IP ВМ, а
+`<result-directory>` — точным именем каталога, показанным скриптом.
+Если учётная запись ВМ отличается от `ubuntu`, замените также имя пользователя
+и путь его домашнего каталога.
 
 ```sh
 mkdir -p -- ./audit-results
@@ -102,20 +103,19 @@ scp -pr ubuntu@<vm-host>:/home/ubuntu/veilway/audit-results/<result-directory> .
 chmod -R go-rwx -- ./audit-results/<result-directory>
 ```
 
-For example, if the script prints
-`/home/ubuntu/veilway/audit-results/<result-directory>/report.txt`, copy the
-containing `<result-directory>`, not only an unverified path assembled from the
-hostname. Verify the SSH host-key fingerprint before accepting a new
-connection.
+Например, если скрипт выводит
+`/home/ubuntu/veilway/audit-results/<result-directory>/report.txt`, копируйте
+содержащий его `<result-directory>`, а не непроверенный путь, собранный из имени
+хоста. Перед принятием нового подключения проверьте отпечаток ключа хоста SSH.
 
-After copying:
+После копирования:
 
-1. Confirm that `./audit-results/<result-directory>/report.txt` exists and is
-   readable only by your local user.
-2. Keep the local copy in the Git-ignored `audit-results/` directory and do not
-   publish it.
-3. After verifying the trusted copy, manually remove VM and local copies that
-   are no longer needed according to your retention policy.
+1. Убедитесь, что `./audit-results/<result-directory>/report.txt` существует
+   и доступен для чтения только вашему локальному пользователю.
+2. Храните локальную копию в игнорируемом Git каталоге `audit-results/`
+   и не публикуйте её.
+3. После проверки доверенной копии вручную удалите ненужные копии на ВМ
+   и локальной машине в соответствии со своей политикой хранения.
 
-Run the procedure separately on the Yandex Cloud and AWS VMs. Compare the
-reports privately and share only redacted conclusions in future design work.
+Выполните процедуру отдельно на ВМ Yandex Cloud и AWS. Сравнивайте отчёты
+приватно; в дальнейшей проектной работе делитесь только обезличенными выводами.

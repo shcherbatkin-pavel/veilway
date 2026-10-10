@@ -1,154 +1,164 @@
-# Isolated PKI service (stage 3)
+# Изолированный сервис PKI (этап 3)
 
-`web/pki/` implements the offline PKI behind a private Unix socket. The public
-profile API and its PostgreSQL job worker are implemented in [stage 4](profile-api.md). [CRL delivery and node acknowledgements](crl-delivery.md) are implemented in stage 5. No production CA, VPN server, route, firewall,
-or existing OpenVPN Access Server is changed by building or testing this service.
+`web/pki/` реализует автономную PKI за закрытым Unix-сокетом. Публичный API
+профилей и его воркер заданий PostgreSQL реализованы на [этапе 4](profile-api.md).
+[Доставка CRL и подтверждения узлов](crl-delivery.md) реализованы на этапе 5.
+Сборка и тестирование сервиса не меняют рабочий CA, VPN-серверы, маршруты,
+межсетевой экран или существующий OpenVPN Access Server.
 
-The complete [stage-8 rollout/backup/recovery procedure](profile-rollout.md) is
-authoritative for the handover. Local writers must be disabled with the private
-handover marker; general node deployment skips local CRLs in managed mode and
-rejects legacy mode after handover/agent bootstrap.
+Полная [процедура развёртывания, копирования и восстановления этапа 8](profile-rollout.md)
+определяет передачу управления. Локальная запись должна быть отключена
+закрытым маркером передачи; общее развёртывание узлов пропускает локальные
+CRL в управляемом режиме и отклоняет старый режим после передачи или установки агента.
 
-## Boundaries
+## Границы
 
-Compose now has four services. `pki` has `network_mode: none`, a read-only root,
-no Docker socket, no TUN device, no published ports and no cloud credentials.
-Its only persistent mount is `/var/lib/veilway-pki`, owned by UID/GID 10002,
-mode `0700`. Every stored file, including certificates and CRLs, is `0600`.
-API/Caddy/PostgreSQL do not mount this storage or any parent of it.
+В Compose четыре сервиса. У `pki` задан `network_mode: none`, корень только
+для чтения, нет сокета Docker, TUN, опубликованных портов и облачных учётных
+данных. Единственное постоянное монтирование — `/var/lib/veilway-pki`,
+владелец UID/GID 10002, права `0700`. Все файлы, включая сертификаты и CRL,
+имеют `0600`. API/Caddy/PostgreSQL не монтируют это хранилище или его родительские каталоги.
 
-The API mounts only the socket directory, read-only. The socket is
-`/run/veilway-pki/pki.sock`, owner 10002, group 10003, mode `0660`. The socket
-directory is `0710` so the API can traverse a known pathname but cannot list,
-create or replace sockets. This directory contains no secrets. The API retains
-UID 10001 and receives supplementary group 10003. Caddy has neither the mount
-nor that group. The PKI server additionally checks Linux `SO_PEERCRED` and
-accepts only UID 10001, even if another user can bypass filesystem permissions.
+API монтирует только каталог сокета, только для чтения. Сокет
+`/run/veilway-pki/pki.sock` имеет владельца 10002, группу 10003 и права `0660`.
+Каталог сокета — `0710`: API может пройти по известному пути, но не перечислять,
+создавать или заменять сокеты. Секретов в каталоге нет. API сохраняет UID 10001
+и получает дополнительную группу 10003. У Caddy нет ни монтирования, ни группы.
+Сервер PKI дополнительно проверяет Linux `SO_PEERCRED` и принимает только UID
+10001, даже если другой пользователь может обойти файловые права.
 
-Only root startup reads the separate runtime inputs `pki_ca_passphrase` and
-`pki_endpoints`, owned by root, mode `0600`, outside the PKI storage. It seals
-inherited anonymous descriptors, drops to UID/GID 10002 and group 10003, and
-executes only `serve` or explicit `import-ca --source PATH`. No plaintext
-password appears in a subprocess argument or Docker environment. Signing
-passes it through a sealed descriptor to OpenSSL. The CA key must be encrypted
-PKCS#8; an unencrypted key is refused. No decrypted CA key is written to disk.
-Client keys and `.ovpn` are private plaintext files in the protected storage,
-so the data disk and backups must also be protected.
+Только начальный процесс root читает отдельные входы `pki_ca_passphrase` и
+`pki_endpoints`, принадлежащие root с правами `0600` вне PKI-хранилища.
+Он запечатывает унаследованные анонимные дескрипторы, переходит на UID/GID 10002
+и группу 10003 и выполняет только `serve` либо явный `import-ca --source PATH`.
+Открытый пароль не появляется в аргументах дочернего процесса или окружении
+Docker. При подписи он передаётся OpenSSL через запечатанный дескриптор.
+Ключ CA обязан быть зашифрованным PKCS#8; незашифрованный отклоняется.
+Расшифрованный ключ CA не записывается на диск. Клиентские ключи и `.ovpn` хранятся незашифрованными файлами с ограниченным
+доступом в защищённом хранилище, поэтому диск данных и резервные копии также
+необходимо защищать.
 
-## Private protocol and application metadata
+## Закрытый протокол и метаданные приложения
 
-The socket accepts one JSON request per connection, framed by a four-byte
-unsigned big-endian byte length. Maximum request: 4096 bytes; response: 131072
-bytes. Duplicate or extra fields, invalid UUIDs, arbitrary paths, unknown
-operations and shell payloads are rejected. There are at most eight active
-handlers, bounded socket reads and 30-second subprocess deadlines. Executables,
-OpenSSL configuration, server identities and ports are fixed in the service.
-Requests cannot select a binary, command, config, extension or CA subject.
+Сокет принимает один JSON-запрос на соединение с четырёхбайтовым беззнаковым
+префиксом длины в порядке big-endian. Максимум запроса — 4096 байт,
+ответа — 131072 байта. Повторные или лишние поля, неверные UUID, произвольные
+пути, неизвестные операции и команды оболочки отклоняются. Активных обработчиков
+не более восьми; чтение сокета ограничено, срок дочерних процессов — 30 секунд.
+Исполняемые файлы, конфигурация OpenSSL, серверные идентификаторы и порты
+фиксированы. Запрос не может выбрать программу, команду, конфигурацию,
+расширение или субъект CA.
 
-- `issue`: `profile_id`, `job_id` (the application's stable idempotency UUID),
-  `mode`, `expires_at` (UTC `YYYY-MM-DDTHH:MM:SSZ`). Returns identifiers, serial,
-  expiry, mode and certificate SHA-256, without keys or profile contents.
-- `download`: `profile_id`. Returns that new profile as base64. Expired or
-  locally revoked certificates cannot be downloaded. There is no profile list,
-  legacy-profile import or server-certificate endpoint.
-- `revoke`: `profile_id`, `job_id`. Returns the CRL number after local revocation.
-  This is not confirmation from a VPN node; delivery is handled by stage 5.
-- `crl`: no extra fields. Exports bounded base64 full CRL and public CA certificate
-  for the CRL worker, refreshing the signed generation daily. It exports no key.
+- `issue`: `profile_id`, `job_id` (устойчивый UUID идемпотентности приложения),
+  `mode`, `expires_at` (UTC `YYYY-MM-DDTHH:MM:SSZ`). Возвращает идентификаторы,
+  серийный номер, срок, режим и SHA-256 сертификата без ключей или содержимого профиля.
+- `download`: `profile_id`. Возвращает новый профиль в base64. Сертификаты
+  с истёкшим сроком или локальным отзывом недоступны для скачивания. Нет списка
+  профилей, импорта старых профилей или точки серверных сертификатов.
+- `revoke`: `profile_id`, `job_id`. Возвращает номер CRL после локального отзыва.
+  Это не подтверждение VPN-узла; доставка выполняется этапом 5.
+- `crl`: без дополнительных полей. Экспортирует ограниченный по размеру полный
+  CRL и публичный сертификат CA в base64 для воркера CRL, ежедневно обновляя
+  подписанное поколение. Ключи не экспортируются.
 
-`web/backend/src/veilway_control/pki.py` provides the typed, bounded socket
-client. User identity, ownership, device labels, profile expiry/state and job
-state belong to PostgreSQL's existing `VpnProfile`/`ProfileJob` models. The
-PKI stores only private material, the OpenSSL registry/counters and technical
-receipts needed to replay CA operations. It has no user database or DB credentials.
-The stage-4 profile API/job worker now uses this client.
+`web/backend/src/veilway_control/pki.py` предоставляет типизированный клиент
+сокета с ограничениями размера. Пользователь, владение, названия устройств,
+срок/статус профиля и состояние задания принадлежат существующим моделям
+PostgreSQL `VpnProfile`/`ProfileJob`. PKI хранит только закрытые материалы,
+реестр/счётчики OpenSSL и технические подтверждения для повтора операций CA.
+У неё нет БД пользователей или учётных данных БД. API и воркер этапа 4
+используют этот клиент.
 
-The certificate CN is the immutable profile UUID. Display names cannot alter
-it. Profiles match the existing dedicated endpoints:
+CN сертификата — неизменный UUID профиля. Отображаемое имя не может его изменить.
+Профили соответствуют существующим выделенным точкам доступа:
 
-| Mode | Server identity | UDP port | Extra client directive |
+| Режим | Серверный идентификатор | Порт UDP | Дополнительная директива клиента |
 | --- | --- | --- | --- |
 | `yc-direct` | `yc-direct` | 1194 | `block-ipv6` |
 | `aws-direct` | `aws-direct` | 1194 | — |
 | `yc-aws-multihop` | `yc-multihop-ingress` | 1195 | — |
 
-Profiles include distinct EC P-256 client keys, `clientAuth`, CA/server
-verification, TLS >= 1.3, AEAD ciphers, no compression and endpoint-specific
-OpenVPN-generated `tls-crypt-v2` client keys. Expiry cannot exceed CA expiry.
+Профили содержат отдельные клиентские ключи EC P-256, `clientAuth`, проверку
+CA/сервера, TLS >= 1.3, шифры AEAD, отключённое сжатие и созданные OpenVPN
+клиентские ключи `tls-crypt-v2` для соответствующей точки доступа.
+Срок не может превышать срок CA.
 
-## Commit, retry and recovery
+## Фиксация, повтор и восстановление
 
-Every access uses a cross-process `flock` on the protected store. A mutation
-copies the committed generation into a private candidate, changes its CA
-registry and material, writes its receipt, fsyncs all files/directories, then
-atomically replaces and fsyncs `CURRENT`. Only after that commit can a response
-leave the service. Files have no hard links between generations.
+Любой доступ использует межпроцессный `flock` защищённого хранилища.
+Изменение копирует зафиксированное поколение в закрытый кандидат, меняет
+реестр CA и материалы, пишет подтверждение, выполняет fsync всех файлов
+и каталогов, затем атомарно заменяет и синхронизирует `CURRENT`.
+Только после фиксации ответ может покинуть сервис. Между поколениями нет жёстких ссылок.
 
-An interrupted pre-commit operation has no published certificate/CRL. A retry
-removes the unpublished generation and uses the committed counters. If a commit
-succeeded but the response was lost, the same job UUID and request return the
-saved result, without issuing again or incrementing the CRL. Reusing a job UUID
-with another operation/payload, or issuing an existing profile under a new job,
-returns `conflict`. Repeated local revocation never changes the CRL again.
+Прерванная до фиксации операция не публикует сертификат/CRL. Повтор удаляет
+неопубликованное поколение и использует зафиксированные счётчики. Если фиксация
+прошла, но ответ потерян, тот же UUID задания и запрос возвращают сохранённый
+результат без нового выпуска или увеличения CRL. Повторное использование UUID
+с другой операцией/содержимым либо выпуск существующего профиля новым заданием
+возвращает `conflict`. Повтор локального отзыва не меняет CRL снова.
 
-Startup cleans only unpublished service-owned generations and refuses malformed
-storage, symlinks, hard-linked files or incorrect permissions. A separate server
-lock prevents a second process from replacing the live socket. SIGTERM/INT stop
-accepting connections, finish in-flight handlers and remove the socket. Abrupt
-termination is covered by the generation recovery path.
+Запуск очищает только неопубликованные поколения сервиса и отклоняет
+повреждённое хранилище, символические ссылки, файлы с жёсткими ссылками или
+неверные права. Отдельная блокировка сервера не даёт второму процессу заменить
+работающий сокет. SIGTERM/INT прекращают приём соединений, завершают текущие
+обработчики и удаляют сокет. Резкое завершение обрабатывает восстановление поколений.
 
-The current implementation copies the whole generation per mutation and deletes
-old generations after committing. Provision at least space for two complete
-generations plus temporary material. Exhaustion before commit leaves the prior
-state authoritative; retry after freeing space. This is a deliberately simple,
-serialized store suitable for the initial panel, not a high-throughput CA.
+Текущая реализация копирует всё поколение при каждом изменении и удаляет старые
+после фиксации. Обеспечьте место минимум для двух полных поколений и временных
+материалов. Исчерпание места до фиксации оставляет прежнее состояние основным;
+повторите после освобождения места. Это намеренно простое сериализованное
+хранилище для первой панели, а не высокопроизводительный CA.
 
-## Manual import, only after approval
+## Ручной импорт только после разрешения
 
-These are operator instructions, not automatic deployment actions. Obtain exact
-approval before reading/copying real PKI, transferring it to the panel VM,
-starting/stopping a service or replacing a deployment. Do not connect to hosts
-or run the following production commands as part of a coding/test task.
+Это инструкции оператора, а не автоматические действия развёртывания.
+Получите точное разрешение перед чтением/копированием реальной PKI, передачей
+на ВМ панели, запуском/остановкой сервиса или заменой развёртывания.
+Не подключайтесь к хостам и не выполняйте следующие рабочие команды в задаче
+разработки или тестирования.
 
-1. Freeze all writers of the existing *dedicated Veilway* CA. Do not touch
-   OpenVPN Access Server. Reconcile the latest CRL and revocations before export.
-   Keep that freeze through the handover: two writers can reuse serial numbers
-   or erase revocations. No server creates a replacement CA automatically.
-2. Make a protected, coherent export containing exactly the inputs below. Copy
-   the full `newcerts` history, including revoked and expired certificates.
-   Do not include old `.ovpn`, client private keys or server private keys.
+1. Остановите все источники записи существующего *выделенного CA Veilway*.
+   Не трогайте OpenVPN Access Server. Перед экспортом сверьте последний CRL
+   и отзывы. Сохраняйте запрет записи до передачи: два источника могут повторно
+   использовать серийные номера или стереть отзывы. Ни один сервер автоматически
+   не создаёт CA для замены.
+2. Сделайте защищённый согласованный экспорт ровно следующих данных.
+   Копируйте полную историю `newcerts`, включая отозванные и истёкшие сертификаты.
+   Не включайте старые `.ovpn`, закрытые клиентские или серверные ключи.
 
    ```text
    approved-pki-import/
      ca/ca.crt
-     ca/private/ca.key             # encrypted PKCS#8
-     ca/index.txt                 # complete OpenSSL registry
-     ca/serial                    # next unused hexadecimal serial
-     ca/crlnumber                 # next unused hexadecimal CRL number
-     ca/newcerts/<serial>.pem      # every certificate recorded in index.txt
-     crl.pem                      # latest signed, currently valid CRL
+     ca/private/ca.key             # зашифрованный PKCS#8
+     ca/index.txt                 # полный реестр OpenSSL
+     ca/serial                    # следующий свободный серийный номер в шестнадцатеричном виде
+     ca/crlnumber                 # следующий свободный номер CRL в шестнадцатеричном виде
+     ca/newcerts/<serial>.pem      # каждый сертификат, записанный в index.txt
+     crl.pem                      # последний подписанный CRL, действительный сейчас
      endpoints/yc-direct/tls-crypt-v2-server.key
      endpoints/aws-direct/tls-crypt-v2-server.key
      endpoints/yc-multihop-ingress/tls-crypt-v2-server.key
    ```
 
-3. Put the actual password in the separate protected `PKI_CA_PASSPHRASE`
-   operator input; configure plain IPv4 `PKI_YC_ENDPOINT` and `PKI_AWS_ENDPOINT`.
-   The inherited CA password must be nonempty; it is accepted even when shorter
-   than 20 characters. Import verifies it by decrypting the existing encrypted
-   key. This does not rotate the password or allow unencrypted CA keys.
-   The deployment writes a PKI-only endpoint JSON mapping; multi-hop uses the
-   Yandex address. Neither actual addresses nor password belong in Git. Endpoint
-   selection is frozen into the imported generation, so later runtime config
-   changes do not silently rewrite already issued profiles.
-4. Build the image and prepare the dedicated protected store/socket directories
-   through the separately approved deployment. The import bundle must be
-   readable as container UID 10002: directory `0700`, files `0600`, matching
-   numeric ownership. The runtime socket directory must be recreated on reboot
-   (`/etc/tmpfiles.d/veilway-pki.conf` is prepared by the role). PKI fails closed
-   until import is committed; API restart controls can run independently.
-5. With PKI stopped and the bundle staged outside public build/Git paths, perform
-   the approved one-time import. For default deployment paths:
+3. Задайте настоящий пароль в отдельном защищённом операторском входе
+   `PKI_CA_PASSPHRASE`; настройте обычные IPv4 `PKI_YC_ENDPOINT` и
+   `PKI_AWS_ENDPOINT`. Унаследованный пароль CA не должен быть пустым;
+   он принимается и при длине менее 20 символов. Импорт проверяет его
+   расшифровкой существующего зашифрованного ключа. Это не меняет пароль
+   и не разрешает незашифрованные ключи CA. Развёртывание пишет JSON-сопоставление
+   точек доступа только для PKI; multi-hop использует адрес Yandex.
+   Настоящие адреса и пароль не должны попадать в Git. Выбор точек доступа
+   закрепляется в импортированном поколении: последующие изменения рабочей
+   конфигурации не переписывают уже выпущенные профили незаметно.
+4. Соберите образ и подготовьте отдельные защищённые каталоги хранилища/сокета
+   в рамках отдельно разрешённого развёртывания. Комплект импорта должен быть
+   доступен UID контейнера 10002: каталог `0700`, файлы `0600`, соответствующий
+   числовой владелец. Каталог рабочего сокета должен пересоздаваться после
+   перезагрузки (роль готовит `/etc/tmpfiles.d/veilway-pki.conf`). PKI блокирует
+   операции до фиксации импорта; управление перезапусками API может работать независимо.
+5. При остановленной PKI и комплекте вне публичных путей сборки/Git выполните
+   разрешённый однократный импорт. Для путей развёртывания по умолчанию:
 
    ```bash
    docker compose --file /opt/veilway-control/app/compose.yaml run --rm --no-deps \
@@ -156,64 +166,67 @@ or run the following production commands as part of a coding/test task.
      pki import-ca --source /import
    ```
 
-   Import verifies CA key/certificate matching, encryption, signature/CA usage,
-   expiry, historical certificate signatures/serials, registry consistency,
-   monotonic serial/CRL counters, CRL signature/validity and equality of its
-   revocations to the registry, plus all three `tls-crypt-v2` server keys.
-   Missing history, stale CRLs and unexpected links/counters fail closed. It
-   does not run copied OpenSSL configs. Existing committed stores cannot be
-   overwritten or reimported. Rejected imports leave no authoritative `CURRENT`;
-   a retry cleans unpublished candidate material.
-6. Start PKI under a separate approval, check only its fixed readiness/error
-   message, remove the staging bundle through a protected operator procedure,
-   and take a consistent backup. Old registry entries remain for CA continuity
-   and CRL integrity. Adopt existing private profiles only through the separate
-   [legacy import and metadata synchronization](legacy-profile-migration.md).
-   Stages 4–5 are implemented; this import still does not prove production
-   issuance or node revocation cutover. Do not allow the old deployment to overwrite the
-   service's CRL or reopen an independent CA writer.
+   Импорт проверяет соответствие ключа/сертификата CA, шифрование, подпись
+   и назначение CA, срок, подписи/номера исторических сертификатов, согласованность
+   реестра, монотонность счётчиков serial/CRL, подпись/действительность CRL
+   и равенство его отзывов реестру, а также все три серверных ключа `tls-crypt-v2`.
+   Отсутствующая история, устаревшие CRL и неожиданные ссылки/счётчики блокируют
+   импорт. Скопированные конфигурации OpenSSL не выполняются. Зафиксированные
+   хранилища нельзя перезаписать или импортировать повторно. Отклонённый импорт
+   не оставляет действующего `CURRENT`; повтор очищает неопубликованные материалы кандидата.
+6. Запустите PKI по отдельному разрешению, проверьте только фиксированное
+   сообщение готовности/ошибки, удалите промежуточный комплект защищённой
+   операторской процедурой и сделайте согласованную копию. Старые записи реестра
+   остаются для непрерывности CA и целостности CRL. Добавляйте существующие
+   закрытые профили только отдельным [импортом и синхронизацией метаданных](legacy-profile-migration.md).
+   Этапы 4–5 реализованы; этот импорт всё ещё не доказывает рабочий выпуск
+   или переключение отзыва на узлах. Не разрешайте старому развёртыванию
+   перезаписывать CRL сервиса или открывать независимый источник записи CA.
 
-## Backup and recovery
+## Резервное копирование и восстановление
 
-Back up PostgreSQL and the complete PKI store coherently, with PKI mutations
-quiesced (a separately approved maintenance stop). Keep encrypted CA and client
-material in a protected/encrypted backup; keep its runtime passphrase separately.
-Copy `CURRENT`, all referenced generation files, registry, counters, receipts
-and profile material. A CA key alone is insufficient for recovery. Lock files
-are not authoritative, but must remain private if copied.
+Копируйте PostgreSQL и полное хранилище PKI согласованно, остановив изменения
+PKI (отдельно разрешённая техническая остановка). Храните зашифрованный CA
+и клиентские материалы в защищённой/зашифрованной копии; рабочий пароль — отдельно.
+Копируйте `CURRENT`, все файлы связанного поколения, реестр, счётчики,
+подтверждения и профили. Одного ключа CA недостаточно. Файлы блокировок не
+определяют состояние, но при копировании должны оставаться закрытыми.
 
-Never restore an older registry/CRL over a newer one or decrement counters.
-Reconcile all post-backup issues and revocations before resuming. If that cannot
-be proven, remain stopped and recover operator-side; there is no automatic
-rollback to an older generation or replacement CA. Stage 4 retries
-uncertain PostgreSQL jobs with their original idempotency UUID rather than allocating new
-jobs after a timeout. [Stage 5](crl-delivery.md) adds daily serialized CRL refresh, bounded public CRL/CA
-export and node delivery. New local revocations also generate CRLs.
+Никогда не восстанавливайте старый реестр/CRL поверх нового и не уменьшайте
+счётчики. Перед возобновлением сверьте все выпуски и отзывы после копии.
+Если это нельзя доказать, оставайтесь остановленными и восстанавливайте
+операторской процедурой; автоматического отката к старому поколению или
+заменяющему CA нет. Этап 4 повторяет неопределённые задания PostgreSQL
+с исходным UUID идемпотентности, а не создаёт новые после таймаута.
+[Этап 5](crl-delivery.md) добавляет ежедневное сериализованное обновление CRL,
+ограниченный экспорт публичных CRL/CA и доставку узлам. Новые локальные
+отзывы также создают CRL.
 
-## Local verification
+## Локальная проверка
 
 ```bash
 scripts/test-pki-service.sh --build
 scripts/check.sh
 ```
 
-The PKI smoke builds the production image and a separate test image. It uses
-only randomly generated synthetic CA material in disposable tmpfs, no network,
-read-only root and no Docker socket inside the container. The root test
-orchestrator has `CHOWN` solely to provision distinct UID fixtures; the production
-PKI manifest has only `SETUID`/`SETGID`, which startup drops when switching users.
-Tests exercise real OpenSSL/OpenVPN, all modes, imports, concurrent requests,
-real process crashes before/after commit, CRL enforcement, socket framing,
-peer UID/DAC boundaries, log redaction and graceful shutdown. No production
-material is read. Backend tests separately exercise the socket client's framing,
-response validation and sanitized errors.
+Smoke-тест PKI собирает рабочий образ и отдельный тестовый. Он использует
+только случайно созданный искусственный CA в одноразовом tmpfs, без сети,
+с корнем только для чтения и без сокета Docker в контейнере. Тестовый
+координатор root имеет `CHOWN` только для подготовки данных с разными UID;
+рабочий манифест PKI имеет только `SETUID`/`SETGID`, которые начальный процесс
+сбрасывает при смене пользователя. Тесты проверяют реальные OpenSSL/OpenVPN,
+все режимы, импорт, параллельные запросы, реальные сбои процесса до/после
+фиксации, применение CRL, формат сообщений сокета, границы UID/DAC,
+скрытие данных в логах и корректную остановку. Рабочие материалы не читаются.
+Тесты бэкенда отдельно проверяют формат сообщений клиента сокета, проверку
+ответов и обезличенные ошибки.
 
-Protocol/crypto references: [OpenSSL ca](https://docs.openssl.org/3.0/man1/openssl-ca/),
-[OpenVPN 2.6](https://build.openvpn.net/man/openvpn-2.6/openvpn.8.html), and
-[Python Unix sockets](https://docs.python.org/3.12/library/socket.html).
+Источники по протоколам и криптографии: [OpenSSL ca](https://docs.openssl.org/3.0/man1/openssl-ca/),
+[OpenVPN 2.6](https://build.openvpn.net/man/openvpn-2.6/openvpn.8.html)
+и [Unix-сокеты Python](https://docs.python.org/3.12/library/socket.html).
 
-## Performance measurement
+## Измерение производительности
 
-The optional [synthetic PKI benchmark](pki-benchmark.md) measures issuance,
-revocation and generation filesystem work without accessing operator material.
-It is separate from static checks and acceptance tests.
+Необязательное [измерение PKI на искусственных данных](pki-benchmark.md)
+измеряет выпуск, отзыв и файловые операции поколений без доступа к операторским
+материалам. Оно выполняется отдельно от статических и приёмочных проверок.

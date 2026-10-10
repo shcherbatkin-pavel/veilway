@@ -1,12 +1,13 @@
-# Synthetic PKI benchmark
+# Измерение производительности PKI на искусственных данных
 
-`scripts/benchmark-pki.py` is an opt-in, local benchmark. It uses the existing
-test CA fixture, freshly signed synthetic profiles and protected temporary
-directories. It never reads operator PKI, contacts VPN nodes or serves a socket.
-Only population sizes, repetition counts and timing medians reach stdout;
-failures print a fixed message without exception details or command output.
+`scripts/benchmark-pki.py` — локальное измерение, запускаемое по желанию.
+Оно использует существующий тестовый CA, новые подписанные искусственные профили
+и защищённые временные каталоги. Скрипт никогда не читает операторскую PKI,
+не обращается к VPN-узлам и не обслуживает сокет. В stdout попадают только
+размеры наборов, число повторов и медианы времени; при сбоях выводится фиксированное
+сообщение без подробностей исключений или вывода команд.
 
-Run from the repository root using the existing PKI test image:
+Запускайте из корня репозитория с существующим тестовым образом PKI:
 
 ```sh
 docker run --rm --pull never --network none --read-only \
@@ -18,48 +19,49 @@ docker run --rm --pull never --network none --read-only \
   /repo/scripts/benchmark-pki.py
 ```
 
-The default populations are 10, 100 and 1000 profiles, with three repetitions
-per size. `--sizes 10 --repetitions 1` is available for a short smoke run. The
-script can also run with existing local OpenSSL/OpenVPN tools via
-`python3 scripts/benchmark-pki.py`; it does not install tools or build images.
+По умолчанию проверяются наборы из 10, 100 и 1000 профилей с тремя повторами
+на размер. Для короткого smoke-запуска есть `--sizes 10 --repetitions 1`.
+Скрипт также работает с уже установленными локальными OpenSSL/OpenVPN через
+`python3 scripts/benchmark-pki.py`; он не устанавливает инструменты и не собирает образы.
 
-Fixture preparation signs the population in place inside a disposable tree,
-avoiding quadratic setup copies. It then protects, checks and synchronizes the
-completed fixture. Each trial receives a fresh copy of that baseline. Timed
-issuance and subsequent revocation use the ordinary `Store`, including locks,
-generation copies, validation, signing, synchronization, `CURRENT` commit and
-recovery. Revocation targets the newly issued profile, so its population contains
-one more profile than the initial size. Setup and baseline restoration are not
-included in operation timings. Production storage code is unchanged.
+Подготовка тестовых данных подписывает весь набор на месте во временном дереве,
+избегая квадратичного копирования при подготовке. Затем завершённый набор
+защищается, проверяется и синхронизируется. Каждый прогон получает новую копию
+этого исходного состояния. Измеряемый выпуск и последующий отзыв используют
+обычный `Store`, включая блокировки, копии поколений, проверку, подпись,
+синхронизацию, фиксацию `CURRENT` и восстановление. Отзывается только что
+выпущенный профиль, поэтому набор при отзыве содержит на один профиль больше
+исходного размера. Подготовка и восстановление исходного состояния не входят
+во время операций. Код рабочего хранилища не изменён.
 
-Phase instrumentation counts recursive calls only once: `copy` includes
-`copytree`, `check` includes `check_tree`, and `sync` includes `sync_tree` plus
-directory synchronization. Total time also includes cryptographic commands,
-permission normalization, cleanup and other work. Medians are calculated
-independently for each metric; phase medians need not add up to the total median.
+Измерение фаз учитывает рекурсивные вызовы только один раз: `copy` включает
+`copytree`, `check` включает `check_tree`, а `sync` — `sync_tree` и синхронизацию
+каталогов. Общее время также включает криптографические команды, нормализацию
+прав, очистку и другую работу. Медианы вычисляются независимо для каждой
+метрики; сумма медиан фаз может не совпадать с общей медианой.
 
-## Reference measurement
+## Контрольное измерение
 
-Measured on 2026-10-09 in the network-isolated test container, with `/tmp` on
-tmpfs. All values are seconds; each row is the median of three trials.
+Измерено 2026-10-09 в тестовом контейнере без сети, с `/tmp` в tmpfs.
+Все значения в секундах; каждая строка — медиана трёх прогонов.
 
-| Profiles | Operation | Total | Copy | Check | Sync |
+| Профилей | Операция | Всего | Копирование | Проверка | Синхронизация |
 | --- | --- | ---: | ---: | ---: | ---: |
-| 10 | Issue | 0.167984 | 0.007756 | 0.006420 | 0.002412 |
-| 10 | Revoke | 0.048007 | 0.006559 | 0.006242 | 0.002459 |
-| 100 | Issue | 0.281316 | 0.049097 | 0.043036 | 0.014090 |
-| 100 | Revoke | 0.151345 | 0.048559 | 0.038657 | 0.014006 |
-| 1000 | Issue | 1.185678 | 0.400290 | 0.331835 | 0.130056 |
-| 1000 | Revoke | 1.028813 | 0.311566 | 0.341927 | 0.143585 |
+| 10 | Выпуск | 0.167984 | 0.007756 | 0.006420 | 0.002412 |
+| 10 | Отзыв | 0.048007 | 0.006559 | 0.006242 | 0.002459 |
+| 100 | Выпуск | 0.281316 | 0.049097 | 0.043036 | 0.014090 |
+| 100 | Отзыв | 0.151345 | 0.048559 | 0.038657 | 0.014006 |
+| 1000 | Выпуск | 1.185678 | 0.400290 | 0.331835 | 0.130056 |
+| 1000 | Отзыв | 1.028813 | 0.311566 | 0.341927 | 0.143585 |
 
-## Recommendation
+## Рекомендация
 
-Retain the current durable generation format and recovery algorithm for this
-refactor. These measurements show increasing filesystem work as the population
-grows, but tmpfs does not represent persistent-disk latency or durable `fsync`
-costs. Before changing storage, repeat the benchmark on disposable protected
-disk storage with a representative population and establish an operator-approved
-latency target. If that target is exceeded, investigate generation copying and
-repeated tree traversal first. Any optimization must separately pass crash
-recovery, idempotency, symlink/hardlink rejection and permission checks; these
-measurements alone do not justify weakening them.
+Сохранить текущий устойчивый формат поколений и алгоритм восстановления в этом
+рефакторинге. Измерения показывают рост работы с файловой системой при увеличении
+набора, но tmpfs не отражает задержки постоянного диска и стоимость устойчивого
+`fsync`. Перед изменением хранилища повторите измерения на временном защищённом
+дисковом хранилище с репрезентативным набором и установите согласованный оператором
+целевой предел задержки. Если он превышен, сначала исследуйте копирование
+поколений и повторные обходы дерева. Любая оптимизация должна отдельно пройти
+проверки восстановления после сбоя, идемпотентности, отказа от символических
+и жёстких ссылок и прав доступа; одни эти измерения не оправдывают их ослабления.

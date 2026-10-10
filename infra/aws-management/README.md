@@ -1,9 +1,9 @@
-# AWS management IAM root
+# Корневой модуль IAM для управления AWS
 
-This root creates the dedicated IAM user and inline least-privilege policy. It
-does **not** create `aws_iam_access_key`, so no secret is written to Terraform
-state. `RebootInstances` is restricted to the exact `aws-direct` ARN;
-`DescribeInstanceStatus` is restricted to the configured region.
+Этот корневой модуль создаёт выделенного пользователя IAM и встроенную политику
+с минимальными правами. Он **не** создаёт `aws_iam_access_key`, поэтому секрет
+не записывается в состояние Terraform. `RebootInstances` ограничен точным ARN
+`aws-direct`; `DescribeInstanceStatus` ограничен настроенным регионом.
 
-Create the access key manually as a separately approved operation, place it
-only in the ignored local `.env`, and never paste it into Terraform variables.
+Создайте ключ доступа вручную в рамках отдельно разрешённой операции, поместите
+его только в игнорируемый локальный `.env` и никогда не вставляйте в переменные Terraform.

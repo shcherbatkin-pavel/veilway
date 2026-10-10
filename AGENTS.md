@@ -1,57 +1,62 @@
-# Veilway contributor instructions
+# Инструкции для участников Veilway
 
-Veilway is a public repository for security-sensitive networking software. Treat
-all infrastructure data and generated VPN material as sensitive, even when it
-is not a credential by itself.
+Veilway — публичный репозиторий сетевого ПО с повышенными требованиями к
+безопасности. Считайте все инфраструктурные данные и созданные VPN-материалы
+конфиденциальными, даже если сами по себе они не являются учётными данными.
 
-## Safety boundaries
+## Границы безопасности
 
-- Never commit secrets, private keys, certificates, passwords, tokens, client
-  profiles, `.env` files, VM audit output, or unredacted infrastructure data.
-- Use read-only inspection by default when working with existing hosts or cloud
-  resources. Do not connect to a VM automatically.
-- Do not create, update, restart, stop, reload, or delete cloud resources,
-  routes, firewall rules, services, packages, or system configuration without
-  explicit approval for that exact operation.
-- The existing OpenVPN Access Server must remain running and unchanged. Do not
-  edit its configuration, restart or stop it, remove it, or replace its routes
-  and firewall rules.
-- Do not add telemetry or send audit data to external services.
+- Никогда не коммитьте секреты, закрытые ключи, сертификаты, пароли, токены,
+  клиентские профили, файлы `.env`, результаты аудита ВМ или инфраструктурные
+  данные без удаления конфиденциальных сведений.
+- При работе с существующими хостами или облачными ресурсами по умолчанию
+  используйте только чтение. Не подключайтесь к ВМ автоматически.
+- Не создавайте, не изменяйте, не перезапускайте, не останавливайте, не
+  перезагружайте и не удаляйте облачные ресурсы, маршруты, правила межсетевого
+  экрана, службы, пакеты или системную конфигурацию без явного разрешения
+  именно на эту операцию.
+- Существующий OpenVPN Access Server должен продолжать работать без изменений.
+  Не редактируйте его конфигурацию, не перезапускайте, не останавливайте и не
+  удаляйте его, не заменяйте его маршруты и правила межсетевого экрана.
+- Не добавляйте телеметрию и не отправляйте данные аудита внешним сервисам.
 
-## Shell scripts
+## Скрипты оболочки
 
-- Prefer a small, explicit allowlist of commands. Do not use `eval`, remote
-  execution, implicit downloads, or dynamically assembled shell commands.
-- Quote variable expansions, use `--` where supported, set a restrictive
-  `umask` for sensitive output, and handle missing optional commands cleanly.
-- Separate privileged commands behind an explicit CLI flag. Print the exact
-  privileged operations before invoking `sudo` and keep them read-only.
-- Never read VPN configuration directories, private keys, shell history,
-  process command lines, cloud instance metadata, service environments, or
-  journals as part of an audit.
-- Validate scripts with `bash -n` and `shellcheck` when it is already available.
-  Do not install tooling merely to run a check.
+- Предпочитайте небольшой явный список разрешённых команд. Не используйте
+  `eval`, удалённое выполнение, неявные загрузки или динамически собранные
+  команды оболочки.
+- Заключайте подстановки переменных в кавычки, используйте `--`, где он
+  поддерживается, задавайте строгий `umask` для конфиденциальных результатов
+  и корректно обрабатывайте отсутствие необязательных команд.
+- Вынесите привилегированные команды за явный флаг CLI. Перед вызовом `sudo`
+  выводите точные привилегированные операции; они должны выполнять только чтение.
+- В рамках аудита никогда не читайте каталоги конфигурации VPN, закрытые ключи,
+  историю оболочки, командные строки процессов, метаданные облачного экземпляра,
+  окружение служб или журналы.
+- Проверяйте скрипты через `bash -n` и `shellcheck`, если он уже доступен.
+  Не устанавливайте инструменты только ради проверки.
 
-## Before committing
+## Перед коммитом
 
-- Review `git diff` and `git status` for unexpected or generated files.
-- Confirm that audit output and local credentials are ignored by Git.
-- Search changed files for credential-like values and remove or redact them.
-- Document security-impacting behavior and manual operator actions.
+- Просмотрите `git diff` и `git status` на предмет неожиданных или созданных файлов.
+- Убедитесь, что результаты аудита и локальные учётные данные игнорируются Git.
+- Найдите в изменённых файлах значения, похожие на учётные данные, и удалите
+  либо скройте их.
+- Документируйте поведение, влияющее на безопасность, и ручные действия оператора.
 
-## Pull request merges
+## Слияние pull request
 
-The GitHub ruleset `Main branch protection` requires changes to `main` to go
-through a pull request and allows only squash merge. This restriction applies
-regardless of the repository's general merge-method settings or the API used.
+Набор правил GitHub `Main branch protection` требует, чтобы изменения в `main`
+проходили через pull request, и разрешает только squash merge — слияние с
+объединением коммитов. Это ограничение действует независимо от общих настроек
+способов слияния репозитория и используемого API.
 
-- Use squash merge for every pull request into `main`.
-- Resolve all code review conversations and complete the project's local
-  checks before merging.
-- Never force-push to the protected `main` branch.
-- Merge dependent pull requests in order. After merging the preceding pull
-  request, rebase only the next pull request's own changes onto the updated
-  `main`, verify that its file contents are unchanged, and retarget it to
-  `main` before merging.
-- When updating your own working branch after rebasing, use
-  `--force-with-lease` only if that branch's rulesets allow force pushes.
+- Для каждого pull request в `main` используйте squash merge.
+- Перед слиянием закройте все обсуждения ревью и выполните локальные проверки проекта.
+- Никогда не выполняйте force push в защищённую ветку `main`.
+- Сливайте зависимые pull request по порядку. После слияния предыдущего
+  перенесите через rebase только собственные изменения следующего pull request
+  на обновлённую `main`, проверьте, что содержимое его файлов не изменилось,
+  и переназначьте его целевую ветку на `main` перед слиянием.
+- При обновлении своей рабочей ветки после rebase используйте
+  `--force-with-lease` только тогда, когда правила этой ветки разрешают force push.

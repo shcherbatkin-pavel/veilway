@@ -1,127 +1,136 @@
-# Veilway prototype requirements
+# Требования к прототипу Veilway
 
-## Purpose
+## Назначение
 
-Veilway will provide self-hosted, internet-only VPN connectivity through two
-new, dedicated Ubuntu 24.04 LTS virtual machines: one in Yandex Cloud and one in
-AWS. One ADMIN manages access for registered USER accounts on shared dedicated
-nodes. There is no tenant infrastructure or billing.
+Veilway предоставит самостоятельно размещаемый VPN с доступом только в интернет
+через две новые выделенные ВМ Ubuntu 24.04 LTS: одну в Yandex Cloud и одну
+в AWS. Один ADMIN управляет доступом зарегистрированных USER на общих выделенных
+узлах. Инфраструктуры отдельных арендаторов и биллинга нет.
 
-## Users and clients
+## Пользователи и клиенты
 
-- One operator ADMIN, bootstrapped from protected Google email and pinned by
-  Google subject; all other verified Google identities register as USER.
-- Registration grants no VPN access. ADMIN assigns new profiles to USER;
-  USER can list and download only their own active, unexpired profiles.
-- The baseline has two client devices: an Ubuntu laptop and an iPhone.
-- The operator may explicitly provision additional device profiles with
-  non-personal identifiers.
-- Client profiles and credentials must be generated and handled as secrets.
+- Один оператор ADMIN, первоначально определяемый по защищённому адресу Google
+  и закрепляемый по идентификатору субъекта Google; остальные подтверждённые
+  учётные записи Google регистрируются как USER.
+- Регистрация не даёт доступа к VPN. ADMIN назначает новые профили USER;
+  USER может просматривать и скачивать только собственные активные профили
+  с неистёкшим сроком действия.
+- Базовый набор включает два устройства: ноутбук Ubuntu и iPhone.
+- Оператор может явно выпускать профили дополнительных устройств с
+  неперсональными идентификаторами.
+- Клиентские профили и учётные данные должны создаваться и обрабатываться как секреты.
 
-## Planned connection modes
+## Планируемые режимы подключения
 
-- `yc-direct`: the client exits to the internet through the Yandex Cloud VM.
-- `aws-direct`: the client exits to the internet through the AWS VM.
-- `yc-aws-multihop`: the client enters through Yandex Cloud and exits through AWS.
+- `yc-direct`: клиент выходит в интернет через ВМ Yandex Cloud.
+- `aws-direct`: клиент выходит в интернет через ВМ AWS.
+- `yc-aws-multihop`: клиент входит через Yandex Cloud и выходит через AWS.
 
-All modes provide internet access only. They must not grant access to private
-AWS or Yandex Cloud networks.
+Все режимы предоставляют доступ только в интернет. Они не должны открывать
+доступ к частным сетям AWS или Yandex Cloud.
 
-The first MVP implements `yc-direct`, `aws-direct`, and the separately accepted
-`yc-aws-multihop` phase. `yc-direct` is IPv4-only and must block IPv6 rather
-than let it bypass the tunnel. `aws-direct` and `yc-aws-multihop` provide IPv4
-and IPv6 egress through AWS.
+Первый MVP реализует `yc-direct`, `aws-direct` и отдельно согласованный этап
+`yc-aws-multihop`. `yc-direct` поддерживает только IPv4 и обязан блокировать
+IPv6, а не позволять ему обходить туннель. `aws-direct` и `yc-aws-multihop`
+обеспечивают выход IPv4 и IPv6 через AWS.
 
-## Management and coexistence
+## Управление и совместная работа
 
-- The accepted profile/restart panel is public at `https://veilway.ru` so it stays
-  reachable during a VPN outage. It manages only `aws-direct` and `yc-direct`
-  and uses Google registration, ADMIN/USER roles and server-side cookie sessions.
-- ADMIN manages profile issue/ownership/rename/revocation and node restart/history.
-  USER sees mode, expiry, status and download. All API responses are non-cacheable;
-  mutations require session-bound CSRF. MFA and general VM administration are out
-  of scope.
-- Veilway deployment targets only newly created, dedicated VMs. Inventory and
-  Terraform state must not reference the old VMs.
-- The existing OpenVPN Access Server is outside the target architecture and
-  must not be modified, stopped, restarted, removed, or disrupted.
+- Согласованная панель профилей и перезапусков публично доступна по
+  `https://veilway.ru`, чтобы оставаться доступной при отказе VPN. Она управляет
+  только `aws-direct` и `yc-direct`, использует регистрацию Google, роли
+  ADMIN/USER и серверные сессии с cookie.
+- ADMIN управляет выпуском, владельцами, переименованием и отзывом профилей,
+  перезапусками узлов и историей. USER видит режим, срок действия, статус и
+  скачивание. Все ответы API запрещают кэширование; изменения требуют CSRF,
+  привязанного к сессии. MFA и общее администрирование ВМ вне объёма работ.
+- Развёртывание Veilway нацелено только на новые выделенные ВМ. Инвентарь и
+  состояние Terraform не должны ссылаться на старые ВМ.
+- Существующий OpenVPN Access Server вне целевой архитектуры; его нельзя
+  изменять, останавливать, перезапускать, удалять или нарушать его работу.
 
-## Deployment requirements
+## Требования к развёртыванию
 
-- Terraform creates isolated networks, security groups, static public IPv4
-  addresses, and dedicated Ubuntu VMs in independently managed AWS and Yandex
-  stacks.
-- Ansible installs Docker and Docker Compose, manages host sysctl and nftables,
-  and deploys the application after an explicit operator invocation.
-- OpenVPN 2.6 and Unbound run in Compose-managed containers using host
-  networking. OpenVPN is not installed as a host package or systemd service.
-- The OpenVPN container receives `/dev/net/tun`, `NET_ADMIN`, the temporary
-  `SETUID`/`SETGID` capabilities required to drop to its fixed unprivileged
-  account, and `KILL` so PID 1 can forward stop signals after that UID change.
-  It drops all other capabilities and uses a read-only root filesystem.
-- The host nftables ruleset is the single owner of forwarding and NAT. Docker
-  bridge networking and Docker-managed port publishing are not used.
-- SSH ingress is limited to operator-provided CIDRs. UDP/1194 remains the
-  Direct listener on both VMs. Yandex UDP/1195 is the multi-hop client ingress;
-  AWS UDP/1196 accepts transit only from the Yandex static IPv4 `/32`.
+- Terraform создаёт изолированные сети, группы безопасности, статические
+  публичные IPv4 и выделенные Ubuntu-ВМ в независимо управляемых стеках AWS и Yandex.
+- Ansible устанавливает Docker и Docker Compose, управляет sysctl и nftables
+  хоста и развёртывает приложение после явного запуска оператором.
+- OpenVPN 2.6 и Unbound работают в контейнерах под управлением Compose с сетью
+  хоста. OpenVPN не устанавливается как пакет хоста или служба systemd.
+- Контейнер OpenVPN получает `/dev/net/tun`, `NET_ADMIN`, временные capabilities
+  `SETUID`/`SETGID` для перехода к фиксированной непривилегированной учётной записи
+  и `KILL`, чтобы PID 1 мог передавать сигналы остановки после смены UID.
+  Все остальные capabilities удаляются; корневая файловая система доступна только для чтения.
+- Правила nftables хоста — единственный механизм управления пересылкой и NAT.
+  Сеть Docker bridge и публикация портов средствами Docker не используются.
+- Вход SSH ограничен CIDR, заданными оператором. UDP/1194 остаётся портом Direct
+  на обеих ВМ. Yandex UDP/1195 — вход multi-hop-клиентов;
+  AWS UDP/1196 принимает транзит только со статического IPv4 Yandex `/32`.
 
-## VPN and PKI requirements
+## Требования к VPN и PKI
 
-- Each device and mode uses a unique client certificate and `tls-crypt-v2` key.
-- TLS 1.3, AEAD data ciphers, certificate revocation, and disabled compression
-  are mandatory. Password-only authentication is not supported.
-- Before the approved handover, local PKI tooling prepares the dedicated CA.
-  After handover, its sole writer is the network-isolated server PKI on the panel
-  VM, with an encrypted CA key and protected private profile storage. VPN nodes,
-  API, Caddy and PostgreSQL never mount private CA storage. This replaces the
-  earlier workstation-only rule under [ADR 0005](adr/0005-google-profiles-and-server-pki.md).
-- Preserve the full existing registry, counters and revoked set during import
-  and recovery. Disable local PKI writes and stale deployment CRL copying.
-- Issue new UUID profiles, default duration 365 days within CA lifetime,
-  with durable idempotency and worker recovery. Assigned owners cannot transfer.
-- Import existing profiles under the same CA without replacing certificates,
-  keys, endpoints or expiry; explicitly assign owners, preserve original download
-  bytes, revocations and provenance. Follow the [legacy migration procedure](legacy-profile-migration.md).
-- Signed full CRLs reach dedicated outgoing agents. `revoking` disables download;
-  `revoked` requires the relevant node's acknowledgement. Active sessions are not
-  forcibly ended; subsequent connections enforce CRL and certificate expiry.
-- Servers receive only their own key and certificate, the public CA,
-  certificate revocation list, and endpoint-specific `tls-crypt-v2` server key.
-- The Yandex transit client receives only its own client key and certificate,
-  public CA, and AWS-transit-specific `tls-crypt-v2` client key.
-- DNS is served locally by Unbound, is reachable only from the VPN tunnel, and
-  must not log individual queries.
+- Каждая пара устройства и режима использует уникальный клиентский сертификат
+  и ключ `tls-crypt-v2`.
+- TLS 1.3, шифры AEAD для данных, отзыв сертификатов и отключённое сжатие обязательны.
+  Аутентификация только паролем не поддерживается.
+- До согласованной передачи управления локальные инструменты PKI готовят выделенный
+  центр сертификации (CA). После передачи единственный источник записи —
+  изолированная от сети серверная PKI на ВМ панели с зашифрованным ключом CA
+  и защищённым хранилищем закрытых профилей. VPN-узлы, API, Caddy и PostgreSQL
+  никогда не монтируют закрытое хранилище CA. Это заменяет прежнее правило
+  хранения только на рабочей станции по [ADR 0005](adr/0005-google-profiles-and-server-pki.md).
+- При импорте и восстановлении сохранять полный реестр, счётчики и набор отзывов.
+  Отключать локальную запись PKI и копирование устаревших CRL при развёртывании.
+- Выпускать новые профили UUID, по умолчанию на 365 дней в пределах срока CA,
+  с устойчивой к сбоям идемпотентностью и восстановлением воркера.
+  Назначенного владельца нельзя сменить.
+- Импортировать существующие профили под тем же CA без замены сертификатов,
+  ключей, точек доступа или срока действия; явно назначать владельцев,
+  сохранять исходные байты скачивания, отзывы и происхождение.
+  Следовать [процедуре миграции старых профилей](legacy-profile-migration.md).
+- Подписанные полные CRL доставляются выделенным исходящим агентам.
+  `revoking` отключает скачивание; `revoked` требует подтверждения нужного узла.
+  Активные сессии принудительно не завершаются; следующие подключения проверяют
+  CRL и срок сертификата.
+- Серверы получают только собственный ключ и сертификат, публичный CA,
+  список отозванных сертификатов и серверный ключ `tls-crypt-v2` своей точки доступа.
+- Транзитный клиент Yandex получает только собственный клиентский ключ и
+  сертификат, публичный CA и клиентский ключ `tls-crypt-v2` для транзита AWS.
+- DNS обслуживается локальным Unbound, доступен только из VPN-туннеля и
+  не должен журналировать отдельные запросы.
 
-## Security requirements
+## Требования безопасности
 
-- The repository is public; no private keys, certificates, passwords, tokens,
-  client profiles, audit reports, or unredacted infrastructure exports may be
-  committed.
-- Infrastructure inspection is read-only unless a later task explicitly
-  authorizes a narrowly scoped change.
-- Audit tooling must not connect to hosts automatically or transmit collected
-  data.
-- Audit output must remain local, have restrictive filesystem permissions, and
-  be excluded from Git.
-- Privileged diagnostics must be optional, clearly disclosed, and read-only.
+- Репозиторий публичный; нельзя коммитить закрытые ключи, сертификаты, пароли,
+  токены, клиентские профили, отчёты аудита или инфраструктурные выгрузки
+  без удаления конфиденциальных данных.
+- Инфраструктура проверяется только чтением, пока следующая задача явно
+  не разрешит изменение с узкими границами.
+- Инструменты аудита не должны автоматически подключаться к хостам или
+  передавать собранные данные.
+- Результаты аудита должны оставаться локальными, иметь строгие права доступа
+  к файлам и быть исключены из Git.
+- Привилегированная диагностика должна быть необязательной, явно описанной
+  и выполнять только чтение.
 
-## First-iteration deliverables
+## Результаты первой итерации
 
-- Reviewed architecture decision record and sanitized audit conclusions.
-- Independent Terraform stacks for AWS and Yandex Cloud.
-- Explicit Ansible deployment for the two new VMs.
-- Compose-managed OpenVPN and Unbound services for both direct modes.
-- Local PKI tooling for bootstrap, disabled after server handover.
-- Google registration and ADMIN/USER profile panel with isolated server PKI.
-- Fail-closed Yandex-to-AWS multi-hop routing and transit-only DNS.
-- Static validation and operator acceptance-test instructions.
-- A separately deployable four-container profile/restart control plane, outbound
-  heartbeat and CRL agents for the two dedicated VPN VMs, and coherent protected
-  backup/recovery and approved live-acceptance procedures.
+- Прошедшее ревью архитектурное решение и обезличенные выводы аудита.
+- Независимые стеки Terraform для AWS и Yandex Cloud.
+- Явное развёртывание Ansible для двух новых ВМ.
+- Сервисы OpenVPN и Unbound под управлением Compose для обоих прямых режимов.
+- Локальные инструменты PKI для начальной подготовки, отключаемые после передачи серверу.
+- Регистрация Google и панель профилей ADMIN/USER с изолированной серверной PKI.
+- Multi-hop Yandex–AWS с блокировкой при отказе и DNS только через транзит.
+- Статическая проверка и инструкции операторских приёмочных тестов.
+- Отдельно развёртываемая панель профилей и перезапусков из четырёх контейнеров,
+  исходящие heartbeat- и CRL-агенты для двух выделенных VPN-ВМ, согласованное
+  защищённое резервное копирование и восстановление, а также разрешённые процедуры
+  приёмки на реальной инфраструктуре.
 
-## First-iteration non-goals
+## Что не входит в первую итерацию
 
-- MFA, tenant provisioning, billing, cloud discovery, public ADMIN-role mutation,
-  or management of any VM other than `aws-direct` and `yc-direct`.
-- Migrating or modifying the old VMs or existing OpenVPN Access Server.
-- Automatically applying Terraform or connecting to any VM.
+- MFA, создание инфраструктуры арендаторов, биллинг, обнаружение облачных ресурсов,
+  публичное изменение роли ADMIN или управление ВМ, кроме `aws-direct` и `yc-direct`.
+- Миграция или изменение старых ВМ и существующего OpenVPN Access Server.
+- Автоматическое применение Terraform или подключение к любой ВМ.

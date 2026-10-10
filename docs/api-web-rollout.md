@@ -1,20 +1,20 @@
-# Point rollout of API/web for the refactoring release
+# Точечное развёртывание API/web для выпуска с рефакторингом
 
-This procedure prepares and installs only the API and web images from merged
-release `64db1d51d38b7af215d75a3a85bc8dcf55b66bc6` (PR #9).
-The expected installed source baseline is
-`797058c7e36e45005e8a1a2fcbc2bc976c6f6233` (PR #8). This is an assumption
-checked against public installed build inputs before any container is changed.
-A different installation must receive a separately reviewed baseline/package.
+Процедура готовит и устанавливает только образы API и web из слитого выпуска
+`64db1d51d38b7af215d75a3a85bc8dcf55b66bc6` (PR #9).
+Ожидаемая исходная версия установленного кода —
+`797058c7e36e45005e8a1a2fcbc2bc976c6f6233` (PR #8). Это предположение проверяется
+по публичным входам установленной сборки до любого изменения контейнера.
+Другая установка требует отдельно рассмотренных исходной версии и комплекта.
 
-The preparation tools never use SSH or contact a VM. Host access, package
-transfer and every mutation below require explicit operator approval. This
-procedure does not run the full Ansible web role: that role also stops PKI,
-installs configuration and runs migrations. No new migration, credential sync,
-PKI image/storage change, agent deployment, VM reboot or VPN configuration
-change belongs to this release.
+Инструменты подготовки не используют SSH и не обращаются к ВМ. Доступ к хосту,
+передача комплекта и каждое изменение ниже требуют явного разрешения оператора.
+Процедура не запускает полную веб-роль Ansible: та также останавливает PKI,
+устанавливает конфигурацию и выполняет миграции. Этот выпуск не включает
+новые миграции, синхронизацию учётных данных, изменения образа/хранилища PKI,
+развёртывание агентов, перезагрузку ВМ или изменения конфигурации VPN.
 
-## Prepared local package
+## Подготовленный локальный комплект
 
 ```sh
 python3 scripts/prepare-api-web-release.py \
@@ -24,40 +24,40 @@ python3 scripts/prepare-api-web-release.py \
   --output release-artifacts/api-web-64db1d51d38b-r4 --build
 ```
 
-Without `--build`, validation performs no Docker operation and writes no
-package. With the flag it builds/exports only API/web on the local Unix Docker
-socket. Dependencies/base images may be downloaded during this explicit build.
-Public context files/directories retain readable 0644/0755 permissions inside
-the protected release directory. Builds bypass cached directory metadata, and
-runtime readability is checked as UID 10001 before export.
-The source contexts contain only allowlisted committed Git files; working-tree
-changes, local environment files, inventories and generated PKI are excluded.
-Changes to dependency manifests, migrations, entrypoints, Dockerfiles, Caddy
-configuration or the Compose manifest reject this narrow deployment path.
+Без `--build` проверка не выполняет операций Docker и не записывает комплект.
+С флагом она собирает/экспортирует только API/web через локальный Unix-сокет
+Docker. Во время этой явной сборки могут загружаться зависимости/базовые образы.
+Файлы и каталоги публичного контекста сохраняют читаемые права 0644/0755 внутри
+защищённого каталога выпуска. Сборки обходят кэшированные метаданные каталогов;
+перед экспортом проверяется доступность чтения с UID 10001.
+Исходные контексты содержат только разрешённые закоммиченные файлы Git;
+изменения рабочего дерева, локальное окружение, инвентари и созданная PKI
+исключены. Изменения манифестов зависимостей, миграций, точек входа,
+Dockerfile, конфигурации Caddy или манифеста Compose запрещают этот узкий путь развёртывания.
 
-The protected, Git-ignored directory
-`release-artifacts/api-web-64db1d51d38b-r4/` contains:
+Защищённый игнорируемый Git каталог
+`release-artifacts/api-web-64db1d51d38b-r4/` содержит:
 
-- `images.tar`: both candidate images with revision-specific tags.
-- `release.json`: revisions, image IDs, archive/checker checksums and expected
-  baseline file checksums.
-- `compose.override.json`: only API/web image references.
-- `inspect-api-web-release.py`: local read-only preflight and verification.
-- `build/`: exported public source contexts; these are not installed on the host.
+- `images.tar`: оба образа-кандидата с тегами конкретной ревизии.
+- `release.json`: ревизии, ID образов, контрольные суммы архива/проверяющего
+  скрипта и ожидаемые контрольные суммы файлов исходной версии.
+- `compose.override.json`: только ссылки на образы API/web.
+- `inspect-api-web-release.py`: локальная предварительная и итоговая проверка только чтением.
+- `build/`: экспортированные публичные контексты исходников; они не устанавливаются на хост.
 
-Transfer the four package files outside `build/` only after approval, over the
-existing verified transport. Keep the destination directory mode `0700` and
-files `0600`; keep rollback metadata private and outside Git. Verify the
-transferred `release.json` checksum against the local trusted copy before
-running the transferred checker. Checksums detect corruption, not an attacker
-replacing both metadata and artifacts.
+Передавайте четыре файла комплекта вне `build/` только после разрешения,
+через существующий проверенный транспорт. Каталог назначения должен иметь
+`0700`, файлы — `0600`; метаданные отката храните приватно вне Git. Перед
+запуском переданного проверяющего скрипта сверьте сумму `release.json`
+с доверенной локальной копией. Суммы обнаруживают повреждение, но не атакующего,
+заменившего и метаданные, и артефакты.
 
-## Reviewed host operations
+## Рассмотренные операции на хосте
 
-Run these commands only on the dedicated, explicitly approved control-plane
-host, with the existing local Docker permissions. There is no automatic sudo,
-remote Docker context or connection to VPN nodes. Set these paths to the reviewed
-installation and protected transfer directory:
+Запускайте команды только на выделенном, явно разрешённом хосте панели
+с существующими локальными правами Docker. Автоматического sudo, удалённого
+контекста Docker и подключения к VPN-узлам нет. Укажите пути рассмотренной
+установки и защищённого каталога передачи:
 
 ```sh
 umask 077
@@ -68,23 +68,26 @@ python3 "$RELEASE_DIR/inspect-api-web-release.py" \
   --release-dir "$RELEASE_DIR" --app-root "$APP_ROOT"
 ```
 
-Preflight compares installed public build inputs with the expected baseline,
-checks package integrity and the image-only override, and verifies that all four
-existing services are running. It reads only explicitly selected container
-identity/state fields, never container environments, commands, logs, secret
-files or CA storage. Failure prints a fixed message and changes no container.
-Resolve a mismatch through reviewed preparation; do not bypass the checker.
+Предварительная проверка сравнивает публичные входы установленной сборки
+с ожидаемой исходной версией, проверяет целостность комплекта и переопределение
+только образов, а также работу всех четырёх существующих сервисов. Она читает
+только явно выбранные поля идентичности/состояния контейнеров, никогда
+окружение, команды, логи, секретные файлы или хранилище CA. Сбой выводит
+фиксированное сообщение и не меняет контейнеры. Устраняйте несоответствие
+через рассмотренную подготовку; не обходите проверку.
 
-Before cutover, confirm in the panel that no restart job is queued, dispatching
-or waiting and no ambiguous restart needs review. Avoid concurrent administrative
-mutations during maintenance. Keep the existing coherent backup and previous
-images available; do not run image pruning. Expected downtime is limited to
-the panel/API; graceful shutdown can wait for an in-flight PKI call.
+Перед переключением подтвердите в панели отсутствие заданий перезапуска
+в очереди, отправке или ожидании и неопределённых перезапусков для проверки.
+Избегайте параллельных административных изменений при обслуживании.
+Сохраняйте согласованную копию и прежние образы; не очищайте образы.
+Ожидаемый простой ограничен панелью/API; корректная остановка может ждать
+текущий вызов PKI.
 
-The approved mutation sequence is: load the two candidate images, save old
-API/web image references, stop only API/web with a 180-second grace period, then
-recreate only API/web using the candidate override. The image check also rejects
-a candidate whose OS/architecture differs from the running API/web image:
+Разрешённая последовательность: загрузить два образа-кандидата, сохранить
+старые ссылки на образы API/web, остановить только API/web с периодом
+корректного завершения 180 секунд, затем пересоздать только API/web с
+переопределением кандидата. Проверка образов также отклоняет кандидата
+с другой ОС/архитектурой относительно работающего образа API/web:
 
 ```sh
 docker --host unix:///var/run/docker.sock image load --input "$RELEASE_DIR/images.tar"
@@ -105,28 +108,30 @@ curl --fail --silent --show-error --max-time 5 --retry 10 --retry-delay 2 \
   --retry-max-time 60 https://veilway.ru/api/readyz
 ```
 
-Do not continue after a failed command. Rollback references are saved exclusively
-and cannot overwrite an earlier snapshot. Postflight verifies the exact running
-candidate image IDs and unchanged DB/PKI container IDs, images, start times and
-restart counts. Readiness must return `{"status":"ready"}`; it checks worker
-lifetimes rather than database/cloud/PKI availability.
+Не продолжайте после неудачной команды. Ссылки отката сохраняются с
+исключительным созданием и не могут перезаписать прежний снимок.
+Итоговая проверка подтверждает точные ID работающих образов-кандидатов
+и неизменность ID, образов, времени запуска и числа перезапусков контейнеров
+DB/PKI. Готовность должна вернуть `{"status":"ready"}`; она проверяет
+жизненные циклы воркеров, а не доступность БД/облаков/PKI.
 
-Manually verify Google sign-in, ADMIN profile filters/metadata, USER owner-scoped
-profile metadata and the absence of administrative navigation for USER. Inspect
-the existing CRL delivery view. Do not create/revoke profiles or reboot nodes
-as part of this smoke check. If readiness or functional checks fail, use the
-approved rollback below rather than retrying jobs or changing PKI.
+Вручную проверьте вход Google, фильтры/метаданные ADMIN, метаданные собственных
+профилей USER и отсутствие административной навигации USER. Просмотрите
+существующий экран доставки CRL. В этой smoke-проверке не создавайте/не
+отзывайте профили и не перезагружайте узлы. При сбое готовности или функциональных
+проверок используйте разрешённый откат ниже вместо повтора заданий или изменения PKI.
 
-Keep the immutable release override and record it as the active image selection.
-Future Compose operations on API/web must include that override; using the base
-manifest alone can revert to its old `0.1.0` tags. Installed source directories,
-the base manifest and runtime interpolation/secrets are intentionally retained.
-A later full/source deployment must reconcile the active release explicitly.
+Сохраните неизменное переопределение выпуска и запишите его как активный выбор
+образов. Будущие операции Compose с API/web должны включать это переопределение;
+один базовый манифест может вернуть старые теги `0.1.0`. Установленные каталоги
+исходников, базовый манифест и рабочие подстановки/секреты намеренно сохраняются.
+Позднее полное развёртывание или развёртывание из исходников должно явно
+учесть активный выпуск.
 
-## Rollback
+## Откат
 
-Approval must include this recovery operation: stop/recreate only API/web using
-the saved exact image IDs. Do not restore database or CA contents.
+Разрешение должно включать эту операцию восстановления: остановить/пересоздать
+только API/web с сохранёнными точными ID образов. Не восстанавливайте содержимое БД или CA.
 
 ```sh
 docker --host unix:///var/run/docker.sock compose --project-directory "$APP_ROOT" \
@@ -140,22 +145,23 @@ python3 "$RELEASE_DIR/inspect-api-web-release.py" \
 curl --fail --silent --show-error --max-time 5 https://veilway.ru/api/healthz
 ```
 
-The old API may not implement readiness; liveness must return
-`{"status":"ok"}`. Repeat sign-in and metadata checks. Retain the rollback
-override as active after recovery. An ambiguous reboot dispatch requires
-separate operator review; deployment never authorizes sending it again.
+Старый API может не поддерживать готовность; проверка работоспособности должна
+вернуть `{"status":"ok"}`. Повторите вход и проверки метаданных.
+После восстановления сохраните переопределение отката как активное.
+Неопределённая отправка перезагрузки требует отдельного рассмотрения оператором;
+развёртывание никогда не разрешает повторную отправку.
 
-## Local validation
+## Локальная проверка
 
 ```sh
 python3 scripts/test-api-web-release.py
 ./scripts/check.sh
 ```
 
-Offline tests use synthetic files and fake Docker responses to verify image
-identity, protected rollback files, unchanged DB/PKI state, allowed read-only
-commands and rejection of incompatible/corrupt packages. Local Compose contract
-validation checks the candidate override preserves the existing exposure,
-networks, mounts and secret boundaries. These checks do not prove a production
-baseline or live Google sign-in: host preflight and
-manual acceptance remain required.
+Автономные тесты используют искусственные файлы и ответы Docker для проверки
+идентичности образов, защиты файлов отката, неизменности DB/PKI, разрешённых
+команд только чтения и отказа от несовместимых/повреждённых комплектов.
+Локальная проверка контракта Compose подтверждает, что переопределение кандидата
+сохраняет доступность извне, сети, монтирования и границы секретов.
+Эти проверки не доказывают рабочую исходную версию или реальный вход Google:
+предварительная проверка хоста и ручная приёмка остаются обязательными.

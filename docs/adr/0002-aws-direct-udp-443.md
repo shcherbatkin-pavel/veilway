@@ -1,58 +1,58 @@
-# ADR 0002: Rejected AWS Direct UDP/443 trial
+# ADR 0002: Отклонённый эксперимент AWS Direct UDP/443
 
-- Status: Rejected after Direct MVP validation
-- Date: 2026-08-25
-- Outcome: ADR 0001 remains authoritative for Direct endpoint ports
+- Статус: отклонено после проверки MVP Direct
+- Дата: 2026-08-25
+- Итог: ADR 0001 остаётся определяющим решением для портов Direct
 
-## Context
+## Контекст
 
-The AWS OpenVPN control channel, certificate authentication, tunnel lease,
-server forwarding, DNS, nftables, and NAT all passed isolated checks. A direct
-client emitted valid OpenVPN UDP/1194 data-channel packets, but those packets
-did not reach the EC2 host's pre-conntrack counter. The same protected client
-profile and application image passed the complete data-channel and DNS test
-when their outer transport traversed an already established VPN.
+Канал управления AWS OpenVPN, аутентификация сертификатами, выдача адреса туннеля,
+пересылка сервера, DNS, nftables и NAT прошли изолированные проверки. Прямой
+клиент отправлял корректные пакеты канала данных OpenVPN UDP/1194, но они
+не достигали счётчика хоста EC2 перед conntrack. Тот же защищённый клиентский
+профиль и образ приложения прошли полную проверку канала данных и DNS,
+когда внешний транспорт шёл через уже установленный VPN.
 
-This localized the observed failure to the direct network path rather than the
-Veilway server, profile identity, NetworkManager, or client implementation. A
-bounded trial moved only `aws-direct` to UDP/443 to distinguish a port-specific
-block from broader traffic classification.
+Это локализовало наблюдаемый отказ на прямом сетевом пути, а не в сервере
+Veilway, идентификаторе профиля, NetworkManager или реализации клиента.
+Ограниченный эксперимент перенёс только `aws-direct` на UDP/443, чтобы
+отличить блокировку конкретного порта от более широкой классификации трафика.
 
-## Trial
+## Эксперимент
 
-The AWS security group, OpenVPN listener, nftables ingress rule, inventory, and
-two protected AWS profiles were moved from UDP/1194 to UDP/443. No VM, Elastic
-IP, certificate, client private key, or `tls-crypt-v2` key was replaced. The
-privileged listener temporarily required `NET_BIND_SERVICE` in the OpenVPN
-container.
+Группа безопасности AWS, слушатель OpenVPN, входное правило nftables, инвентарь
+и два защищённых профиля AWS были перенесены с UDP/1194 на UDP/443. ВМ,
+Elastic IP, сертификаты, закрытые клиентские ключи и ключи `tls-crypt-v2`
+не заменялись. Привилегированный порт временно требовал capability
+`NET_BIND_SERVICE` в контейнере OpenVPN.
 
-Server verification passed on UDP/443. Both the NetworkManager client and an
-independent isolated OpenVPN client completed the control channel and received
-a tunnel lease directly, but neither could pass data to the tunnel gateway.
-The same isolated UDP/443 client then passed the data-channel and tunnel-only
-DNS checks when its outer transport used an existing VPN.
+Проверка сервера на UDP/443 прошла. И клиент NetworkManager, и независимый
+изолированный клиент OpenVPN напрямую установили канал управления и получили
+адрес туннеля, но ни один не смог передать данные шлюзу туннеля. Затем тот же
+изолированный клиент UDP/443 прошёл проверки канала данных и DNS только через
+туннель, когда его внешний транспорт использовал существующий VPN.
 
-## Decision
+## Решение
 
-Reject UDP/443 as an AWS Direct workaround and restore the Direct baseline on
-UDP/1194. Remove the trial-only `NET_BIND_SERVICE` capability. Do not try raw
-OpenVPN TCP/443 merely because HTTPS commonly uses that port: raw OpenVPN does
-not become HTTPS and the additional observation that the AWS website is
-unreachable on the direct path further reduces the expected value of port-only
-experiments.
+Отклонить UDP/443 как обход ограничения AWS Direct и восстановить базовый
+Direct на UDP/1194. Удалить capability `NET_BIND_SERVICE`, добавленную только
+для эксперимента. Не пробовать обычный OpenVPN TCP/443 лишь потому, что HTTPS
+обычно использует этот порт: обычный OpenVPN не становится HTTPS, а дополнительное
+наблюдение о недоступности сайта AWS на прямом пути ещё сильнее снижает
+ожидаемую пользу экспериментов только с портами.
 
-Proceed to a separately reviewed Yandex-ingress, AWS-egress multi-hop design.
-The client will reach the already accepted Yandex path, while the inter-cloud
-transit bypasses the filtered client-to-AWS path.
+Перейти к отдельно рассмотренному проекту multi-hop с входом через Yandex
+и выходом через AWS. Клиент использует уже принятый путь Yandex, а межоблачный
+транзит обходит фильтруемый путь клиента к AWS.
 
-## Consequences
+## Последствия
 
-- Terraform rollback must update only the existing AWS security group from
-  UDP/443 to UDP/1194; VM replacement is forbidden.
-- Ansible rollback is limited to `aws-direct` and restores its listener,
-  firewall rule, Compose capabilities, and profiles without rotating PKI.
-- `aws-direct` remains a valid independently deployed endpoint but is not
-  accepted as reachable from the observed direct operator network.
-- Multi-hop must be fail-closed: loss of AWS transit must never fall back to
-  Yandex internet egress or Yandex DNS recursion.
-- The old VPN service and its hosts remain outside all changes.
+- Откат Terraform должен изменить только существующую группу безопасности AWS
+  с UDP/443 на UDP/1194; замена ВМ запрещена.
+- Откат Ansible ограничен `aws-direct` и восстанавливает слушатель, правило
+  межсетевого экрана, capabilities Compose и профили без ротации PKI.
+- `aws-direct` остаётся корректной независимо развёрнутой точкой доступа,
+  но не принят как доступный из наблюдаемой прямой сети оператора.
+- Multi-hop обязан блокировать трафик при отказе: потеря транзита AWS никогда
+  не должна переключать выход в интернет или рекурсивный DNS на Yandex.
+- Старый VPN-сервис и его хосты остаются вне всех изменений.
