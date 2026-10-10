@@ -58,6 +58,7 @@ def receipt(payload: Receipt, response: Response, agent: CrlAgent = Depends(agen
         raise HTTPException(409, "receipt rejected", headers={"Cache-Control": "no-store"})
     agent.acknowledged_version, agent.acknowledged_sha256 = payload.version, payload.sha256
     agent.acknowledged_until, agent.last_contact_at = publication.next_update, now
+    agent.acknowledged_at = now
     agent.error_code = None
     # Worker finalizes separately: keep the agent row lock out of the profile/job lock order.
     db.commit()
@@ -78,10 +79,13 @@ def report_error(payload: DeliveryError, response: Response, agent: CrlAgent = D
 @router.get("/crl-delivery")
 def delivery(response: Response, _=Depends(require_admin), db: Session = Depends(get_db)):
     no_referrer(response)
+    return delivery_snapshot(db, utcnow())
+
+
+def delivery_snapshot(db: Session, now):
     latest = db.scalar(select(CrlPublication).order_by(CrlPublication.version.desc()).limit(1))
     state = db.get(CrlSyncState, 1)
     nodes = []
-    now = utcnow()
     for slug in ("aws-direct", "yc-direct"):
         agent = db.get(CrlAgent, slug)
         status = "unconfigured"
@@ -89,7 +93,9 @@ def delivery(response: Response, _=Depends(require_admin), db: Session = Depends
             status = "pending"
             if agent.acknowledged_until is not None and as_utc(agent.acknowledged_until) <= now:
                 status = "expired"
-            elif latest is not None and agent.acknowledged_version == latest.version:
+            elif (latest is not None and as_utc(latest.next_update) > now
+                  and agent.acknowledged_until is not None
+                  and agent.acknowledged_version == latest.version):
                 status = "current"
             if agent.last_contact_at is None or as_utc(agent.last_contact_at) < now - timedelta(minutes=2):
                 status = "offline"
@@ -97,7 +103,8 @@ def delivery(response: Response, _=Depends(require_admin), db: Session = Depends
                 status = "error"
         nodes.append({"slug": slug, "status": status,
                       "acknowledged_version": agent.acknowledged_version if agent else None,
-                      "last_contact_at": agent.last_contact_at if agent else None,
-                      "error_code": agent.error_code if agent else None})
-    return {"version": latest.version if latest else None, "next_update": latest.next_update if latest else None,
-            "publisher_error": state.error_code if state else "publication_unavailable", "nodes": nodes}
+                      "last_contact_at": as_utc(agent.last_contact_at) if agent and agent.last_contact_at else None,
+                      "acknowledged_at": as_utc(agent.acknowledged_at) if agent and agent.acknowledged_at else None,
+                      "error_code": (agent.error_code if agent.error_code in ERROR_CODES else "delivery_failed") if agent and agent.error_code else None})
+    return {"version": latest.version if latest else None, "next_update": as_utc(latest.next_update) if latest else None,
+            "publisher_error": "publication_unavailable" if state is None or state.error_code else None, "nodes": nodes}

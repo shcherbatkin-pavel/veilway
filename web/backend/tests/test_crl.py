@@ -204,6 +204,7 @@ def test_both_nodes_receive_complete_crl_only_required_node_finalizes(db_factory
             assert repeated.status_code == 202
             assert repeated.json()['status'] == 'succeeded'
         assert admin.get('/api/v1/crl-delivery').json()['nodes'][1]['status'] == 'current'
+        assert admin.get('/api/v1/crl-delivery').json()['nodes'][1]['acknowledged_at'] is not None
 
 
 def test_daily_refresh_retains_revocations_and_is_idempotent(real_pki):
@@ -243,7 +244,7 @@ def test_crl_migration_refuses_destroying_receipts(postgres_connection):
         command.downgrade(cfg, '0004_profile_api')
     postgres_connection.rollback()
     assert postgres_connection.scalar(sa.text('SELECT count(*) FROM crl_agents')) == 1
-    assert postgres_connection.scalar(sa.text('SELECT version_num FROM alembic_version')) == '0006_legacy_profiles'
+    assert postgres_connection.scalar(sa.text('SELECT version_num FROM alembic_version')) == '0007_heartbeat_details'
 
 
 def test_crl_token_sync_rotation_and_heartbeat_separation(db_factory, seed_control_data, monkeypatch):

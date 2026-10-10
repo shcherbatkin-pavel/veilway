@@ -1244,3 +1244,16 @@ fieldset:disabled {
   .guide-platforms button { flex:1 1 40%; min-height:44px; }
   .guide-steps { padding-left:22px; }
 }
+
+.health-summary { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
+.health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 1rem; }
+.health-card { padding: 1rem; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+.health-card .section-heading { flex-wrap: wrap; gap: .5rem; }
+.health-card h3 { margin: 0; }
+.health-card dl, .panel > dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .5rem 1rem; }
+.health-card dt { color: var(--muted, #64748b); }
+.health-card dd, .panel > dl dd { margin: 0; overflow-wrap: anywhere; }
+.health-card li { overflow-wrap: anywhere; }
+.health-ok { background: #20382e; color: #82ddbc; }
+.health-attention { background: #382d21; color: #f3c68a; }
+.health-unknown { background: #2b3433; color: #c3cfca; }

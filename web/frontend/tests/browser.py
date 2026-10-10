@@ -32,6 +32,30 @@ def profile(pid=P1, name='Рабочий ноутбук', owner=USER, status='ac
                 created_at=NOW, expires_at='2027-10-05T10:00:00Z')
 
 
+
+def health_fixture():
+    return dict(generated_at=NOW, assessment='attention',
+        nodes=[dict(slug='aws-direct', state='healthy', assessment='ok', reasons=[],
+                    last_heartbeat_at=NOW, heartbeat_age_seconds=5, uptime_seconds=100,
+                    containers={'veilway-openvpn':'healthy'}),
+               dict(slug='yc-direct', state='degraded', assessment='attention',
+                    reasons=['heartbeat_stale','component_unhealthy'], last_heartbeat_at=NOW,
+                    heartbeat_age_seconds=90, uptime_seconds=100,
+                    containers={'veilway-openvpn':'unhealthy'})],
+        workers=[dict(name=name, assessment='ok', state='running', started_at=NOW,
+                      completed_at=NOW, succeeded_at=NOW, in_progress=False, error_code=None, slow=False)
+                 for name in ('restart-worker','profile-worker','crl-worker')],
+        crl=dict(assessment='attention', version=4100, next_update=NOW,
+                 publisher_error='publication_unavailable', attempted_at=NOW,
+                 observation_stale=False, publication_expired=True,
+                 nodes=[dict(slug='yc-direct',status='error',acknowledged_version=4099,
+                             last_contact_at=NOW,acknowledged_at=NOW,error_code='installation_failed')]),
+        operations=[dict(kind=kind, assessment='attention' if kind == 'issue' else 'ok',
+                         queued=1, running=0, oldest_pending_age_seconds=301,
+                         delayed=1 if kind == 'issue' else 0, needs_review=0,
+                         failed_last_day=0, pki_errors=0, awaiting_delivery=0)
+                    for kind in ('issue','revoke','restart')])
+
 class Scene:
     def __init__(self, browser, viewport, role='ADMIN', profiles=None, jobs=None, hold_profiles=False):
         self.role, self.expired = role, False
@@ -90,6 +114,7 @@ class Scene:
             if self.role == 'USER':
                 assert path in {'profiles','profile-jobs'}, 'USER attempted an administrative API'
             result = {
+                'observability/overview': health_fixture(),
                 'profiles': [p for p in self.profiles if self.role == 'ADMIN' or p['owner_id'] == USER],
                 'profile-jobs': [j for j in self.jobs if self.role == 'ADMIN' or any(p['id'] == j['profile_id'] and p['owner_id'] == USER for p in self.profiles)],
                 'users': [dict(id=USER,email='owner@example.test'),dict(id=OTHER,email='other@example.test')],
@@ -459,12 +484,57 @@ def session_unavailable(browser, viewport):
     context.close()
 
 
+def health_overview(browser, viewport):
+    s = Scene(browser, viewport, 'ADMIN', [profile()]); page = s.page
+    navigation = page.get_by_role('navigation', name='Основная навигация')
+    navigation.get_by_role('button', name='Состояние', exact=True).click()
+    expect(page.get_by_role('heading', name='Состояние', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='Фоновые задачи', exact=True)).to_be_visible()
+    expect(page.get_by_text('Сигнал от узла устарел', exact=True)).to_be_visible()
+    cards = page.locator('.health-card')
+    expect(cards.first).to_contain_text('yc-direct')
+    expect(page.get_by_text('Проход завершился ошибкой', exact=False)).to_have_count(0)
+    expect(page.get_by_text('Публикация отзывов недоступна', exact=False)).to_be_visible()
+    s.no_overflow()
+    before = len([r for r in s.requests if r == ('GET','observability/overview')])
+    page.wait_for_timeout(5500)
+    assert len([r for r in s.requests if r == ('GET','observability/overview')]) > before
+    s.failures['observability/overview'] = 503
+    page.get_by_role('button', name='Обновить', exact=True).click()
+    expect(page.get_by_role('alert')).to_contain_text('Показан устаревший снимок')
+    expect(page.get_by_role('heading', name='Фоновые задачи', exact=True)).to_be_visible()
+    assert 'synthetic-secret-error-text' not in page.locator('body').inner_text()
+    del s.failures['observability/overview']
+    page.get_by_role('button', name='Обновить', exact=True).click()
+    expect(page.get_by_role('alert')).to_have_count(0)
+    for button, heading in (('Профили','Профили'), ('Открыть узлы','VPN-узлы'), ('История','История')):
+        page.get_by_role('button', name=button, exact=True).last.click()
+        expect(page.get_by_role('heading', level=1)).to_contain_text(heading)
+        navigation.get_by_role('button', name='Состояние', exact=True).click()
+        expect(page.get_by_role('heading', name='Фоновые задачи', exact=True)).to_be_visible()
+    s.expired = True
+    page.get_by_role('button', name='Обновить', exact=True).click()
+    expect(page.get_by_role('link', name='Войти через Google')).to_be_visible()
+    expect(page.get_by_role('heading', name='Фоновые задачи', exact=True)).to_have_count(0)
+    s.close()
+    s = Scene(browser, viewport, 'USER', [profile()])
+    expect(s.page.get_by_role('button', name='Состояние', exact=True)).to_have_count(0)
+    assert not any(path == 'observability/overview' for _, path in s.requests)
+    s.close()
+    s = Scene(browser, viewport, 'ADMIN', [profile()])
+    s.failures['observability/overview'] = 503
+    s.page.get_by_role('button', name='Состояние', exact=True).click()
+    expect(s.page.get_by_role('alert')).to_contain_text('Не удалось получить состояние')
+    expect(s.page.get_by_role('heading', name='Фоновые задачи', exact=True)).to_have_count(0)
+    s.close()
+
+
 with sync_playwright() as p:
     browser=p.chromium.launch(headless=True,args=['--no-sandbox'])
     try:
         count=0
         for viewport in ({'width':1440,'height':1000},{'width':390,'height':844},{'width':320,'height':740}):
-            for run in (admin_flow,user_flow,empty_and_states,expired_revoke,idempotent_creation,pagination_and_screenshot,loading_and_failures,session_unavailable,storage_and_logout,connection_guide):
+            for run in (admin_flow,user_flow,empty_and_states,expired_revoke,idempotent_creation,pagination_and_screenshot,loading_and_failures,session_unavailable,storage_and_logout,connection_guide,health_overview):
                 run(browser,viewport)
                 count+=1; print(f'PASS {run.__name__} {viewport["width"]}',flush=True)
         print(f'{count} browser scenarios passed',flush=True)
