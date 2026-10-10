@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Local browser acceptance with synthetic API fixtures; no cloud/Google calls."""
 import os
+from datetime import datetime
 from pathlib import Path
 import uuid
 from playwright.sync_api import sync_playwright, expect
@@ -277,6 +278,32 @@ def empty_and_states(browser,viewport):
     s.close()
 
 
+def expired_revoke(browser, viewport):
+    active = profile()
+    active['expires_at'] = '2026-10-05T10:01:00Z'
+    expired = profile(P2, 'Истёкший', status='expired')
+    elapsed = profile(str(uuid.uuid4()), 'Срок наступил')
+    elapsed['expires_at'] = NOW
+    s = Scene(browser, viewport, profiles=[active, expired, elapsed])
+    s.page.clock.set_fixed_time(datetime.fromisoformat(NOW))
+    s.page.reload()
+    expect(s.row('Рабочий ноутбук').get_by_role('button', name='Отозвать Рабочий ноутбук', exact=True)).to_be_visible()
+    for name in ('Истёкший', 'Срок наступил'):
+        expect(s.row(name).get_by_text('Истёк', exact=True)).to_be_visible()
+        expect(s.row(name).get_by_role('button', name=f'Отозвать {name}', exact=True)).to_have_count(0)
+    s.row('Рабочий ноутбук').get_by_role('button', name='Отозвать Рабочий ноутбук', exact=True).click()
+    dialog = s.page.get_by_role('dialog', name='Отозвать профиль?')
+    s.page.clock.set_fixed_time(datetime.fromisoformat(active['expires_at']))
+    dialog.get_by_role('button', name='Отозвать профиль', exact=True).click()
+    expect(dialog.get_by_role('alert')).to_have_text('Срок действия профиля истёк. Отзыв недоступен.')
+    assert not s.revokes
+    assert not any(method == 'POST' and path.endswith('/revoke') for method, path in s.requests)
+    expect(dialog.get_by_role('button', name='Отмена', exact=True)).to_be_enabled()
+    dialog.get_by_role('button', name='Отмена', exact=True).click()
+    expect(s.row('Рабочий ноутбук').get_by_role('button', name='Отозвать Рабочий ноутбук', exact=True)).to_have_count(0)
+    s.close()
+
+
 def idempotent_creation(browser,viewport):
     s=Scene(browser,viewport)
     s.fail_create_after_commit=True
@@ -437,7 +464,7 @@ with sync_playwright() as p:
     try:
         count=0
         for viewport in ({'width':1440,'height':1000},{'width':390,'height':844},{'width':320,'height':740}):
-            for run in (admin_flow,user_flow,empty_and_states,idempotent_creation,pagination_and_screenshot,loading_and_failures,session_unavailable,storage_and_logout,connection_guide):
+            for run in (admin_flow,user_flow,empty_and_states,expired_revoke,idempotent_creation,pagination_and_screenshot,loading_and_failures,session_unavailable,storage_and_logout,connection_guide):
                 run(browser,viewport)
                 count+=1; print(f'PASS {run.__name__} {viewport["width"]}',flush=True)
         print(f'{count} browser scenarios passed',flush=True)

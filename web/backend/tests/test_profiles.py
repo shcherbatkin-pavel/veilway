@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import uuid
 
 import pytest
@@ -167,6 +167,69 @@ def test_revoke_blocks_download_immediately_and_waits_for_stage5_ack(scene, db_f
         assert repeated.status_code == 202 and repeated.json()["id"] == revoke.json()["id"]
     assert len(pki.revoked) == 1
     assert client.post(f"/api/v1/profiles/{pid}/owner", json={"owner_id": str(owners[1])}, headers=headers).status_code == 409
+
+
+@pytest.mark.parametrize("status,offset,accepted", [
+    ("expired", 1, False),
+    ("expired", -1, False),
+    ("active", -1, False),
+    ("active", 0, False),
+    ("active", 1, True),
+])
+def test_new_revoke_checks_status_and_exact_expiry(scene, db_factory, monkeypatch, status, offset, accepted):
+    client, headers, _, _, pki = scene
+    created = create(client, headers, payload())
+    worker = ProfileWorker(Settings(), db_factory, pki)
+    assert worker.step()
+    pid = uuid.UUID(created["profile"]["id"])
+    now = datetime(2026, 10, 10, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr("veilway_control.profiles.utcnow", lambda: now)
+    with db_factory() as db:
+        row = db.get(VpnProfile, pid)
+        row.created_at = now - timedelta(days=1)
+        row.expires_at = now + timedelta(seconds=offset)
+        row.status = status
+        db.commit()
+    calls = list(pki.calls)
+    response = client.post(f"/api/v1/profiles/{pid}/revoke",
+                           json={"idempotency_key": str(uuid.uuid4())}, headers=headers)
+    assert response.status_code == (202 if accepted else 409)
+    with db_factory() as db:
+        assert db.get(VpnProfile, pid).status == ("revoking" if accepted else status)
+        jobs = db.scalars(select(ProfileJob).where(ProfileJob.profile_id == pid, ProfileJob.kind == "revoke")).all()
+        assert len(jobs) == int(accepted)
+        events = db.scalars(select(ProfileAuditEvent).where(
+            ProfileAuditEvent.object_id == pid, ProfileAuditEvent.action == "revoke")).all()
+        assert [event.result for event in events] == ["accepted" if accepted else "denied"]
+    if not accepted:
+        assert not worker.step()
+        assert pki.calls == calls
+        assert not pki.revoked
+
+
+def test_existing_revoke_replays_and_runs_after_expiry(scene, db_factory):
+    client, headers, _, _, pki = scene
+    created = create(client, headers, payload())
+    worker = ProfileWorker(Settings(), db_factory, pki)
+    assert worker.step()
+    pid = uuid.UUID(created["profile"]["id"])
+    key = {"idempotency_key": str(uuid.uuid4())}
+    first = client.post(f"/api/v1/profiles/{pid}/revoke", json=key, headers=headers)
+    assert first.status_code == 202
+    with db_factory() as db:
+        row = db.get(VpnProfile, pid)
+        row.created_at = utcnow() - timedelta(days=2)
+        row.expires_at = utcnow() - timedelta(days=1)
+        db.commit()
+    for completed in (False, True):
+        if completed:
+            assert worker.step()
+        for value in (key, {"idempotency_key": str(uuid.uuid4())}):
+            repeated = client.post(f"/api/v1/profiles/{pid}/revoke", json=value, headers=headers)
+            assert repeated.status_code == 202
+            assert repeated.json()["id"] == first.json()["id"]
+    assert len(pki.revoked) == 1
+    assert client.get(f"/api/v1/profiles/{pid}").json()["status"] == "revoking"
 
 
 def test_create_idempotency_defaults_explicit_date_and_duration(scene, db_factory):

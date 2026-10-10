@@ -38,7 +38,7 @@ export function ProfileRow({ profile, job, admin, ownerLabel, busy, hasUsers, on
             onClick={() => onAction("rename", profile)}>✎</button>
           {!profile.owner_id && <button className="icon-button" aria-label={`Назначить владельца ${profile.device_name}`}
             disabled={!!busy || !hasUsers} onClick={() => onAction("assign", profile)}>＋</button>}
-          {(state === "active" || state === "expired") && <button className="icon-button revoke"
+          {state === "active" && <button className="icon-button revoke"
             aria-label={`Отозвать ${profile.device_name}`} disabled={!!busy}
             onClick={() => onAction("revoke", profile)}>⊘</button>}
         </>}
