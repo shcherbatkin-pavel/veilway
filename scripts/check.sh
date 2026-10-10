@@ -9,7 +9,7 @@ readonly REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 cd -- "${REPOSITORY_ROOT}"
 
 shell_files=(
-    scripts/acceptance-ubuntu-direct scripts/audit-vm.sh scripts/check.sh
+    scripts/acceptance-ubuntu-direct scripts/check.sh
     scripts/container-smoke.sh scripts/test-profile-security.sh scripts/diagnose-aws-container-client
     scripts/diagnose-aws-data-channel scripts/test-control-plane.sh scripts/test-pki-service.sh scripts/test-profile-api.sh scripts/test-crl-mount.sh scripts/test-profile-panel.sh scripts/veilway-pki
     scripts/verify-aws-host-key.sh scripts/verify-client-profiles deploy/image/wait-for-interface
