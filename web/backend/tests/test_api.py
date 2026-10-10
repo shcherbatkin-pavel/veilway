@@ -121,6 +121,7 @@ def test_heartbeat_requires_exact_slug_and_token(db_factory, seed_control_data) 
         heartbeat = db.scalar(select(VmHeartbeat))
         assert heartbeat is not None
         assert heartbeat.healthy is True
+        assert heartbeat.containers == payload["containers"]
 
 
 def test_restart_allowlist_order_and_single_active_job(

@@ -106,7 +106,7 @@ export interface RegisteredUser { id: string; email: string }
 export interface ProfileAudit { id: string; actor_id: string; object_id: string; action: string; result: string; created_at: string }
 export interface CrlDelivery {
   version: number | null; next_update: string | null; publisher_error: string | null;
-  nodes: { slug: VmSlug; status: string; acknowledged_version: number | null; last_contact_at: string | null; error_code: string | null }[];
+  nodes: { slug: VmSlug; status: string; acknowledged_version: number | null; last_contact_at: string | null; acknowledged_at: string | null; error_code: string | null }[];
 }
 export interface CreateProfile {
   idempotency_key: string; device_name: string; mode: ProfileMode;
@@ -152,3 +152,31 @@ export function errorMessage(reason: unknown, download = false): string {
   if (reason.status === 422) return "Проверьте название, владельца и срок действия профиля.";
   return "Не удалось выполнить действие. Попробуйте снова.";
 }
+
+export type Assessment = "ok" | "attention" | "unknown";
+export interface NodeHealth {
+  slug: VmSlug; state: VpnVm["state"]; assessment: Assessment; reasons: string[];
+  last_heartbeat_at: string | null; heartbeat_age_seconds: number | null;
+  uptime_seconds: number | null;
+  containers: Record<string, "healthy" | "starting" | "unhealthy" | "missing"> | null;
+}
+export interface WorkerHealth {
+  name: string; assessment: Assessment; state: "starting" | "running" | "stopped" | "stopping";
+  started_at: string | null; completed_at: string | null; succeeded_at: string | null;
+  in_progress: boolean; error_code: string | null; slow: boolean;
+}
+export interface OperationHealth {
+  kind: "issue" | "revoke" | "restart"; assessment: Assessment;
+  queued: number; running: number; oldest_pending_age_seconds: number | null;
+  delayed: number; needs_review: number; failed_last_day: number; pki_errors: number;
+  awaiting_delivery: number;
+}
+export interface HealthOverview {
+  generated_at: string; assessment: Assessment; nodes: NodeHealth[]; workers: WorkerHealth[];
+  crl: CrlDelivery & { assessment: Assessment; attempted_at: string | null;
+    observation_stale: boolean; publication_expired: boolean };
+  operations: OperationHealth[];
+}
+export const observabilityApi = {
+  overview: (signal: AbortSignal) => request<HealthOverview>("/api/v1/observability/overview", { signal }),
+};

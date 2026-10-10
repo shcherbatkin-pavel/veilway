@@ -166,7 +166,7 @@ VALUES ('yc-direct',decode(repeat('ab',32),'hex'),4099,repeat('b',64),now()+inte
                 "(SELECT user_id FROM google_admin_binding WHERE id=1)='10000000-0000-4000-8000-000000000001' AND "
                 "(SELECT acknowledged_version FROM crl_agents WHERE slug='yc-direct')=4099 AND "
                 "(SELECT acknowledged_sha256 FROM crl_agents WHERE slug='yc-direct')=repeat('b',64) AND "
-                "(SELECT version_num FROM alembic_version)='0006_legacy_profiles'"],
+                "(SELECT version_num FROM alembic_version)='0007_heartbeat_details'"],
                 cwd=REPOSITORY_ROOT, env=environment, capture_output=True, text=True, check=True)
             if restored.stdout.strip() != "t":
                 raise RuntimeError("synthetic PostgreSQL recovery metadata did not match")

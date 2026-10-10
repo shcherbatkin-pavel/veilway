@@ -156,4 +156,4 @@ def test_migration_preserves_provenance_and_refuses_downgrade(postgres_connectio
         command.downgrade(cfg, "0005_crl_delivery")
     postgres_connection.rollback()
     assert postgres_connection.scalar(sa.text("SELECT legacy_import_sha256 FROM vpn_profiles")) == "a" * 64
-    assert postgres_connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0006_legacy_profiles"
+    assert postgres_connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0007_heartbeat_details"

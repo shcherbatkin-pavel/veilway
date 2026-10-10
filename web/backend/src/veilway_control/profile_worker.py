@@ -12,7 +12,7 @@ from sqlalchemy import and_, or_, select, update
 from .models import ProfileJob, VpnProfile, as_utc, utcnow
 from .pki import PkiClient, PkiUnavailable
 from .profiles import audit
-from .workers import run_periodic_step
+from .workers import StepObservation, run_periodic_step
 
 
 class IssueResult(TypedDict):
@@ -48,6 +48,7 @@ class ProfileWorker:
         self.client = client or PkiClient(settings.pki_socket_path)
         self.fault = fault or (lambda point: None)
         self.stopping = asyncio.Event()
+        self.observation = StepObservation()
 
     def stop(self):
         self.stopping.set()
@@ -55,7 +56,7 @@ class ProfileWorker:
     async def run(self):
         # Committed leases are reclaimed automatically after expiration.
         await run_periodic_step(
-            self.step, self.stopping, self.settings.worker_interval_seconds,
+            self.step, self.stopping, self.settings.worker_interval_seconds, observation=self.observation,
             continue_on_error=True,
         )
 

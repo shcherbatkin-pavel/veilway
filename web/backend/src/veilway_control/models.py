@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     LargeBinary,
     String,
     Text,
@@ -244,6 +245,7 @@ class VmHeartbeat(Base):
     vm_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("vpn_vms.id", ondelete="CASCADE"), unique=True, nullable=False
     )
+    containers: Mapped[dict[str, str] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     boot_id: Mapped[str] = mapped_column(String(36), nullable=False)
     healthy: Mapped[bool] = mapped_column(Boolean, nullable=False)
     uptime_seconds: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -334,6 +336,7 @@ class CrlAgent(Base):
     slug: Mapped[str] = mapped_column(String(32), primary_key=True)
     token_hash: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False, unique=True)
     last_contact_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     acknowledged_version: Mapped[int | None] = mapped_column(BigInteger)
     acknowledged_sha256: Mapped[str | None] = mapped_column(String(64))
     acknowledged_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

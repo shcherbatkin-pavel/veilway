@@ -209,7 +209,7 @@ def test_google_switch_revokes_sessions_preserves_history_and_matches_models(pos
     with pytest.raises(RuntimeError, match="administrator binding"):
         command.downgrade(cfg, "0002_users_and_profiles")
     connection.rollback()
-    assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0006_legacy_profiles"
+    assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0007_heartbeat_details"
 
 
 def test_unbound_google_downgrade_does_not_reactivate_legacy_users(postgres_connection):
@@ -263,3 +263,22 @@ def test_concurrent_admin_bootstrap_binds_exactly_one_google_identity(postgres_c
     assert sorted(role for _, role in results) == ["ADMIN", "USER"]
     admin_id = next(user_id for user_id, role in results if role == "ADMIN")
     assert dump(connection, "google_admin_binding") == [{"id": 1, "user_id": admin_id}]
+
+
+def test_observability_upgrade_preserves_existing_heartbeat(postgres_connection):
+    connection = postgres_connection
+    cfg, _ = upgrade_legacy(connection)
+    command.upgrade(cfg, "0006_legacy_profiles")
+    before = dump(connection, "vm_heartbeats")
+    command.upgrade(cfg, "head")
+    after = dump(connection, "vm_heartbeats")
+    assert all(row["containers"] is None for row in after)
+    assert [{key: row[key] for key in before[0]} for row in after] == before
+    connection.execute(sa.text("UPDATE vm_heartbeats SET containers = :value"),
+                       {"value": '{"veilway-openvpn":"healthy"}'})
+    connection.commit()
+    assert dump(connection, "vm_heartbeats")[0]["containers"] == {"veilway-openvpn": "healthy"}
+    command.downgrade(cfg, "0006_legacy_profiles")
+    assert dump(connection, "vm_heartbeats") == before
+    command.upgrade(cfg, "head")
+    assert dump(connection, "vm_heartbeats")[0]["containers"] is None
