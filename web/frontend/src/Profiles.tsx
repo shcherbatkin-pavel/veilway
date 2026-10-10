@@ -54,6 +54,10 @@ export function Profiles({ session, onLogout, onlyOwner }: { session: Session; o
   async function mutate(event: FormEvent) {
     event.preventDefault();
     if (!action || lock.current) return;
+    if (action.kind === "revoke" && effectiveStatus(action.profile) === "expired") {
+      setFormError("Срок действия профиля истёк. Отзыв недоступен.");
+      return;
+    }
     lock.current = true; setBusy(action.profile.id); setFormError(""); setNotice("");
     try {
       if (action.kind === "rename") await profilesApi.rename(action.profile.id, value.trim(), session.csrf_token);

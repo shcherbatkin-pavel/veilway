@@ -156,7 +156,11 @@ def revoke_profile(db: Session, actor: User, profile_id: uuid.UUID, key: uuid.UU
     existing = db.scalar(select(ProfileJob).where(ProfileJob.profile_id == profile_id, ProfileJob.kind == "revoke"))
     if existing:
         return existing
-    if profile.status not in {"active", "expired", "revoking"}:
+    if profile.status == "expired" or as_utc(profile.expires_at) <= utcnow():
+        audit(db, actor.id, "revoke", profile.id, "denied")
+        db.commit()
+        raise HTTPException(409, "expired profile cannot be revoked")
+    if profile.status not in {"active", "revoking"}:
         audit(db, actor.id, "revoke", profile.id, "denied")
         db.commit()
         raise HTTPException(409, "profile cannot be revoked in its current state")

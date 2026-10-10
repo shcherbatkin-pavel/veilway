@@ -163,6 +163,13 @@ def test_both_nodes_receive_complete_crl_only_required_node_finalizes(db_factory
             worker.step()
             assert admin.post(f'/api/v1/profiles/{pid}/revoke', json={'idempotency_key': str(uuid.uuid4())}, headers=headers).status_code == 202
             worker.step()
+        # Expiry while waiting for delivery must not cancel an accepted revoke.
+        with db_factory() as db:
+            for pid in ids:
+                row = db.get(VpnProfile, uuid.UUID(pid))
+                row.created_at = utcnow() - timedelta(days=2)
+                row.expires_at = utcnow() - timedelta(days=1)
+            db.commit()
         publisher.step()
         with user_client(db_factory, user_id, pki)[0] as user_client_instance:
             assert user_client_instance.get('/api/v1/crl-delivery').status_code == 403
@@ -192,6 +199,10 @@ def test_both_nodes_receive_complete_crl_only_required_node_finalizes(db_factory
         publisher = CrlWorker(Settings(), db_factory, pki)
         publisher.step()
         assert all(admin.get(f'/api/v1/profiles/{pid}').json()['status'] == 'revoked' for pid in ids)
+        for pid in ids:
+            repeated = admin.post(f'/api/v1/profiles/{pid}/revoke', json={'idempotency_key': str(uuid.uuid4())}, headers=headers)
+            assert repeated.status_code == 202
+            assert repeated.json()['status'] == 'succeeded'
         assert admin.get('/api/v1/crl-delivery').json()['nodes'][1]['status'] == 'current'
 
 
