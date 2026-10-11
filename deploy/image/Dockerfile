@@ -5,6 +5,8 @@ ARG OPENVPN_VERSION_PATTERN="2.6.*"
 ARG UNBOUND_VERSION_PATTERN="1.19.*"
 
 COPY wait-for-interface /usr/local/bin/wait-for-interface
+COPY veilway-session-hook /usr/local/bin/veilway-session-hook
+COPY veilway_session_accounting.py /usr/local/lib/veilway_session_accounting.py
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
@@ -12,13 +14,14 @@ RUN apt-get update \
         dns-root-data \
         dumb-init \
         iproute2 \
+        python3 \
         openvpn="${OPENVPN_VERSION_PATTERN}" \
         unbound="${UNBOUND_VERSION_PATTERN}" \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 900 --system openvpn \
     && useradd --uid 900 --gid 900 --system --no-create-home \
         --home-dir /nonexistent --shell /usr/sbin/nologin openvpn \
-    && chmod 0755 -- /usr/local/bin/wait-for-interface
+    && chmod 0755 -- /usr/local/bin/wait-for-interface /usr/local/bin/veilway-session-hook
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 CMD ["/usr/sbin/openvpn", "--config", "/etc/openvpn/server.conf"]

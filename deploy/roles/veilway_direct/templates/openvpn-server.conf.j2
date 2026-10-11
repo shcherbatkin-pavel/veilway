@@ -38,3 +38,15 @@ user openvpn
 group openvpn
 verb 3
 mute 10
+
+{% if veilway_analytics_enabled | default(false) %}
+# Private accounting callbacks never alter client authorization.
+script-security 2
+up "/usr/local/bin/veilway-session-hook {{ veilway_mode }}"
+up-restart
+down "/usr/local/bin/veilway-session-hook {{ veilway_mode }}"
+client-connect "/usr/local/bin/veilway-session-hook {{ veilway_mode }}"
+client-disconnect "/usr/local/bin/veilway-session-hook {{ veilway_mode }}"
+status /run/veilway-analytics/{{ veilway_mode }}/status.tsv 5
+status-version 3
+{% endif %}

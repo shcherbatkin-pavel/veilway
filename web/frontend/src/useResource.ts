@@ -11,7 +11,7 @@ export function useResource<T>(load: (signal: AbortSignal) => Promise<T>, onLogo
   useEffect(() => {
     const current = createPoller(load, value => { setData(value); setError(""); setLoading(false); }, reason => {
       setLoading(false);
-      if (reason instanceof ApiError && reason.status === 401) logout.current();
+      if (reason instanceof ApiError && (reason.status === 401 || reason.status === 403)) logout.current();
       else setError(errorMessage(reason));
     });
     poller.current = current; current.start();

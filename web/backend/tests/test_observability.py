@@ -12,7 +12,7 @@ from veilway_control.workers import StepObservation, StepSnapshot, run_periodic_
 
 def lifecycle(now):
     states = {}
-    for name in ("restart-worker", "profile-worker", "crl-worker"):
+    for name in ("restart-worker", "profile-worker", "crl-worker", "analytics-retention"):
         observation = StepObservation()
         observation.snapshot = StepSnapshot(now, now, now)
         states[name] = SimpleNamespace(worker=SimpleNamespace(observation=observation),

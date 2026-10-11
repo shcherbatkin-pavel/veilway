@@ -1,0 +1,4 @@
+---
+veilway_analytics_apply_ack: false
+veilway_analytics_token: ""
+veilway_analytics_modes: "{{ ['aws-direct'] if veilway_mode == 'aws-direct' else ['yc-direct'] + (['yc-aws-multihop'] if veilway_multihop_enabled | default(false) else []) }}"

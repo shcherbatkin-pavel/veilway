@@ -1,0 +1,25 @@
+#!/usr/bin/python3
+"""Fail-open OpenVPN callback: accounting never authorizes or denies a client."""
+import os
+import sys
+sys.path.insert(0, '/usr/local/lib')
+
+
+def main():
+    store = None
+    try:
+        from veilway_session_accounting import Store, drop_privileges
+        drop_privileges()
+        store = Store(sys.argv[1])
+        allowed = ('script_type','common_name','time_unix','time_duration','tls_serial_hex_0',
+                   'tls_serial_0','bytes_received','bytes_sent','trusted_ip','trusted_ip6','trusted_port')
+        values = {key:os.environ.get(key,'') for key in allowed}
+        store.hook(values['script_type'], values)
+    except Exception:
+        if store is not None:
+            store.loss()
+    return 0
+
+
+if __name__=='__main__':
+    raise SystemExit(main())

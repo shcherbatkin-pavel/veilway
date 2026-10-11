@@ -1,0 +1,20 @@
+[Unit]
+Description=Send private Veilway session accounting
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/sbin/veilway-analytics-agent
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/veilway-analytics /run/veilway-analytics
+ProtectControlGroups=true
+ProtectKernelTunables=true
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+AmbientCapabilities=CAP_SETUID CAP_SETGID
+UMask=0077
+TimeoutStartSec=30

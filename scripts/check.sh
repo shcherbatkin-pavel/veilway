@@ -30,6 +30,11 @@ fi
 
 printf '%s\n' '[3/9] Python syntax and CIDR validation'
 python3 -m py_compile \
+    deploy/image/veilway_session_accounting.py \
+    deploy/image/veilway-session-hook \
+    deploy/roles/veilway_analytics/files/veilway-analytics-agent \
+    scripts/test-business-analytics.py \
+    scripts/test-business-analytics-vpn.py \
     web/frontend/tests/browser.py \
     scripts/test-panel-proxy.py \
     scripts/test-profile-rollout.py \
@@ -82,6 +87,8 @@ invalid_ipv6_result="$(printf '%s\n' '{"vpc_cidr":"2001:db8:100::/56","vpn_cidr"
     exit 1
 }
 
+python3 scripts/test-business-analytics.py
+
 if command -v -- terraform >/dev/null 2>&1; then
     printf '%s\n' '[4/9] Terraform formatting and validation'
     mapfile -t terraform_public_files < <(rg --files infra --glob '*.tf' | sort)
@@ -108,7 +115,7 @@ fi
 if command -v -- ansible-playbook >/dev/null 2>&1; then
     printf '%s\n' '[5/9] Ansible syntax'
     vpn_playbooks=(site preflight verify diagnose-egress)
-    control_playbooks=(control-web heartbeat crl-agents)
+    control_playbooks=(control-web heartbeat crl-agents analytics)
     for playbook in "${vpn_playbooks[@]}"; do
         ANSIBLE_LOCAL_TEMP=/tmp/veilway-ansible-local \
             ANSIBLE_CONFIG="${REPOSITORY_ROOT}/deploy/ansible.cfg" \

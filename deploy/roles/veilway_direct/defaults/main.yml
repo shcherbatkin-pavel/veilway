@@ -23,3 +23,6 @@ veilway_operator_ipv6_cidrs: []
 
 # Enable only after the explicitly approved CRL directory/mount cutover.
 veilway_crl_agent_managed: false
+
+# Enable only during an explicitly approved accounting/configuration cutover.
+veilway_analytics_enabled: false

@@ -1,0 +1,108 @@
+---
+- name: Require explicit accounting installation on dedicated Veilway nodes
+  ansible.builtin.assert:
+    that:
+      - veilway_analytics_apply_ack | bool
+      - veilway_mode in ['aws-direct', 'yc-direct']
+      - veilway_analytics_token | length >= 32
+      - veilway_analytics_token | length <= 256
+    fail_msg: Session accounting requires explicit approval and a separate node credential
+  no_log: true
+
+- name: Create protected accounting configuration
+  ansible.builtin.file:
+    path: /etc/veilway-analytics
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Create accounting roots
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - /var/lib/veilway-analytics
+    - /run/veilway-analytics
+
+- name: Create bounded accounting state and ephemeral status directories
+  ansible.builtin.file:
+    path: '{{ item.0 }}/{{ item.1 }}'
+    state: directory
+    owner: '900'
+    group: '900'
+    mode: '0700'
+  loop: "{{ ['/var/lib/veilway-analytics', '/run/veilway-analytics'] | product(veilway_analytics_modes) | list }}"
+
+- name: Create status files readable after OpenVPN drops privileges
+  ansible.builtin.file:
+    path: '/run/veilway-analytics/{{ item }}/status.tsv'
+    state: touch
+    owner: '900'
+    group: '900'
+    mode: '0600'
+    access_time: preserve
+    modification_time: preserve
+  loop: '{{ veilway_analytics_modes }}'
+
+- name: Preserve runtime directories after reboot
+  ansible.builtin.template:
+    src: tmpfiles.conf.j2
+    dest: /etc/tmpfiles.d/veilway-analytics.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install shared accounting module
+  ansible.builtin.copy:
+    src: '{{ playbook_dir }}/image/veilway_session_accounting.py'
+    dest: /usr/local/lib/veilway_session_accounting.py
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install outbound-only collector
+  ansible.builtin.copy:
+    src: veilway-analytics-agent
+    dest: /usr/local/sbin/veilway-analytics-agent
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Configure selected ingress sources only
+  ansible.builtin.copy:
+    content: "{{ {'node': veilway_mode, 'modes': veilway_analytics_modes} | to_json }}\n"
+    dest: /etc/veilway-analytics/config.json
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Install separate accounting credential
+  ansible.builtin.copy:
+    content: '{{ veilway_analytics_token }}'
+    dest: /etc/veilway-analytics/token
+    owner: root
+    group: root
+    mode: '0400'
+  no_log: true
+
+- name: Install accounting units
+  ansible.builtin.template:
+    src: '{{ item }}.j2'
+    dest: '/etc/systemd/system/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - veilway-analytics.service
+    - veilway-analytics.timer
+
+- name: Enable only the explicitly approved accounting timer
+  ansible.builtin.systemd:
+    name: veilway-analytics.timer
+    enabled: true
+    state: started
+    daemon_reload: true

@@ -1,0 +1,63 @@
+#!/usr/bin/python3
+"""Outbound session accounting; no redirects, proxy, VPN files or journal access."""
+import json
+from pathlib import Path
+import sys
+import urllib.request
+
+sys.path.insert(0, '/usr/local/lib')
+from veilway_session_accounting import Store, drop_privileges, MODES
+
+CONFIG=Path('/etc/veilway-analytics/config.json')
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args):
+        return None
+
+
+def deliver(node, modes, token, *, opener=None, stores=None):
+    if node not in {'aws-direct','yc-direct'}:
+        raise ValueError('invalid node')
+    permitted={'aws-direct'} if node=='aws-direct' else {'yc-direct','yc-aws-multihop'}
+    if not modes or set(modes)-permitted or len(modes)!=len(set(modes)):
+        raise ValueError('invalid sources')
+    if not isinstance(token,str) or not 32<=len(token)<=256 or any(ord(c)<33 or ord(c)>126 for c in token):
+        raise ValueError('invalid credential')
+    stores=stores if stores is not None else [Store(mode) for mode in modes]
+    events, reports = [], []
+    for store in stores:
+        try:
+            reports.append(store.snapshot())
+        except Exception:
+            reports.append(dict(mode=store.mode,status='unavailable',capture_errors=store.errors()))
+        events.extend(store.pending(500//len(stores)))
+    request=urllib.request.Request('https://veilway.ru/api/v1/analytics-agents/'+node+'/report',
+        data=json.dumps(dict(events=events,sources=reports),separators=(',',':')).encode(),
+        headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'},method='POST')
+    opener=opener or urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+    with opener.open(request,timeout=15) as response:
+        if response.status!=204:
+            raise ValueError('accounting rejected')
+    # Lost acknowledgements retain the same immutable event IDs for safe replay.
+    identifiers=[e['id'] for e in events]
+    for store in stores:
+        store.acknowledge(identifiers)
+
+
+def main():
+    try:
+        config=json.loads(CONFIG.read_text())
+        if set(config)!={'node','modes'}:
+            raise ValueError('invalid config')
+        token=Path('/etc/veilway-analytics/token').read_text().strip()
+        drop_privileges()
+        deliver(config['node'],config['modes'],token)
+    except Exception:
+        print('session accounting delivery unavailable',file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__=='__main__':
+    raise SystemExit(main())

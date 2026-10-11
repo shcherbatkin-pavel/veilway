@@ -344,6 +344,7 @@ def test_profile_worker_runs_in_application_lifespan_and_stops(scene, db_factory
     monkeypatch.setattr(main, "get_session_factory", lambda: db_factory)
     monkeypatch.setattr(main, "RestartWorker", QuietRestartWorker)
     monkeypatch.setattr(main, "CrlWorker", QuietRestartWorker)
+    monkeypatch.setattr(main, "AnalyticsRetentionWorker", QuietRestartWorker)
     monkeypatch.setattr(main, "ProfileWorker", lambda settings, factory: ProfileWorker(settings, factory, pki))
     async def run():
         async with main.lifespan(main.app):

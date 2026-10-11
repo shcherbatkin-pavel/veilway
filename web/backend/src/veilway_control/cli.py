@@ -11,6 +11,8 @@ from sqlalchemy import delete, select
 from .database import get_session_factory
 from .models import (
     EXPECTED_VM_CONFIGURATION,
+    AnalyticsAgent,
+    AnalyticsSource,
     CrlAgent,
     User,
     UserSession,
@@ -79,7 +81,7 @@ def sync_vms() -> None:
     if set(payload) != set(expected):
         raise SystemExit("VM input must contain exactly aws-direct and yc-direct")
     with get_session_factory()() as db:
-        crl_hashes = set(db.scalars(select(CrlAgent.token_hash)).all())
+        crl_hashes = set(db.scalars(select(CrlAgent.token_hash)).all()) | set(db.scalars(select(AnalyticsAgent.token_hash)).all())
         existing = {vm.slug: vm for vm in db.scalars(select(VpnVm)).all()}
         if set(existing) - set(expected):
             raise SystemExit("database contains an unexpected managed VM")
@@ -123,7 +125,7 @@ def sync_crl_agents() -> None:
            or any(ord(c) < 33 or ord(c) > 126 for c in token) for token in tokens) or tokens[0] == tokens[1]:
         raise SystemExit("invalid or duplicate CRL agent tokens")
     with get_session_factory()() as db:
-        heartbeat_hashes = set(db.scalars(select(VpnVm.heartbeat_token_hash)).all())
+        heartbeat_hashes = set(db.scalars(select(VpnVm.heartbeat_token_hash)).all()) | set(db.scalars(select(AnalyticsAgent.token_hash)).all())
         if any(hash_token(token) in heartbeat_hashes for token in tokens):
             raise SystemExit("CRL and heartbeat credentials must differ")
         existing = {agent.slug: agent.token_hash for agent in db.scalars(select(CrlAgent)).all()}
@@ -140,12 +142,54 @@ def sync_crl_agents() -> None:
     print("Two CRL agents synchronized; only token hashes stored.")
 
 
+def sync_analytics_agents() -> None:
+    from .analytics_ingest import NODE_MODES
+    payload = read_json_stdin()
+    if not payload or set(payload) - set(NODE_MODES):
+        raise SystemExit('invalid accounting nodes')
+    with get_session_factory()() as db:
+        reserved = set(db.scalars(select(CrlAgent.token_hash))) | set(db.scalars(select(VpnVm.heartbeat_token_hash)))
+        existing = {a.slug: a.token_hash for a in db.scalars(select(AnalyticsAgent))}
+        seen = set()
+        for node, value in payload.items():
+            if not isinstance(value, dict) or set(value) != {'token', 'modes'}:
+                raise SystemExit('invalid accounting configuration')
+            token, modes = value['token'], value['modes']
+            if not isinstance(token, str) or not 32 <= len(token) <= 256 or any(ord(c) < 33 or ord(c) > 126 for c in token):
+                raise SystemExit('invalid accounting credential')
+            if not isinstance(modes, list) or not modes or any(not isinstance(m, str) for m in modes) or set(modes)-NODE_MODES[node] or len(modes)!=len(set(modes)):
+                raise SystemExit('invalid ingress modes')
+            digest = hash_token(token)
+            if digest in reserved or digest in seen or any(digest == v for n, v in existing.items() if n != node):
+                raise SystemExit('accounting credentials must be separate and node-specific')
+            seen.add(digest)
+            agent = db.get(AnalyticsAgent, node)
+            if agent is None:
+                agent = AnalyticsAgent(slug=node, token_hash=digest)
+                db.add(agent); db.flush()
+            else:
+                agent.token_hash = digest
+            for mode in NODE_MODES[node]:
+                source = db.get(AnalyticsSource, mode)
+                if source is None:
+                    source = AnalyticsSource(mode=mode, available=False, capture_errors=0)
+                    db.add(source)
+                source.node = node if mode in modes else None
+                if mode in modes and source.configured_at is None:
+                    source.configured_at = utcnow()
+                if mode not in modes:
+                    source.available = False
+        db.commit()
+    print('Accounting agents configured; only separate credential hashes stored.')
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="veilway-control")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("bootstrap-admin")
     subparsers.add_parser("sync-vms")
     subparsers.add_parser("sync-crl-agents")
+    subparsers.add_parser("sync-analytics-agents")
     legacy = subparsers.add_parser("import-legacy-profiles")
     legacy.add_argument("--admin-id", type=uuid.UUID, required=True)
     arguments = parser.parse_args()
@@ -153,6 +197,8 @@ def main() -> None:
         bootstrap_admin()
     elif arguments.command == "sync-vms":
         sync_vms()
+    elif arguments.command == "sync-analytics-agents":
+        sync_analytics_agents()
     elif arguments.command == "sync-crl-agents":
         sync_crl_agents()
     elif arguments.command == "import-legacy-profiles":

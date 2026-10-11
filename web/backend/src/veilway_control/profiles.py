@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .access import ensure_admin, registered_users, visible_profiles
-from .models import ProfileAuditEvent, ProfileJob, User, VpnProfile, as_utc, utcnow
+from .models import ProfileOwnership, ProfileAuditEvent, ProfileJob, User, VpnProfile, as_utc, utcnow
 from .schemas import ProfileCreateRequest, ProfileJobResponse, ProfileResponse
 
 DEFAULT_DURATION_DAYS = 365
@@ -108,6 +108,7 @@ def create_profile(db: Session, actor: User, payload: ProfileCreateRequest) -> t
     try:
         db.add(profile)
         db.flush()
+        db.add(ProfileOwnership(profile_id=profile.id, owner_id=profile.owner_id, assigned_at=now))
         job = ProfileJob(profile_id=profile.id, requested_by_id=actor.id, kind="issue", status="queued",
                          idempotency_key=payload.idempotency_key, request_hash=digest)
         db.add(job)
@@ -139,6 +140,8 @@ def assign_profile(db: Session, actor: User, profile_id: uuid.UUID, owner_id: uu
         db.commit()
         raise HTTPException(409, "owner cannot be changed; revoke and issue a new profile")
     registered_owner(db, owner_id)
+    if profile.owner_id != owner_id:
+        db.add(ProfileOwnership(profile_id=profile.id, owner_id=owner_id, assigned_at=utcnow()))
     profile.owner_id = owner_id
     audit(db, actor.id, "assign", profile.id, "succeeded")
     db.commit()
