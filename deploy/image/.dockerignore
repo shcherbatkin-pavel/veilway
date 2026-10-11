@@ -1,3 +1,6 @@
 *
 !Dockerfile
 !wait-for-interface
+
+!veilway-session-hook
+!veilway_session_accounting.py

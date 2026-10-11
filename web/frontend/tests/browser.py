@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 import uuid
-from playwright.sync_api import sync_playwright, expect
+from playwright.sync_api import sync_playwright, expect, Error as PlaywrightError
 
 BASE = os.environ.get('VEILWAY_BROWSER_BASE_URL', 'http://127.0.0.1:4178')
 # The reproducible image serves its compiled bundle on its own loopback only.
@@ -44,7 +44,7 @@ def health_fixture():
                     containers={'veilway-openvpn':'unhealthy'})],
         workers=[dict(name=name, assessment='ok', state='running', started_at=NOW,
                       completed_at=NOW, succeeded_at=NOW, in_progress=False, error_code=None, slow=False)
-                 for name in ('restart-worker','profile-worker','crl-worker')],
+                 for name in ('restart-worker','profile-worker','crl-worker','analytics-retention')],
         crl=dict(assessment='attention', version=4100, next_update=NOW,
                  publisher_error='publication_unavailable', attempted_at=NOW,
                  observation_stale=False, publication_expired=True,
@@ -56,6 +56,24 @@ def health_fixture():
                          failed_last_day=0, pki_errors=0, awaiting_delivery=0)
                     for kind in ('issue','revoke','restart')])
 
+
+def analytics_fixture(days=30, mode=None):
+    modes = [mode] if mode else ['aws-direct','yc-direct','yc-aws-multihop']
+    source=[dict(mode=m,state='fresh' if m=='aws-direct' else 'unconfigured',configured_at=NOW,
+                 collection_started_at="2026-10-02T00:00:00Z",observed_at=NOW,age_seconds=5,connections=1 if m=='aws-direct' else None,capture_errors=0) for m in modes]
+    return dict(generated_at=NOW,period_days=days,timezone='UTC',collection_started_at='2026-10-02T00:00:00Z',
+        detail_retention_days=90,aggregate_retention_days=365,sources=source,
+        online=dict(complete=False,connections=None,profiles=None,users=None,confirmed_connections=1,
+                    confirmed_profiles=1,confirmed_users=1,unmatched_connections=0,unassigned_profiles=0),
+        activity=dict(users=2,profiles=3,dau=1,wau=2,mau=2,new_users=1,returning_users=1,
+                      sessions_started=3,sessions_closed=2,interruptions=1,reconnects=1,
+                      average_duration_seconds=123,bytes_received=1024,bytes_sent=2048),
+        funnel=dict(issued=3,download_recorded=2,connected=1,mature_7d=2,connected_within_7d=1,
+                    pending_7d=1,activation_7d_percent=50,average_first_connection_seconds=600),
+        lifecycle=dict(valid_profiles=3,never_observed=1,inactive_30d=1,used_expiring_7d=1),
+        daily=[dict(day=f'2026-10-0{i}',observed=i not in (1,3),users=i,profiles=i,sessions_started=i,bytes_received=i*100,bytes_sent=i*200) for i in range(1,6)],
+        modes=[dict(mode=m,users=1,profiles=1,sessions_started=1,bytes_received=100,bytes_sent=200,connections=1 if m=='aws-direct' else None) for m in modes])
+
 class Scene:
     def __init__(self, browser, viewport, role='ADMIN', profiles=None, jobs=None, hold_profiles=False):
         self.role, self.expired = role, False
@@ -63,6 +81,11 @@ class Scene:
         self.jobs = jobs or []
         self.requests, self.created, self.revokes, self.restarts = [], [], [], []
         self.audit = []
+        self.analytics_queries = []
+        self.analytics_override = None
+        self.analytics_empty = False
+        self.analytics_session_total = 51
+        self.hold_analytics = set()
         self.failures = {}
         self.hold_profiles = hold_profiles
         self.held = []
@@ -72,10 +95,12 @@ class Scene:
         self.page = self.context.new_page()
         self.page.add_init_script('''
             window.testApiCacheModes = [];
+            window.testAbortedUrls = [];
             window.testBlobUrls = new Set();
             const fetchOriginal = window.fetch;
             window.fetch = (url, options) => {
                 if (String(url).startsWith('/api/')) window.testApiCacheModes.push(options?.cache);
+                options?.signal?.addEventListener('abort', () => window.testAbortedUrls.push(String(url)));
                 return fetchOriginal(url, options);
             };
             const createOriginal = URL.createObjectURL;
@@ -95,6 +120,8 @@ class Scene:
         path = parsed.path.removeprefix('/api/v1/')
         method = route.request.method
         self.requests.append((method, path))
+        if path == 'observability/overview' and getattr(self, 'hold_health', False):
+            self.held.append(route); return
         if path == 'profiles' and method == 'GET' and self.hold_profiles:
             self.held.append(route); return
         if path in self.failures:
@@ -110,11 +137,33 @@ class Scene:
             route.fulfill(status=204); return
         elif self.expired:
             route.fulfill(status=401, json={}); return
+        elif method == 'GET' and path.startswith('analytics/'):
+            assert self.role=='ADMIN', 'USER requested business analytics'
+            query=parse_qs(parsed.query)
+            self.analytics_queries.append((path,query))
+            if path in self.hold_analytics:
+                self.held.append(route);return
+            offset=int(query.get('offset',[0])[0]);mode=query.get('mode',[None])[0]
+            if path=='analytics/overview':
+                result=self.analytics_override or analytics_fixture(int(query.get('days',[30])[0]),mode)
+            elif path=='analytics/profiles':
+                items=[dict(profile_id=P1 if i==0 else str(uuid.UUID(int=i+100)),device_name='Analytics device' if i==0 else f'Synthetic device {i}',
+                    mode='aws-direct',owner_email='owner@example.test',status='active',expires_at=NOW,online=True,
+                    first_connected_at=NOW,last_connected_at=NOW,last_seen_at=NOW,sessions_started=1,bytes_received=1024,bytes_sent=2048) for i in range(51)]
+                limit=int(query.get('limit',[50])[0]);result=dict(items=items[offset:offset+limit],total=51)
+                if self.analytics_empty:result=dict(items=[],total=0)
+            else:
+                limit=int(query.get('limit',[50])[0])
+                items=[dict(session_id=str(uuid.UUID(int=i+999)),profile_id=P1,device_name='Analytics device',owner_email='owner@example.test',
+                    mode='aws-direct',state='closed',online=False,started_at=NOW,last_seen_at=NOW,ended_at=NOW,
+                    duration_seconds=123,bytes_received=1024,bytes_sent=2048,recovered=False,reconnect=True)
+                    for i in range(self.analytics_session_total)]
+                result=dict(items=items[offset:offset+limit],total=self.analytics_session_total,retained_since=NOW)
         elif method == 'GET':
             if self.role == 'USER':
                 assert path in {'profiles','profile-jobs'}, 'USER attempted an administrative API'
             result = {
-                'observability/overview': health_fixture(),
+                'observability/overview': getattr(self, 'health_override', None) or health_fixture(),
                 'profiles': [p for p in self.profiles if self.role == 'ADMIN' or p['owner_id'] == USER],
                 'profile-jobs': [j for j in self.jobs if self.role == 'ADMIN' or any(p['id'] == j['profile_id'] and p['owner_id'] == USER for p in self.profiles)],
                 'users': [dict(id=USER,email='owner@example.test'),dict(id=OTHER,email='other@example.test')],
@@ -490,15 +539,25 @@ def health_overview(browser, viewport):
     navigation.get_by_role('button', name='Состояние', exact=True).click()
     expect(page.get_by_role('heading', name='Состояние', exact=True)).to_be_visible()
     expect(page.get_by_role('heading', name='Фоновые задачи', exact=True)).to_be_visible()
-    expect(page.get_by_text('Сигнал от узла устарел', exact=True)).to_be_visible()
-    cards = page.locator('.health-card')
+    expect(page.get_by_text('Сигнал от узла устарел', exact=False).first).to_be_visible()
+    cards = page.locator('.health-row')
     expect(cards.first).to_contain_text('yc-direct')
+    assert not page.locator('#health-node-yc-direct').evaluate('(el)=>el.open')
+    page.get_by_role('region', name='Проблемы и действия').get_by_role('button', name='Подробности', exact=True).first.click()
+    expect(page.locator('#health-node-yc-direct > summary')).to_be_focused()
+    assert page.locator('#health-node-yc-direct').evaluate('(el)=>el.open')
+    page.locator('#health-node-yc-direct > summary').press('Enter')
+    assert not page.locator('#health-node-yc-direct').evaluate('(el)=>el.open')
+    page.locator('#health-node-yc-direct > summary').press('Space')
     expect(page.get_by_text('Проход завершился ошибкой', exact=False)).to_have_count(0)
-    expect(page.get_by_text('Публикация отзывов недоступна', exact=False)).to_be_visible()
+    expect(page.get_by_text('Публикация отзывов недоступна', exact=False).first).to_be_visible()
     s.no_overflow()
     before = len([r for r in s.requests if r == ('GET','observability/overview')])
     page.wait_for_timeout(5500)
     assert len([r for r in s.requests if r == ('GET','observability/overview')]) > before
+    assert page.locator('#health-node-yc-direct').evaluate('(el)=>el.open')
+    output=os.environ.get('VEILWAY_BROWSER_SCREENSHOTS')
+    if output:page.screenshot(path=str(Path(output)/f'health-problems-{viewport["width"]}.png'),full_page=True)
     s.failures['observability/overview'] = 503
     page.get_by_role('button', name='Обновить', exact=True).click()
     expect(page.get_by_role('alert')).to_contain_text('Показан устаревший снимок')
@@ -512,10 +571,82 @@ def health_overview(browser, viewport):
         expect(page.get_by_role('heading', level=1)).to_contain_text(heading)
         navigation.get_by_role('button', name='Состояние', exact=True).click()
         expect(page.get_by_role('heading', name='Фоновые задачи', exact=True)).to_be_visible()
-    s.expired = True
+    # All healthy: compact rows, timestamps/components remain in closed details.
+    healthy=health_fixture();healthy['assessment']='ok'
+    for node in healthy['nodes']:
+        node.update(assessment='ok',reasons=[],heartbeat_age_seconds=5,containers={'veilway-openvpn':'healthy'})
+    healthy['crl'].update(assessment='ok',publisher_error=None,publication_expired=False)
+    for node in healthy['crl']['nodes']:node.update(status='current',error_code=None)
+    for op in healthy['operations']:op.update(assessment='ok',delayed=0)
+    s.health_override=healthy
+    page.get_by_role('button',name='Обновить',exact=True).click()
+    expect(page.get_by_text('Проблем не обнаружено',exact=True)).to_be_visible()
+    expect(page.get_by_text('veilway-openvpn: Работает',exact=True).first).not_to_be_visible()
+    assert page.locator('.health-row[open]').count()==0
+    s.no_overflow()
+    if output:page.screenshot(path=str(Path(output)/f'health-healthy-{viewport["width"]}.png'),full_page=True)
+    # Leaving the page cancels an outstanding poll and ignores a late result.
+    s.hold_health=True
+    page.get_by_role('button',name='Обновить',exact=True).click()
+    page.wait_for_timeout(150);assert s.held
+    navigation.get_by_role('button',name='Профили',exact=True).click()
+    expect(page.get_by_role('heading',level=1)).to_contain_text('Профили')
+    assert '/api/v1/observability/overview' in page.evaluate('window.testAbortedUrls')
+    for route in s.held:
+        try:route.fulfill(json=health_fixture())
+        except PlaywrightError:pass
+    s.held.clear();s.hold_health=False
+    expect(page.get_by_role('heading',name='Фоновые задачи',exact=True)).to_have_count(0)
+    navigation.get_by_role('button',name='Состояние',exact=True).click()
+    expect(page.get_by_text('Проблем не обнаружено',exact=True)).to_be_visible()
+    # Incomplete heartbeat detail and planned restart are distinct.
+    healthy['assessment']='unknown'
+    healthy['nodes'][0].update(assessment='unknown',reasons=['heartbeat_missing','details_missing'],last_heartbeat_at=None,heartbeat_age_seconds=None,containers=None)
+    healthy['nodes'][1].update(state='restarting',reasons=['planned_restart'])
+    page.get_by_role('button',name='Обновить',exact=True).click()
+    expect(page.get_by_text('Сигнал от узла ещё не получен',exact=False).first).to_be_visible()
+    expect(page.get_by_text('Текущая операция: плановый перезапуск',exact=True)).to_be_visible()
+    assert 'yc-direct' not in page.get_by_role('region',name='Проблемы и действия').inner_text()
+    # Detail missing after a legacy heartbeat remains different from no signal.
+    healthy['nodes'][0].update(reasons=['details_missing'],last_heartbeat_at=NOW,heartbeat_age_seconds=5)
+    page.get_by_role('button',name='Обновить',exact=True).click()
+    expect(page.locator('#health-node-aws-direct > summary')).to_contain_text('Детализация отсутствует')
+    expect(page.get_by_text('Сигнал от узла ещё не получен',exact=False)).to_have_count(0)
+    # Worker error, slow pass, stale publication and delivery each stay visible.
+    healthy['assessment']='attention'
+    healthy['workers'][0].update(assessment='attention',error_code='step_failed',slow=True,in_progress=True)
+    healthy['workers'][1].update(assessment='unknown',state='stopped',succeeded_at=None,completed_at=None)
+    healthy['crl'].update(assessment='attention',observation_stale=True)
+    healthy['crl']['nodes'][0].update(status='offline',error_code='synthetic-secret-error-text')
+    healthy['operations'][1].update(assessment='attention',delayed=1,needs_review=2,failed_last_day=3,pki_errors=1,awaiting_delivery=1)
+    page.get_by_role('button',name='Обновить',exact=True).click()
+    expect(page.get_by_text('Проход длится больше трёх минут',exact=False).first).to_be_visible()
+    expect(page.get_by_text('Нет свежего контакта',exact=False).first).to_be_visible()
+    expect(page.get_by_text('Доступность PKI не подтверждена',exact=False).first).to_be_visible()
+    assert 'synthetic-secret-error-text' not in page.locator('body').inner_text()
+    page.locator('#health-delivery-yc-direct > summary').click()
+    expect(page.get_by_text('Неизвестный код',exact=True)).to_be_visible()
+    for state,label in (('pending','Ожидает установки'),('expired','Срок действия истёк')):
+        healthy['crl']['nodes'][0].update(status=state,error_code=None)
+        page.get_by_role('button',name='Обновить',exact=True).click()
+        expect(page.locator('#health-delivery-yc-direct > summary')).to_contain_text(label)
+        expect(page.get_by_role('region',name='Проблемы и действия')).to_contain_text(label)
+    # A successful pass does not conceal a business operation error.
+    healthy['workers'][0].update(assessment='ok',error_code=None,slow=False,in_progress=False)
+    page.get_by_role('button',name='Обновить',exact=True).click()
+    expect(page.locator('#health-worker-restart-worker > summary')).to_contain_text('В норме')
+    expect(page.locator('#health-operation-revoke > summary')).to_contain_text('Требует внимания')
+    s.failures['observability/overview']=403
     page.get_by_role('button', name='Обновить', exact=True).click()
     expect(page.get_by_role('link', name='Войти через Google')).to_be_visible()
     expect(page.get_by_role('heading', name='Фоновые задачи', exact=True)).to_have_count(0)
+    s.close()
+    s = Scene(browser, viewport, 'ADMIN', [profile()])
+    s.page.get_by_role('button', name='Состояние', exact=True).click()
+    expect(s.page.get_by_role('heading', name='Фоновые задачи', exact=True)).to_be_visible()
+    s.expired=True
+    s.page.get_by_role('button', name='Обновить', exact=True).click()
+    expect(s.page.get_by_role('link',name='Войти через Google')).to_be_visible()
     s.close()
     s = Scene(browser, viewport, 'USER', [profile()])
     expect(s.page.get_by_role('button', name='Состояние', exact=True)).to_have_count(0)
@@ -529,12 +660,150 @@ def health_overview(browser, viewport):
     s.close()
 
 
+def business_analytics(browser, viewport):
+    s=Scene(browser,viewport,'ADMIN',[profile()]);page=s.page
+    tab=lambda name:page.get_by_role('tab',name=name,exact=True)
+    def last_query(path):return [q for p,q in s.analytics_queries if p==path][-1]
+    page.get_by_role('button',name='Аналитика',exact=True).click()
+    expect(page.get_by_role('heading',name='Подключённые профили',exact=True)).to_be_visible()
+    expect(tab('Обзор')).to_have_attribute('aria-selected','true')
+    expect(page.get_by_label('Период аналитики',exact=True)).to_have_count(0)
+    assert last_query('analytics/profiles')['limit']==['8']
+    assert page.locator('.analytics-online-table tbody tr').count()==8
+    assert not any(path=='analytics/sessions' for _,path in s.requests)
+    expect(page.get_by_text('Онлайн-данные неполные.',exact=False)).to_be_visible()
+    assert not page.locator('.analytics-sources').evaluate('(el)=>el.open')
+    page.locator('.analytics-sources > summary').click()
+    expect(page.get_by_text('Сбор не настроен',exact=True).first).to_be_visible()
+    page.locator('.analytics-sources > summary').click()
+    s.no_overflow()
+    output=os.environ.get('VEILWAY_BROWSER_SCREENSHOTS')
+    if output:page.screenshot(path=str(Path(output)/f'analytics-overview-{viewport["width"]}.png'),full_page=True)
+    tab('Обзор').focus();page.keyboard.press('ArrowRight')
+    expect(tab('Активность')).to_be_focused()
+    expect(page.get_by_role('heading',name='Использование по дням',exact=True)).to_be_visible()
+    before=len(s.analytics_queries)
+    page.get_by_role('button',name='Обновить',exact=True).click();page.wait_for_timeout(150)
+    assert all(path=='analytics/overview' for path,_ in s.analytics_queries[before:])
+    chart=page.get_by_role('img',name='Пользователи по дням, UTC')
+    expect(chart).to_be_visible()
+    assert chart.bounding_box()['height'] <= (160 if viewport['width']<761 else 220)
+    assert '2026-10-01' not in chart.text_content()
+    page.get_by_label('Показатель графика',exact=True).select_option('traffic')
+    page.get_by_label('День графика',exact=True).fill('1')
+    expect(page.get_by_text('Нет наблюдений',exact=True)).to_be_visible()
+    assert all(not d.evaluate('(el)=>el.open') for d in page.locator('.analytics-details').all())
+    page.locator('.analytics-details > summary').filter(has_text='Первое подключение').click()
+    expect(page.get_by_text('50.0%',exact=True)).to_be_visible()
+    page.get_by_label('Период аналитики',exact=True).select_option('7')
+    page.get_by_label('Режим аналитики',exact=True).select_option('aws-direct')
+    expect(page.get_by_role('img',name='Трафик по дням, UTC')).to_be_visible()
+    s.no_overflow()
+    if output:page.screenshot(path=str(Path(output)/f'analytics-activity-{viewport["width"]}.png'),full_page=True)
+    tab('Обзор').click();page.get_by_role('button',name='Все подключённые',exact=True).click()
+    expect(tab('Профили')).to_have_attribute('aria-selected','true')
+    expect(page.get_by_label('Только подключённые профили',exact=True)).to_be_checked()
+    expect(page.get_by_label('Период аналитики',exact=True)).to_have_value('7')
+    page.get_by_role('button',name='Следующие профили',exact=True).click()
+    item=page.get_by_role('button',name='Сессии профиля Synthetic device 50',exact=True)
+    expect(item).to_be_visible();item.click()
+    expect(page.get_by_role('heading',name='История сессий',exact=True)).to_be_visible()
+    expect(page.locator('.analytics-selection')).to_contain_text('Synthetic device 50')
+    assert last_query('analytics/sessions')['profile_id']==[str(uuid.UUID(int=150))]
+    page.get_by_role('button',name='Следующие сессии',exact=True).click()
+    expect(page.get_by_text('51–51 из 51',exact=True)).to_be_visible()
+    page.get_by_role('button',name='К профилям',exact=True).click()
+    expect(item).to_be_visible()
+    expect(page.get_by_label('Только подключённые профили',exact=True)).to_be_checked()
+    tab('Сессии').click()
+    expect(page.locator('.analytics-selection')).to_contain_text('Synthetic device 50')
+    expect(page.get_by_text('51–51 из 51',exact=True)).to_be_visible()
+    page.get_by_label('Период аналитики',exact=True).select_option('30')
+    expect(page.locator('.analytics-selection')).to_have_count(0)
+    expect(page.get_by_role('heading',name='История сессий',exact=True)).to_be_visible()
+    tab('Профили').click()
+    page.get_by_role('button',name='Сессии профиля Analytics device',exact=True).click()
+    page.get_by_role('button',name='Все сессии',exact=True).click()
+    expect(page.locator('.analytics-selection')).to_have_count(0)
+    s.no_overflow()
+    before=len([path for _,path in s.requests if path=='analytics/overview'])
+    page.wait_for_timeout(5500)
+    assert len([path for _,path in s.requests if path=='analytics/overview'])>before
+    s.failures['analytics/overview']=503
+    page.get_by_role('button',name='Обновить',exact=True).click()
+    expect(page.get_by_role('alert')).to_contain_text('Показан устаревший снимок')
+    expect(page.locator('.analytics-freshness')).to_contain_text('Снимок устарел')
+    assert 'synthetic-secret-error-text' not in page.locator('body').inner_text()
+    del s.failures['analytics/overview']
+    page.get_by_role('button',name='Обновить',exact=True).click()
+    expect(page.get_by_role('alert')).to_have_count(0)
+    s.hold_analytics.add('analytics/sessions')
+    page.get_by_role('button',name='Обновить',exact=True).click();page.wait_for_timeout(150)
+    assert s.held
+    tab('Активность').click()
+    expect(page.get_by_role('heading',name='Использование по дням',exact=True)).to_be_visible()
+    for route in s.held:
+        try:route.fulfill(json=dict(items=[],total=0,retained_since=NOW))
+        except PlaywrightError:pass
+    s.held.clear();s.hold_analytics.clear()
+    expect(page.get_by_role('heading',name='История сессий',exact=True)).to_have_count(0)
+    s.failures['analytics/overview']=503
+    tab('Профили').click()
+    expect(page.get_by_role('alert')).to_contain_text('Свежие данные недоступны')
+    expect(page.get_by_role('heading',name='Использование профилей',exact=True)).to_have_count(0)
+    del s.failures['analytics/overview']
+    tab('Активность').click()
+    expect(page.get_by_role('heading',name='Использование по дням',exact=True)).to_be_visible()
+    fixture=analytics_fixture();fixture['daily']=[fixture['daily'][1]]
+    fixture['funnel']={k:None if k in ('activation_7d_percent','average_first_connection_seconds') else 0 for k in fixture['funnel']}
+    fixture['sources'][0].update(state='stale',capture_errors=1)
+    s.analytics_override=fixture
+    page.get_by_role('button',name='Обновить',exact=True).click()
+    expect(page.get_by_text('Пока наблюдался только один день.',exact=False)).to_be_visible()
+    expect(page.get_by_role('img',name='Трафик по дням, UTC')).to_have_count(0)
+    expect(page.get_by_role('alert')).to_contain_text('Зарегистрированы пропуски сбора')
+    page.locator('.analytics-details > summary').filter(has_text='Первое подключение').click()
+    expect(page.get_by_text('Новых профилей для воронки пока нет.',exact=True)).to_be_visible()
+    fixture['daily']=[];fixture['sources'][0].update(capture_errors=0)
+    page.get_by_role('button',name='Обновить',exact=True).click()
+    expect(page.get_by_text('За выбранный период наблюдений нет.',exact=True)).to_be_visible()
+    s.analytics_empty=True
+    tab('Обзор').click()
+    expect(page.get_by_text('Подтверждённых подключённых профилей нет.',exact=False)).to_be_visible()
+    s.no_overflow()
+    fixture['online'].update(complete=True,connections=0,profiles=0,users=0)
+    for source in fixture['sources']:source.update(state='fresh',connections=0,capture_errors=0)
+    page.get_by_role('button',name='Обновить',exact=True).click()
+    expect(page.get_by_text('Подключённых профилей сейчас нет.',exact=True)).to_be_visible()
+    expect(page.locator('.analytics-freshness')).to_contain_text('Свежие данные')
+    expect(page.get_by_text('Онлайн-данные неполные.',exact=False)).to_have_count(0)
+    tab('Обзор').focus();page.keyboard.press('End')
+    expect(tab('Сессии')).to_be_focused()
+    page.keyboard.press('Home')
+    expect(tab('Обзор')).to_be_focused()
+    page.keyboard.press('ArrowLeft')
+    expect(tab('Сессии')).to_be_focused()
+    expect(page.get_by_role('heading',name='История сессий',exact=True)).to_be_visible()
+    s.expired=True
+    page.get_by_role('button',name='Обновить',exact=True).click()
+    expect(page.get_by_role('link',name='Войти через Google')).to_be_visible()
+    expect(page.get_by_role('heading',name='Аналитика',exact=True)).to_have_count(0)
+    s.close()
+    s=Scene(browser,viewport,'ADMIN',[profile()]);s.failures['analytics/overview']=503;s.failures['analytics/profiles']=403
+    s.page.get_by_role('button',name='Аналитика',exact=True).click()
+    expect(s.page.get_by_role('link',name='Войти через Google')).to_be_visible();s.close()
+    s=Scene(browser,viewport,'USER',[profile()])
+    expect(s.page.get_by_role('button',name='Аналитика',exact=True)).to_have_count(0)
+    assert not any(path.startswith('analytics/') for _,path in s.requests)
+    s.close()
+
+
 with sync_playwright() as p:
     browser=p.chromium.launch(headless=True,args=['--no-sandbox'])
     try:
         count=0
         for viewport in ({'width':1440,'height':1000},{'width':390,'height':844},{'width':320,'height':740}):
-            for run in (admin_flow,user_flow,empty_and_states,expired_revoke,idempotent_creation,pagination_and_screenshot,loading_and_failures,session_unavailable,storage_and_logout,connection_guide,health_overview):
+            for run in (admin_flow,user_flow,empty_and_states,expired_revoke,idempotent_creation,pagination_and_screenshot,loading_and_failures,session_unavailable,storage_and_logout,connection_guide,health_overview,business_analytics):
                 run(browser,viewport)
                 count+=1; print(f'PASS {run.__name__} {viewport["width"]}',flush=True)
         print(f'{count} browser scenarios passed',flush=True)

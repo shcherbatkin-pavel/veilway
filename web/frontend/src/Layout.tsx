@@ -1,8 +1,9 @@
 import { ReactNode, useState } from "react";
 import { api, errorMessage, Session } from "./api";
 
-export type Section = "profiles" | "users" | "nodes" | "history" | "guide" | "health";
+export type Section = "profiles" | "users" | "nodes" | "history" | "guide" | "health" | "analytics";
 export const sections: { id: Section; label: string; icon: string }[] = [
+  { id: "analytics", label: "Аналитика", icon: "▥" },
   { id: "health", label: "Состояние", icon: "◎" },
   { id: "profiles", label: "Профили", icon: "▤" }, { id: "users", label: "Пользователи", icon: "◉" },
   { id: "nodes", label: "Узлы", icon: "◇" }, { id: "history", label: "История", icon: "◷" },

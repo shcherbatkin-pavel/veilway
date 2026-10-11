@@ -25,6 +25,9 @@ services:
       - NET_ADMIN
       - SETGID
       - SETUID
+{% if veilway_analytics_enabled | default(false) %}
+      - DAC_OVERRIDE
+{% endif %}
     devices:
       - /dev/net/tun:/dev/net/tun
     security_opt:
@@ -43,6 +46,10 @@ services:
       - /run/openvpn:mode=0750,uid=900,gid=900
       - /tmp:mode=1777
     volumes:
+{% if veilway_analytics_enabled | default(false) %}
+      - /var/lib/veilway-analytics/{{ veilway_mode }}:/var/lib/veilway-analytics/{{ veilway_mode }}:rw
+      - /run/veilway-analytics/{{ veilway_mode }}:/run/veilway-analytics/{{ veilway_mode }}:rw
+{% endif %}
       - {{ veilway_config_root }}/openvpn/server.conf:/etc/openvpn/server.conf:ro
       - {{ veilway_config_root }}/pki:/etc/veilway/pki:ro
 {% if veilway_crl_agent_managed %}
@@ -131,6 +138,9 @@ services:
       - NET_ADMIN
       - SETGID
       - SETUID
+{% if veilway_analytics_enabled | default(false) %}
+      - DAC_OVERRIDE
+{% endif %}
     devices:
       - /dev/net/tun:/dev/net/tun
     security_opt:
@@ -149,6 +159,10 @@ services:
       - /run/openvpn:mode=0750,uid=900,gid=900
       - /tmp:mode=1777
     volumes:
+{% if veilway_analytics_enabled | default(false) %}
+      - /var/lib/veilway-analytics/yc-aws-multihop:/var/lib/veilway-analytics/yc-aws-multihop:rw
+      - /run/veilway-analytics/yc-aws-multihop:/run/veilway-analytics/yc-aws-multihop:rw
+{% endif %}
       - {{ veilway_config_root }}/openvpn/multihop-server.conf:/etc/openvpn/multihop-server.conf:ro
       - {{ veilway_config_root }}/pki:/etc/veilway/pki:ro
 {% if veilway_crl_agent_managed %}

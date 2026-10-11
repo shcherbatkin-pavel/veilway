@@ -1,0 +1,10 @@
+[Unit]
+Description=Collect Veilway client sessions every fifteen seconds
+
+[Timer]
+OnBootSec=20s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

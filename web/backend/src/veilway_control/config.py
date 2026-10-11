@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     database_name: str = "veilway_control"
     database_user: str = "veilway_control"
     database_password_file: Path = Path("/run/secrets/postgres_password")
+    analytics_session_days: int = Field(default=90, ge=7, le=365)
+    analytics_aggregate_days: int = Field(default=365, ge=365, le=730)
+    analytics_stale_seconds: int = Field(default=45, ge=30, le=300)
     session_hours: int = Field(default=8, ge=1, le=168)
     heartbeat_stale_seconds: int = Field(default=60, ge=30, le=600)
     restart_timeout_seconds: int = Field(default=900, ge=60, le=3600)

@@ -1,0 +1,8 @@
+---
+- name: Install accounting only on explicitly approved dedicated VPN nodes
+  hosts: direct_vpn
+  become: true
+  gather_facts: false
+  serial: 1
+  roles:
+    - veilway_analytics

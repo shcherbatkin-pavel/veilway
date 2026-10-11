@@ -32,7 +32,7 @@ class NodeHealth(BaseModel):
 
 
 class WorkerHealth(BaseModel):
-    name: Literal["restart-worker", "profile-worker", "crl-worker"]
+    name: Literal["restart-worker", "profile-worker", "crl-worker", "analytics-retention"]
     assessment: Assessment
     state: Literal["starting", "running", "stopped", "stopping"]
     started_at: datetime | None
@@ -163,7 +163,7 @@ def build_overview(db, settings, lifecycle, now):
             nodes.append(NodeHealth(slug=slug, state="unknown", assessment="unknown", reasons=["node_unconfigured"],
                 last_heartbeat_at=None, heartbeat_age_seconds=None, uptime_seconds=None, containers=None))
     workers = []
-    for name in ("restart-worker", "profile-worker", "crl-worker"):
+    for name in ("restart-worker", "profile-worker", "crl-worker", "analytics-retention"):
         state = lifecycle.states.get(name) if lifecycle else None
         snapshot = getattr(getattr(state, "worker", None), "observation", None)
         step = snapshot.snapshot if snapshot else StepSnapshot()
@@ -172,7 +172,7 @@ def build_overview(db, settings, lifecycle, now):
         stopping = bool(lifecycle and lifecycle.stopping)
         slow = bool(step.in_progress and age(now, step.started_at) > 180)
         stale = step.completed_at is None or (not step.in_progress and
-            age(now, step.completed_at) > max(30, settings.worker_interval_seconds * 3))
+            age(now, step.completed_at) > max(30, (3600 if name == "analytics-retention" else settings.worker_interval_seconds) * 3))
         workers.append(WorkerHealth(name=name,
             assessment="attention" if error or slow else "unknown" if stale or not running or stopping else "ok",
             state="stopping" if stopping else "running" if running else "stopped" if state and state.started else "starting",

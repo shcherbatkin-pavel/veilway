@@ -180,3 +180,40 @@ export interface HealthOverview {
 export const observabilityApi = {
   overview: (signal: AbortSignal) => request<HealthOverview>("/api/v1/observability/overview", { signal }),
 };
+
+export interface AnalyticsSource {
+  mode: ProfileMode; state: "unconfigured" | "unavailable" | "stale" | "fresh";
+  configured_at: string | null; collection_started_at: string | null;
+  observed_at: string | null; age_seconds: number | null; connections: number | null; capture_errors: number;
+}
+export interface BusinessOverview {
+  generated_at: string; period_days: number; timezone: string; collection_started_at: string | null;
+  detail_retention_days: number; aggregate_retention_days: number; sources: AnalyticsSource[];
+  online: { complete: boolean; connections: number | null; profiles: number | null; users: number | null;
+    confirmed_connections: number; confirmed_profiles: number; confirmed_users: number;
+    unmatched_connections: number; unassigned_profiles: number };
+  activity: { users: number; profiles: number; dau: number; wau: number; mau: number; new_users: number;
+    returning_users: number; sessions_started: number; sessions_closed: number; interruptions: number;
+    reconnects: number; average_duration_seconds: number | null; bytes_received: number; bytes_sent: number };
+  funnel: { issued: number; download_recorded: number; connected: number; mature_7d: number; connected_within_7d: number;
+    pending_7d: number; activation_7d_percent: number | null; average_first_connection_seconds: number | null };
+  lifecycle: { valid_profiles: number; never_observed: number; inactive_30d: number; used_expiring_7d: number };
+  daily: { day: string; observed: boolean; users: number; profiles: number; sessions_started: number; bytes_received: number; bytes_sent: number }[];
+  modes: { mode: ProfileMode; users: number; profiles: number; sessions_started: number; bytes_received: number; bytes_sent: number; connections: number | null }[];
+}
+export interface ProfileAnalytics {
+  profile_id: string; device_name: string; mode: ProfileMode; owner_email: string | null; status: string;
+  expires_at: string; online: boolean | null; first_connected_at: string | null; last_connected_at: string | null;
+  last_seen_at: string | null; sessions_started: number; bytes_received: number; bytes_sent: number;
+}
+export interface SessionAnalytics {
+  session_id: string; profile_id: string | null; device_name: string | null; owner_email: string | null;
+  mode: ProfileMode; state: "open" | "closed" | "interrupted"; online: boolean | null;
+  started_at: string; last_seen_at: string; ended_at: string | null; duration_seconds: number | null;
+  bytes_received: number; bytes_sent: number; recovered: boolean; reconnect: boolean;
+}
+export const analyticsApi = {
+  overview: (query: string, signal: AbortSignal) => request<BusinessOverview>(`/api/v1/analytics/overview?${query}`, { signal }),
+  profiles: (query: string, signal: AbortSignal) => request<{ items: ProfileAnalytics[]; total: number }>(`/api/v1/analytics/profiles?${query}`, { signal }),
+  sessions: (query: string, signal: AbortSignal) => request<{ items: SessionAnalytics[]; total: number; retained_since: string }>(`/api/v1/analytics/sessions?${query}`, { signal }),
+};

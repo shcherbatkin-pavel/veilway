@@ -244,7 +244,7 @@ def test_crl_migration_refuses_destroying_receipts(postgres_connection):
         command.downgrade(cfg, '0004_profile_api')
     postgres_connection.rollback()
     assert postgres_connection.scalar(sa.text('SELECT count(*) FROM crl_agents')) == 1
-    assert postgres_connection.scalar(sa.text('SELECT version_num FROM alembic_version')) == '0007_heartbeat_details'
+    assert postgres_connection.scalar(sa.text('SELECT version_num FROM alembic_version')) == '0008_business_analytics'
 
 
 def test_crl_token_sync_rotation_and_heartbeat_separation(db_factory, seed_control_data, monkeypatch):

@@ -1,0 +1,5 @@
+d /run/veilway-analytics 0755 root root -
+{% for mode in veilway_analytics_modes %}
+d /run/veilway-analytics/{{ mode }} 0700 900 900 -
+f /run/veilway-analytics/{{ mode }}/status.tsv 0600 900 900 -
+{% endfor %}
