@@ -209,7 +209,7 @@ def test_google_switch_revokes_sessions_preserves_history_and_matches_models(pos
     with pytest.raises(RuntimeError, match="administrator binding"):
         command.downgrade(cfg, "0002_users_and_profiles")
     connection.rollback()
-    assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0008_business_analytics"
+    assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0009_mobile_client"
 
 
 def test_unbound_google_downgrade_does_not_reactivate_legacy_users(postgres_connection):

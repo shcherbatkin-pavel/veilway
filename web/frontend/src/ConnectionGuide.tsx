@@ -7,10 +7,10 @@ function DownloadLink({ href, children }: { href: string; children: ReactNode })
 const guides = [
   {
     id: "android", label: "Android",
-    install: <p>Установите OpenVPN Connect из <DownloadLink href="https://play.google.com/store/apps/details?id=net.openvpn.openvpn">Google Play</DownloadLink>.</p>,
-    importTitle: "Импортируйте профиль",
-    import: <p>Откройте OpenVPN Connect. Нажмите «+», выберите импорт из файла (File) и найдите скачанный файл <code>.ovpn</code>. Добавьте профиль кнопкой Add.</p>,
-    connect: <p>Включите переключатель рядом с профилем и подтвердите системный запрос на VPN-подключение. Дождитесь статуса Connected — можно пользоваться интернетом. Для отключения выключите переключатель.</p>,
+    install: <><p><a className="primary guide-download" href="/downloads/android/veilway-0.1.2-pilot.apk" download>Скачать Veilway для Android</a></p><p>Пилотная версия 0.1.2 для Android 10 и новее. Откройте скачанный APK и нажмите «Установить». Если Android попросит, разрешите установку из этого источника для браузера или приложения «Файлы». После установки разрешение можно выключить.</p><p className="muted"><a href="/downloads/android/veilway-0.1.2-pilot-sources.tar.gz" download>Исходники приложения и библиотек</a> · <a href="/downloads/android/SHA256SUMS" download>SHA-256</a></p></>,
+    importTitle: "Выберите профиль и приложения",
+    import: <p>Вернитесь в Veilway и выберите назначенный профиль. Отметьте YouTube и Telegram, оставьте OZON и ВКонтакте без отметки, затем нажмите «Сохранить выбор». Если профилей нет, обратитесь к администратору.</p>,
+    connect: <><p>Нажмите «Подключить» и подтвердите системный запрос Android на VPN. Дождитесь статуса «Подключён». Только выбранные приложения используют VPN, остальные подключаются напрямую.</p><p className="muted">Для сайтов в браузере действует выбор самого браузера. Изменения списка приложений применяются при следующем подключении. Для отключения нажмите «Отключить».</p></>,
   },
   {
     id: "iphone", label: "iPhone",
@@ -47,11 +47,11 @@ export function ConnectionGuide({ onProfiles }: { onProfiles: () => void }) {
       <h2>{guide.label === "Linux" ? "Linux — Ubuntu/Debian" : guide.label}</h2>
       <ol className="guide-steps">
         <li><h3>Установите приложение</h3>{guide.install}</li>
-        <li><h3>Скачайте VPN-профиль</h3><p>Откройте раздел профилей в панели, выберите действующий профиль для устройства и нажмите «Скачать». Сохраните файл <code>.ovpn</code>.</p><p className="muted">Если профиль ещё не назначен или срок действия закончился, обратитесь к администратору.</p></li>
+        <li>{platform === "android" ? <><h3>Войдите в Veilway</h3><p>Откройте приложение, нажмите «Войти в Veilway», затем «Открыть вход». Войдите через Google в браузере, сверьте код с приложением и подтвердите вход.</p></> : <><h3>Скачайте VPN-профиль</h3><p>Откройте раздел профилей в панели, выберите действующий профиль для устройства и нажмите «Скачать». Сохраните файл <code>.ovpn</code>.</p><p className="muted">Если профиль ещё не назначен или срок действия закончился, обратитесь к администратору.</p></>}</li>
         <li><h3>{guide.importTitle}</h3>{guide.import}</li>
         <li><h3>Подключитесь и пользуйтесь VPN</h3>{guide.connect}</li>
       </ol>
-      <p className="guide-privacy muted">Ваш профиль — личный доступ к VPN. Не передавайте файл другим людям.</p>
+      {platform !== "android" && <p className="guide-privacy muted">Ваш профиль — личный доступ к VPN. Не передавайте файл другим людям.</p>}
     </section>
   </>;
 }

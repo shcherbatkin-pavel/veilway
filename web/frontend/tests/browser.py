@@ -467,7 +467,7 @@ def storage_and_logout(browser, viewport):
 
 def connection_guide(browser, viewport):
     links = {
-        'Android': ('Google Play', 'https://play.google.com/store/apps/details?id=net.openvpn.openvpn'),
+        'Android': ('Скачать Veilway для Android', '/downloads/android/veilway-0.1.2-pilot.apk'),
         'iPhone': ('App Store', 'https://apps.apple.com/app/openvpn-connect/id590379981'),
         'Windows': ('официальной страницы', 'https://openvpn.net/client/'),
         'Linux': ('официальных репозиториях OpenVPN', 'https://community.openvpn.net/Pages/OpenVPN%20software%20repos'),
@@ -490,10 +490,19 @@ def connection_guide(browser, viewport):
             expect(region.locator('ol > li')).to_have_count(4)
             link = region.get_by_role('link', name=text, exact=False)
             expect(link).to_have_attribute('href', href)
-            expect(link).to_have_attribute('target', '_blank')
-            expect(link).to_have_attribute('rel', 'noopener noreferrer')
+            if label == 'Android':
+                expect(link).to_have_attribute('download', '')
+                expect(region).to_contain_text('Android 10')
+                expect(region).to_contain_text('Google')
+                expect(region).to_contain_text('OZON и ВКонтакте без отметки')
+                expect(region).not_to_contain_text('.ovpn')
+                expect(region.get_by_role('link', name='Исходники приложения и библиотек')).to_have_attribute('href', '/downloads/android/veilway-0.1.2-pilot-sources.tar.gz')
+                expect(region.get_by_role('link', name='SHA-256')).to_have_attribute('href', '/downloads/android/SHA256SUMS')
+            else:
+                expect(link).to_have_attribute('target', '_blank')
+                expect(link).to_have_attribute('rel', 'noopener noreferrer')
+                expect(region).to_contain_text('Не передавайте файл')
             expect(region).to_contain_text('обратитесь к администратору')
-            expect(region).to_contain_text('Не передавайте файл')
             s.no_overflow()
         expect(region).to_contain_text('sudo apt install openvpn')
         expect(region).to_contain_text('sudo openvpn --config "/путь/к/скачанному/файлу.ovpn"')

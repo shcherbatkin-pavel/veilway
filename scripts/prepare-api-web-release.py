@@ -32,6 +32,7 @@ def revision(value: str) -> str:
 
 def source_files(commit: str) -> dict[str, bytes]:
     paths = [f"web/{component}/{name}" for component, names in INPUTS.items() for name in names]
+    paths.extend(("web/frontend/android-release.json", "web/frontend/stage-android-release.mjs"))
     paths.append("web/compose.yaml")
     result = {}
     for record in git("ls-tree", "-rz", commit, "--", *paths).split(b"\0"):
@@ -91,7 +92,7 @@ def export_contexts(contexts: Path, candidate: dict[str, bytes]) -> None:
         target.chmod(0o644)
 
 
-def prepare(commit: str, base_commit: str, output: Path, *, build: bool) -> None:
+def prepare(commit: str, base_commit: str, output: Path, *, build: bool, android_release: Path | None = None) -> None:
     base, candidate = source_files(base_commit), source_files(commit)
     validate_compatibility(base, candidate)
     if not build:
@@ -100,6 +101,10 @@ def prepare(commit: str, base_commit: str, output: Path, *, build: bool) -> None
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     contexts = output / "build"
     export_contexts(contexts, candidate)
+    if "frontend/android-release.json" in candidate:
+        subprocess.run(["node", str(contexts / "frontend/stage-android-release.mjs"), "--stage",
+                        str(android_release or ROOT / "release-artifacts/android/web-downloads"),
+                        str(contexts / "frontend/android-release")], check=True)
     tags = {service: f"veilway-control-{service}:{commit[:12]}" for service in ("api", "web")}
     for service, component in (("api", "backend"), ("web", "frontend")):
         context = contexts / component
@@ -144,13 +149,14 @@ def main() -> int:
     parser.add_argument("--revision", default="origin/main")
     parser.add_argument("--base-revision", required=True, help="expected source revision of the existing installation")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--android-release", type=Path, help="local signed Android release directory")
     parser.add_argument("--build", action="store_true", help="build/export only API/web images using local Docker")
     arguments = parser.parse_args()
     os.umask(0o077)
     try:
         commit, base = revision(arguments.revision), revision(arguments.base_revision)
         output = (arguments.output or ROOT / "release-artifacts" / f"api-web-{commit[:12]}").absolute()
-        prepare(commit, base, output, build=arguments.build)
+        prepare(commit, base, output, build=arguments.build, android_release=arguments.android_release)
     except (OSError, ValueError, subprocess.SubprocessError):
         print("API/web release preparation failed; no host was contacted", file=sys.stderr)
         return 2

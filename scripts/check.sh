@@ -9,6 +9,7 @@ readonly REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 cd -- "${REPOSITORY_ROOT}"
 
 shell_files=(
+    android/gradlew
     scripts/acceptance-ubuntu-direct scripts/check.sh
     scripts/container-smoke.sh scripts/test-profile-security.sh scripts/diagnose-aws-container-client
     scripts/diagnose-aws-data-channel scripts/test-control-plane.sh scripts/test-pki-service.sh scripts/test-profile-api.sh scripts/test-crl-mount.sh scripts/test-profile-panel.sh scripts/veilway-pki
@@ -30,6 +31,11 @@ fi
 
 printf '%s\n' '[3/9] Python syntax and CIDR validation'
 python3 -m py_compile \
+    scripts/android-pilot-key.py \
+    scripts/prepare-android-native.py \
+    scripts/test-android-tunnel.py \
+    scripts/package-android-pilot.py \
+    scripts/test-android-downloads.py \
     deploy/image/veilway_session_accounting.py \
     deploy/image/veilway-session-hook \
     deploy/roles/veilway_analytics/files/veilway-analytics-agent \

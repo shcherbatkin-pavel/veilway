@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+gradle_download=false
+if [[ "${1:-}" == '--download-gradle' ]]; then
+    gradle_download=true
+    shift
+fi
+readonly gradle_cache="${GRADLE_USER_HOME:-${HOME}/.gradle}"
+shopt -s nullglob
+cached_gradle=("${gradle_cache}/wrapper/dists/gradle-8.13-bin"/*/gradle-8.13/bin/gradle)
+if [[ ${#cached_gradle[@]} -eq 0 && "${gradle_download}" != true ]]; then
+    printf '%s\n' 'Gradle 8.13 is not cached. Pass --download-gradle to permit its checksum-verified download.' >&2
+    exit 2
+fi
+if [[ -n "${JAVA_HOME:-}" ]]; then
+    java_command="${JAVA_HOME}/bin/java"
+else
+    java_command='java'
+fi
+exec "${java_command}" -classpath "${SCRIPT_DIR}/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain "$@"

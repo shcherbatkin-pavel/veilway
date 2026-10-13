@@ -3,11 +3,12 @@ from starlette.responses import JSONResponse
 
 
 class AnalyticsBodyLimit:
-    def __init__(self, app, limit=2 * 1024 * 1024):
+    def __init__(self, app, limit=2 * 1024 * 1024, prefix='/api/v1/analytics-agents/', detail='accounting payload too large'):
         self.app, self.limit = app, limit
+        self.prefix, self.detail = prefix, detail
 
     async def __call__(self, scope, receive, send):
-        if scope['type'] != 'http' or not scope['path'].startswith('/api/v1/analytics-agents/'):
+        if scope['type'] != 'http' or not scope['path'].startswith(self.prefix):
             return await self.app(scope, receive, send)
         chunks, size = [], 0
         while True:
@@ -17,7 +18,7 @@ class AnalyticsBodyLimit:
             body = message.get('body', b'')
             size += len(body)
             if size > self.limit:
-                response = JSONResponse({'detail':'accounting payload too large'}, status_code=413,
+                response = JSONResponse({'detail':self.detail}, status_code=413,
                     headers={'Cache-Control':'no-store','Pragma':'no-cache'})
                 return await response(scope, receive, send)
             chunks.append(body)

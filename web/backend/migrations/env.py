@@ -7,6 +7,7 @@ from alembic import context
 from veilway_control.config import get_settings
 from veilway_control.database import Base, build_database_url
 from veilway_control import models  # noqa: F401
+from veilway_control import mobile_models  # noqa: F401
 
 
 config = context.config
