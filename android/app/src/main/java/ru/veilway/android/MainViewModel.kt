@@ -78,7 +78,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } catch (error: Exception) {
             if (error is ApiFailure && error.status == 401) {
                 login.cancel()
-                getApplication<Application>().stopService(Intent(getApplication(), VeilwayVpnService::class.java))
+                stopVpn()
                 store.clear(); state.update { it.copy(loggedIn = false, profiles = emptyList()) }
             }
             state.update { it.copy(message = failure(error)) }
@@ -95,8 +95,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun logout() {
         login.cancel()
-        val context = getApplication<Application>()
-        context.stopService(Intent(context, VeilwayVpnService::class.java))
+        stopVpn()
         val token = runCatching { store.get("token") }.getOrNull()
         store.clear()
         state.update { it.copy(loggedIn = false, profiles = emptyList(), loginCode = null, browserUri = null, message = "", confirmed = false) }
@@ -104,5 +103,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (token != null) try { api.logout(token) }
             catch (_: Exception) { state.update { it.copy(message = "Данные удалены с телефона. Сервер недоступен: сессия на сервере пока не отозвана.") } }
         }
+    }
+    private fun stopVpn() {
+        val context = getApplication<Application>()
+        val service = Intent(context, VeilwayVpnService::class.java)
+        context.stopService(service)
     }
 }

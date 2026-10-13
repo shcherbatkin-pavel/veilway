@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <application android:usesCleartextTraffic="true" tools:replace="android:usesCleartextTraffic">
-        <receiver android:name=".FixtureReceiver" android:exported="true" />
+        <!-- adb shell holds DUMP; ordinary apps cannot inject test profiles. -->
+        <receiver android:name=".FixtureReceiver" android:exported="true"
+            android:permission="android.permission.DUMP" />
         <activity android:name=".FixtureActivity" android:exported="true" />
     </application>
 </manifest>

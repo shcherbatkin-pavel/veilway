@@ -38,6 +38,43 @@ python3 scripts/package-android-pilot.py --sdk-root /path/to/sdk
 кеша. Не используйте `--write-locks` или `--write-verification-metadata` для
 обычной сборки: обновление зависимостей требует отдельного ревью.
 
+### Разбор Android lint
+
+После разбора исходных 11 предупреждений `lintDebug` сообщает 0 ошибок и
+7 предупреждений `GradleDependency`. Проверки не отключены, baseline не добавлен.
+
+- Два `ImplicitSamInstance` были ложными срабатываниями на создание `Intent`
+  внутри `stopService`: этот API выбирает службу по Intent, а не по идентичности
+  callback. Остановка VPN при выходе и ответе 401 вынесена в общий `stopVpn()`
+  с явным Intent; поведение сохранено, предупреждения исчезли.
+- `UseKtx`: открытие браузера использует `String.toUri()` из существующего core-ktx.
+- `ExportedReceiver`: debug-приёмник синтетических профилей требует
+  `android.permission.DUMP`. Это разрешение есть у ADB shell; обычные сторонние
+  приложения не могут отправлять ему профили. Команда тестового harness
+  `adb shell am broadcast` сохраняется. В release-манифесте приёмника нет.
+  Проверены объединённые debug/release-манифесты; проверка на эмуляторе не выполнялась.
+
+Оставшиеся предупреждения означают наличие новых версий, а не установленную
+уязвимость. Ниже приведены предложения локального lint-отчёта, а не независимо
+проверенный список последних версий:
+
+| Зависимость | Закреплена | Предложение lint |
+| --- | --- | --- |
+| core-ktx | 1.16.0 | 1.19.1 |
+| activity-compose | 1.10.1 | 1.13.0 |
+| lifecycle-viewmodel-compose | 2.9.0 | 2.11.0 |
+| browser | 1.8.0 | 1.10.0 |
+| compose-bom | 2025.04.01 | 2026.09.00 |
+| test.ext:junit | 1.2.1 | 1.3.0 |
+| test:runner | 1.6.2 | 1.7.0 |
+
+Обновление выполняется отдельным изменением: проверить требования к compileSdk,
+AGP/Kotlin и совместимость Compose, затем обновить lockfile и метаданные проверки,
+выполнить unit/lint и инструментальные тесты входа и VPN на эмуляторе.
+Описание правил: [GradleDependency](https://googlesamples.github.io/android-custom-lint-rules/checks/GradleDependency.md.html),
+[stopService](https://developer.android.com/reference/android/content/Context#stopService(android.content.Intent)),
+[разрешения ADB shell](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/packages/Shell/AndroidManifest.xml).
+
 Ключ подписи создаётся один раз в игнорируемом `private/android`, с закрытыми
 правами и без печати пароля. Сохраните закрытую резервную копию: последующие
 APK должны подписываться тем же ключом. Скрипт упаковки проверяет подпись,
