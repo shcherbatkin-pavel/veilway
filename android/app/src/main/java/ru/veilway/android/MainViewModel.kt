@@ -2,9 +2,6 @@ package ru.veilway.android
 
 import android.app.Application
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -19,7 +16,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 
-data class InstalledApp(val id: String, val name: String, val icon: Bitmap)
 data class AppState(
     val loggedIn: Boolean = false, val busy: Boolean = false, val message: String = "",
     val profiles: List<Profile> = emptyList(), val profileId: String? = null,
@@ -36,7 +32,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         viewModelScope.launch {
             try {
-                val apps = withContext(Dispatchers.IO) { installedApps() }
+                val apps = withContext(Dispatchers.IO) { InstalledApps(getApplication()).load() }
                 val saved = store.get("apps")?.let { data -> JSONArray(data).let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } }
                 val selected = (saved ?: setOf("com.google.android.youtube", "org.telegram.messenger")).intersect(apps.map { it.id }.toSet())
                 state.update { it.copy(apps = apps, selected = selected, confirmed = saved != null,
@@ -45,20 +41,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 else store.get("login")?.let { resumeLogin(JSONObject(it)) }
             } catch (_: Exception) { state.update { it.copy(message = "Не удалось прочитать настройки. Войдите заново.") } }
         }
-    }
-    private fun installedApps(): List<InstalledApp> {
-        val context = getApplication<Application>()
-        val pm = context.packageManager
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        return pm.queryIntentActivities(intent, 0).mapNotNull { info ->
-            val id = info.activityInfo.packageName
-            if (id == context.packageName) return@mapNotNull null
-            runCatching {
-                val permissions = pm.getPackageInfo(id, PackageManager.GET_PERMISSIONS).requestedPermissions.orEmpty()
-                if ("android.permission.INTERNET" !in permissions) null
-                else InstalledApp(id, info.loadLabel(pm).toString(), info.loadIcon(pm).toBitmap(64, 64))
-            }.getOrNull()
-        }.distinctBy { it.id }.sortedBy { it.name.lowercase() }
     }
     private fun failure(error: Exception): String = when (error) {
         is ApiFailure -> when {
