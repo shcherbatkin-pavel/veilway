@@ -2,7 +2,6 @@ package ru.veilway.android
 
 import android.Manifest
 import android.content.Intent
-import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -23,6 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 
 class MainActivity : ComponentActivity() {
     private val model: MainViewModel by viewModels()
@@ -61,7 +61,7 @@ class MainActivity : ComponentActivity() {
                                     Text("Код входа", style = MaterialTheme.typography.titleMedium)
                                     Text(state.loginCode!!, style = MaterialTheme.typography.headlineLarge)
                                     Text("Откройте панель, войдите через Google и подтвердите этот код. Затем вернитесь сюда.")
-                                    Button(onClick = { state.browserUri?.let { CustomTabsIntent.Builder().build().launchUrl(this@MainActivity, Uri.parse(it)) } }) { Text("Открыть вход") }
+                                    Button(onClick = { state.browserUri?.let { CustomTabsIntent.Builder().build().launchUrl(this@MainActivity, it.toUri()) } }) { Text("Открыть вход") }
                                     TextButton(onClick = model::cancelLogin) { Text("Отмена") }
                                 } } }
                             }

@@ -2,24 +2,18 @@ package ru.veilway.android
 
 import android.app.Application
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
-import org.json.JSONObject
 import java.time.Instant
 
-data class InstalledApp(val id: String, val name: String, val icon: Bitmap)
 data class AppState(
     val loggedIn: Boolean = false, val busy: Boolean = false, val message: String = "",
     val profiles: List<Profile> = emptyList(), val profileId: String? = null,
@@ -31,34 +25,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val store = SecretStore(application)
     private val api = MobileApi()
     val state = MutableStateFlow(AppState())
-    private var polling: Job? = null
-    private var loginGeneration = 0
+    private val loginStore = StoredLogin(store)
+    private val access = ProfileAccess(api, loginStore)
+    private val login = DeviceLoginCoordinator(viewModelScope, api, loginStore,
+        now = { Instant.now().epochSecond }, wait = { delay(it) }, changed = ::loginChanged)
     init {
         viewModelScope.launch {
             try {
-                val apps = withContext(Dispatchers.IO) { installedApps() }
+                val apps = withContext(Dispatchers.IO) { InstalledApps(getApplication()).load() }
                 val saved = store.get("apps")?.let { data -> JSONArray(data).let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } }
                 val selected = (saved ?: setOf("com.google.android.youtube", "org.telegram.messenger")).intersect(apps.map { it.id }.toSet())
                 state.update { it.copy(apps = apps, selected = selected, confirmed = saved != null,
                     loggedIn = store.get("token") != null, profileId = store.get("selected-profile")) }
                 if (state.value.loggedIn) refresh()
-                else store.get("login")?.let { resumeLogin(JSONObject(it)) }
+                else loginStore.pending()?.let(login::resume)
             } catch (_: Exception) { state.update { it.copy(message = "Не удалось прочитать настройки. Войдите заново.") } }
         }
     }
-    private fun installedApps(): List<InstalledApp> {
-        val context = getApplication<Application>()
-        val pm = context.packageManager
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        return pm.queryIntentActivities(intent, 0).mapNotNull { info ->
-            val id = info.activityInfo.packageName
-            if (id == context.packageName) return@mapNotNull null
-            runCatching {
-                val permissions = pm.getPackageInfo(id, PackageManager.GET_PERMISSIONS).requestedPermissions.orEmpty()
-                if ("android.permission.INTERNET" !in permissions) null
-                else InstalledApp(id, info.loadLabel(pm).toString(), info.loadIcon(pm).toBitmap(64, 64))
-            }.getOrNull()
-        }.distinctBy { it.id }.sortedBy { it.name.lowercase() }
+    private fun loginChanged(next: LoginState) {
+        state.update { current -> when (next) {
+            LoginState.Idle -> current.copy(loginCode = null, browserUri = null)
+            LoginState.Cancelled -> current.copy(loginCode = null, browserUri = null, busy = false)
+            LoginState.Allocating -> current.copy(busy = true, message = "")
+            is LoginState.Awaiting -> current.copy(busy = false, loginCode = next.login.code, browserUri = next.login.uri,
+                message = if (next.retrying) "Связь с Veilway прервалась. Повторяем попытку; код входа сохраняется." else "")
+            LoginState.Granted -> current.copy(loggedIn = true, loginCode = null, browserUri = null, message = "")
+            LoginState.Expired -> current.copy(message = "Код истёк. Начните вход заново.")
+            is LoginState.Failed -> current.copy(busy = false, message = failure(next.error))
+        } }
+        if (next == LoginState.Granted) refresh()
     }
     private fun failure(error: Exception): String = when (error) {
         is ApiFailure -> when {
@@ -76,69 +71,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun refresh() { viewModelScope.launch {
         state.update { it.copy(busy = true, message = "") }
         try {
-            val token = store.get("token") ?: throw ApiFailure(401)
-            val profiles = api.profiles(token)
-            val id = state.value.profileId?.takeIf { selected -> profiles.any { it.id == selected && it.usable } }
-                ?: profiles.firstOrNull { it.usable }?.id
-            state.update { it.copy(profiles = profiles, profileId = id) }
+            val result = access.refresh { state.value.profileId } ?: return@launch
+            state.update { it.copy(profiles = result.profiles, profileId = result.selectedId) }
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             if (error is ApiFailure && error.status == 401) {
-                getApplication<Application>().stopService(Intent(getApplication(), VeilwayVpnService::class.java))
+                login.cancel()
+                stopVpn()
                 store.clear(); state.update { it.copy(loggedIn = false, profiles = emptyList()) }
             }
             state.update { it.copy(message = failure(error)) }
         } finally { state.update { it.copy(busy = false) } }
     } }
-    fun beginLogin() { viewModelScope.launch {
-        if (state.value.busy || polling?.isActive == true) return@launch
-        state.update { it.copy(busy = true, message = "") }
-        try {
-            val login = api.device()
-            val data = JSONObject().put("device", login.deviceCode).put("code", login.userCode)
-                .put("uri", login.uri).put("deadline", Instant.now().epochSecond + login.expires).put("interval", login.interval)
-            store.put("login", data.toString()); resumeLogin(data)
-        } catch (error: Exception) { state.update { it.copy(message = failure(error)) } }
-        finally { state.update { it.copy(busy = false) } }
-    } }
-    private fun resumeLogin(data: JSONObject) {
-        val generation = ++loginGeneration
-        polling?.cancel()
-        state.update { it.copy(loginCode = data.getString("code"), browserUri = data.getString("uri")) }
-        polling = viewModelScope.launch {
-            try {
-                val token = pollDeviceLogin(
-                    deadline = data.getLong("deadline"), initialInterval = data.getInt("interval"),
-                    now = { Instant.now().epochSecond }, wait = { delay(it) },
-                    exchange = { api.exchange(data.getString("device")) },
-                    retrying = { retry ->
-                        if (generation == loginGeneration) state.update { it.copy(message =
-                            if (retry) "Связь с Veilway прервалась. Повторяем попытку; код входа сохраняется." else "") }
-                    },
-                )
-                if (generation != loginGeneration) return@launch
-                if (token == null) {
-                    state.update { it.copy(message = "Код истёк. Начните вход заново.") }
-                } else {
-                    store.put("token", token); store.remove("login")
-                    state.update { it.copy(loggedIn = true, loginCode = null, browserUri = null, message = "") }
-                    refresh()
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                if (generation == loginGeneration) state.update { it.copy(message = failure(error)) }
-            } finally {
-                if (generation == loginGeneration) {
-                    store.remove("login"); state.update { it.copy(loginCode = null, browserUri = null) }
-                }
-            }
-        }
-    }
-    fun cancelLogin() {
-        ++loginGeneration
-        polling?.cancel(); store.remove("login")
-        state.update { it.copy(loginCode = null, browserUri = null, busy = false) }
-    }
+    fun beginLogin() { if (!state.value.busy) login.begin() }
+    fun cancelLogin() = login.cancel()
     fun selectProfile(id: String) { store.put("selected-profile", id); state.update { it.copy(profileId = id) } }
     fun toggleApp(id: String) { state.update { it.copy(selected = if (id in it.selected) it.selected - id else it.selected + id, confirmed = false) } }
     fun confirmApps() {
@@ -147,10 +94,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         state.update { it.copy(confirmed = true) }
     }
     fun logout() {
-        ++loginGeneration
-        polling?.cancel()
-        val context = getApplication<Application>()
-        context.stopService(Intent(context, VeilwayVpnService::class.java))
+        login.cancel()
+        stopVpn()
         val token = runCatching { store.get("token") }.getOrNull()
         store.clear()
         state.update { it.copy(loggedIn = false, profiles = emptyList(), loginCode = null, browserUri = null, message = "", confirmed = false) }
@@ -158,5 +103,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (token != null) try { api.logout(token) }
             catch (_: Exception) { state.update { it.copy(message = "Данные удалены с телефона. Сервер недоступен: сессия на сервере пока не отозвана.") } }
         }
+    }
+    private fun stopVpn() {
+        val context = getApplication<Application>()
+        val service = Intent(context, VeilwayVpnService::class.java)
+        context.stopService(service)
     }
 }

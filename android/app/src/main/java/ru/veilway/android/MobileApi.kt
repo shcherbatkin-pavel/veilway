@@ -15,7 +15,7 @@ data class Profile(val id: String, val name: String, val mode: String, val statu
 }
 data class DeviceLogin(val deviceCode: String, val userCode: String, val uri: String, val expires: Int, val interval: Int)
 
-class MobileApi {
+class MobileApi : MobileClient {
     private val base = "https://veilway.ru/api/v1/mobile/"
     private suspend fun request(path: String, token: String? = null, payload: JSONObject? = null): String = withContext(Dispatchers.IO) {
         val connection = URL(base + path).openConnection() as HttpsURLConnection
@@ -50,14 +50,14 @@ class MobileApi {
             body
         } finally { connection.disconnect() }
     }
-    suspend fun device(): DeviceLogin {
+    override suspend fun device(): DeviceLogin {
         val data = JSONObject(request("auth/device", payload = JSONObject()))
         val uri = data.getString("verification_uri_complete")
         require(uri.startsWith("https://veilway.ru/?mobile=1#code="))
         return DeviceLogin(data.getString("device_code"), data.getString("user_code"), uri, data.getInt("expires_in"), data.getInt("interval"))
     }
-    suspend fun exchange(code: String): String = JSONObject(request("auth/token", payload = JSONObject().put("device_code", code))).getString("access_token")
-    suspend fun profiles(token: String): List<Profile> {
+    override suspend fun exchange(code: String): String = JSONObject(request("auth/token", payload = JSONObject().put("device_code", code))).getString("access_token")
+    override suspend fun profiles(token: String): List<Profile> {
         val result = mutableListOf<Profile>()
         var offset = 0
         do {
@@ -70,9 +70,9 @@ class MobileApi {
         } while (data.length() == 100 && offset < 10000)
         return result
     }
-    suspend fun download(token: String, id: String): String {
+    override suspend fun download(token: String, id: String): String {
         require(id.matches(Regex("[a-f0-9-]{36}")))
         return request("profiles/$id/download", token, JSONObject())
     }
-    suspend fun logout(token: String) { request("auth/logout", token, JSONObject()) }
+    override suspend fun logout(token: String) { request("auth/logout", token, JSONObject()) }
 }
