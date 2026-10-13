@@ -807,12 +807,65 @@ def business_analytics(browser, viewport):
     s.close()
 
 
+def mobile_approval_flow(browser, viewport):
+    s = Scene(browser, viewport, 'USER')
+    page = s.page
+    approvals = []
+    fail_approval = True
+
+    def approve(route):
+        assert route.request.method == 'POST'
+        assert route.request.headers.get('x-csrf-token') == CSRF
+        assert route.request.post_data_json == {'user_code': 'ABCD-2345'}
+        approvals.append(route.request.post_data_json)
+        if fail_approval:
+            route.fulfill(status=400, json={'detail': 'synthetic-secret-error-text'})
+        else:
+            route.fulfill(status=204)
+
+    page.route('**/api/v1/mobile/auth/approve', approve)
+    # Simulate arriving before Google login, then returning with a session.
+    s.expired = True
+    page.goto(BASE + '/?mobile=1#code=ABCD-2345')
+    expect(page.get_by_role('link', name='Войти через Google')).to_be_visible()
+    assert page.evaluate('location.hash') == ''
+    assert page.evaluate('sessionStorage.getItem("veilway-mobile-code")') == 'ABCD-2345'
+    assert not approvals
+    s.expired = False
+    page.goto(BASE)
+    expect(page.get_by_role('heading', name='Подключить приложение')).to_be_visible()
+    expect(page.get_by_role('textbox')).to_have_value('ABCD-2345')
+    page.reload()
+    expect(page.get_by_role('textbox')).to_have_value('ABCD-2345')
+    assert not approvals
+    page.get_by_role('button', name='Подтвердить вход').click()
+    expect(page.get_by_role('alert')).to_contain_text('Не удалось подтвердить вход')
+    assert 'synthetic-secret-error-text' not in page.locator('body').inner_text()
+    fail_approval = False
+    page.get_by_role('button', name='Подтвердить вход').click()
+    expect(page.get_by_role('heading', name='Вход подтверждён')).to_be_visible()
+    assert len(approvals) == 2
+    assert page.evaluate('sessionStorage.getItem("veilway-mobile-code")') is None
+    assert page.evaluate('sessionStorage.getItem("veilway-mobile-pending")') is None
+    page.get_by_role('button', name='В панель').click()
+    expect(page.get_by_role('heading', level=1)).to_contain_text('Мои профили')
+    page.goto(BASE + '/?mobile=1#code=invalid')
+    expect(page.get_by_role('heading', name='Подключить приложение')).to_be_visible()
+    expect(page.get_by_role('textbox')).to_have_value('')
+    expect(page.get_by_role('button', name='Подтвердить вход')).to_be_disabled()
+    page.get_by_role('button', name='Отмена').click()
+    expect(page.get_by_role('heading', level=1)).to_contain_text('Мои профили')
+    assert page.evaluate('sessionStorage.getItem("veilway-mobile-pending")') is None
+    assert len(approvals) == 2
+    s.close()
+
+
 with sync_playwright() as p:
     browser=p.chromium.launch(headless=True,args=['--no-sandbox'])
     try:
         count=0
         for viewport in ({'width':1440,'height':1000},{'width':390,'height':844},{'width':320,'height':740}):
-            for run in (admin_flow,user_flow,empty_and_states,expired_revoke,idempotent_creation,pagination_and_screenshot,loading_and_failures,session_unavailable,storage_and_logout,connection_guide,health_overview,business_analytics):
+            for run in (admin_flow,user_flow,empty_and_states,expired_revoke,idempotent_creation,pagination_and_screenshot,loading_and_failures,session_unavailable,storage_and_logout,connection_guide,health_overview,business_analytics,mobile_approval_flow):
                 run(browser,viewport)
                 count+=1; print(f'PASS {run.__name__} {viewport["width"]}',flush=True)
         print(f'{count} browser scenarios passed',flush=True)
