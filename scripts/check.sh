@@ -51,6 +51,7 @@ python3 -m py_compile \
     scripts/test-pki-benchmark.py \
     scripts/test-pki-expiry.py \
     scripts/test-operator-tools.py \
+    scripts/test-operator-policy.py \
     scripts/check-public-diff.py \
     scripts/render-inventory.py \
     scripts/review-aws-direct-plan.py \
@@ -70,6 +71,7 @@ python3 -m py_compile "${control_python_files[@]}" "${operator_python_files[@]}"
 python3 scripts/test-pki-expiry.py
 python3 scripts/test-pki-benchmark.py
 python3 scripts/test-operator-tools.py
+python3 scripts/test-operator-policy.py
 python3 scripts/test-profile-rollout.py
 python3 scripts/test-api-web-release.py
 valid_result="$(printf '%s\n' '{"vpc_cidr":"10.241.1.0/24","vpn_cidr":"10.242.10.0/24","future_multihop_cidr":"10.242.30.0/24","transit_cidr":"10.242.40.0/29","operator_cidrs_json":"[\"198.51.100.10/32\"]"}' | scripts/validate-network-plan.py)"
