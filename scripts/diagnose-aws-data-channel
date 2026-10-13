@@ -63,18 +63,14 @@ require_command() {
         || fail "required command is unavailable: $1"
 }
 
+# shellcheck source=lib/diagnostic_inputs.sh
+source "${SCRIPT_DIR}/lib/diagnostic_inputs.sh"
+# shellcheck source=lib/data_channel_checks.sh
+source "${SCRIPT_DIR}/lib/data_channel_checks.sh"
+
 read_endpoint() {
-    local key value selected=""
-
-    while IFS='=' read -r key value; do
-        [[ "${key}" == 'aws_direct_endpoint' ]] || continue
-        [[ -z "${selected}" ]] || return 1
-        selected="${value}"
-    done < "${ENDPOINT_CONFIG}"
-    [[ -n "${selected}" ]] || return 1
-    printf '%s\n' "${selected}"
+    read_aws_endpoint "${ENDPOINT_CONFIG}"
 }
-
 validate_ipv4() {
     python3 "${SCRIPT_DIR}/lib/aws_diagnostic_parsers.py" validate_ipv4
 }
@@ -659,115 +655,13 @@ finish_phase() {
         && raw_ingress_after >= raw_ingress_before)) \
         || fail 'a server counter was reset; run reset and repeat diagnosis'
 
-    if [[ "${state_values[9]}" == true ]]; then
-        printf '%s\n' 'AWS outer endpoint route and source: passed'
-    else
-        printf '%s\n' 'AWS outer endpoint route or source: FAILED'
-        diagnostic_failed=true
-    fi
-    if [[ "${live_nested_path_checked}" == true ]]; then
-        if [[ "${live_nested_path_used}" == true ]]; then
-            printf '%s\n' \
-                'AWS outer transport used the existing VPN tunnel: passed'
-        else
-            printf '%s\n' \
-                'AWS outer transport used the existing VPN tunnel: FAILED'
-            diagnostic_failed=true
-        fi
-    fi
-    if [[ "${live_outer_route_compared}" == true ]]; then
-        if [[ "${live_outer_route_stable}" == true ]]; then
-            printf '%s\n' \
-                'AWS outer route selection remained stable after activation: passed'
-        else
-            printf '%s\n' \
-                'AWS outer route selection changed after activation: FAILED'
-            diagnostic_failed=true
-        fi
-    fi
-    if ((state_values[5] >= 10)); then
-        printf '%s\n' 'client sent packets into TUN: passed'
-    else
-        printf '%s\n' 'client sent packets into TUN: FAILED'
-        diagnostic_failed=true
-    fi
-    if ((state_values[6] >= 10)); then
-        printf '%s\n' 'client emitted UDP datagrams after tunnel traffic: passed'
-    else
-        printf '%s\n' 'client emitted UDP datagrams after tunnel traffic: FAILED'
-        diagnostic_failed=true
-    fi
-    if [[ "${live_outbound_capture_performed}" == true ]]; then
-        if [[ "${live_outbound_burst}" == true ]]; then
-            printf '%s\n' \
-                'client emitted an OpenVPN data-channel burst with the expected source: passed'
-        else
-            printf '%s\n' \
-                'client emitted an OpenVPN data-channel burst with the expected source: FAILED'
-            diagnostic_failed=true
-        fi
-    fi
-    if [[ "${live_remote_sampled}" == true ]]; then
-        if ((live_raw_ingress_before > state_values[4])); then
-            printf '%s\n' \
-                'AWS pre-conntrack counter counted activation UDP: passed'
-        else
-            printf '%s\n' \
-                'AWS pre-conntrack counter counted activation UDP: FAILED'
-            diagnostic_failed=true
-        fi
-        if ((live_ingress_before > state_values[3])); then
-            printf '%s\n' \
-                'AWS firewall counted OpenVPN activation UDP: passed'
-        else
-            printf '%s\n' \
-                'AWS firewall counted OpenVPN activation UDP: FAILED'
-            diagnostic_failed=true
-        fi
-    fi
-    if ((raw_ingress_after - raw_ingress_before >= 10)); then
-        printf '%s\n' \
-            'AWS pre-conntrack counter received the OpenVPN UDP burst: passed'
-    elif ((raw_ingress_after > raw_ingress_before)); then
-        printf '%s\n' \
-            'AWS pre-conntrack counter received only sparse OpenVPN UDP: FAILED'
-        diagnostic_failed=true
-    else
-        printf '%s\n' \
-            'AWS pre-conntrack counter received no OpenVPN UDP: FAILED'
-        diagnostic_failed=true
-    fi
-    if ((ingress_after - ingress_before >= 10)); then
-        printf '%s\n' 'AWS firewall received the OpenVPN UDP burst: passed'
-    elif ((ingress_after > ingress_before)); then
-        printf '%s\n' 'AWS firewall received only sparse OpenVPN UDP: FAILED'
-        diagnostic_failed=true
-    else
-        printf '%s\n' 'AWS firewall received no OpenVPN UDP during probe: FAILED'
-        diagnostic_failed=true
-    fi
-    if ((server_rx_after > server_rx_before)); then
-        printf '%s\n' 'AWS TUN received client packets: passed'
-    else
-        printf '%s\n' 'AWS TUN received client packets: FAILED'
-        diagnostic_failed=true
-    fi
-    if ((server_tx_after > server_tx_before)); then
-        printf '%s\n' 'AWS TUN sent reply packets: passed'
-    else
-        printf '%s\n' 'AWS TUN sent reply packets: FAILED'
-        diagnostic_failed=true
-    fi
-    if ((state_values[7] > 0)); then
-        printf '%s\n' 'client TUN received reply packets: passed'
-    else
-        printf '%s\n' 'client TUN received reply packets: FAILED'
-        diagnostic_failed=true
-    fi
-    if [[ "${state_values[8]}" == true ]]; then
-        printf '%s\n' 'AWS tunnel gateway ping: passed'
-    else
-        printf '%s\n' 'AWS tunnel gateway ping: FAILED'
+    if ! report_data_channel_checks state_values \
+        "${server_rx_before}" "${server_tx_before}" "${server_rx_after}" \
+        "${server_tx_after}" "${ingress_before}" "${ingress_after}" \
+        "${raw_ingress_before}" "${raw_ingress_after}" "${live_nested_path_checked}" \
+        "${live_nested_path_used}" "${live_outer_route_compared}" "${live_outer_route_stable}" \
+        "${live_outbound_capture_performed}" "${live_outbound_burst}" "${live_remote_sampled}" \
+        "${live_raw_ingress_before}" "${live_ingress_before}"; then
         diagnostic_failed=true
     fi
 

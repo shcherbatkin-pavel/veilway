@@ -9,7 +9,7 @@ readonly REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 cd -- "${REPOSITORY_ROOT}"
 
 shell_files=(
-    android/gradlew
+    android/gradlew scripts/lib/diagnostic_inputs.sh scripts/lib/data_channel_checks.sh
     scripts/acceptance-ubuntu-direct scripts/check.sh
     scripts/container-smoke.sh scripts/test-profile-security.sh scripts/diagnose-aws-container-client
     scripts/diagnose-aws-data-channel scripts/test-control-plane.sh scripts/test-pki-service.sh scripts/test-profile-api.sh scripts/test-crl-mount.sh scripts/test-profile-panel.sh scripts/veilway-pki
