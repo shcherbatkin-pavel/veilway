@@ -40,7 +40,7 @@ python3 scripts/package-android-pilot.py --sdk-root /path/to/sdk
 
 ### Разбор Android lint
 
-После разбора исходных 11 предупреждений `lintDebug` сообщает 0 ошибок и
+До обновления зависимостей разбор исходных 11 предупреждений оставил 0 ошибок и
 7 предупреждений `GradleDependency`. Проверки не отключены, baseline не добавлен.
 
 - Два `ImplicitSamInstance` были ложными срабатываниями на создание `Intent`
@@ -227,3 +227,45 @@ VersionCode увеличен до 2 для установки поверх 0.1.0
 истечения и отказа доступа показываются отдельно. Отменённая попытка не удаляет
 данные следующей попытки. Если сервер выдал одноразовый токен, но ответ потерян,
 повторная выдача не разрешается: понадобится новый вход.
+
+## Обновление 0.1.3-pilot
+
+Обновлены семь прямых AndroidX/Compose/test-зависимостей из таблицы lint выше
+до указанных стабильных версий. Для сборки нужны JDK 17, Gradle 9.5.0,
+AGP 9.3.3, Kotlin/Compose compiler 2.2.10, Android SDK Platform 37 и
+Build Tools 36.0.0. Wrapper закрепляет SHA-256 Gradle. Lockfile и
+SHA-256-метаданные Gradle обновляются вместе с зависимостями; обычная сборка
+проверяет их без флагов генерации. AGP использует встроенный Kotlin;
+`org.jetbrains.kotlin.android` и устаревший `android.kotlinOptions` удалены,
+цель JVM задаётся Java compileOptions (17).
+
+compileSdk повышен до 37 по требованиям AAR. targetSdk остаётся 35, minSdk — 29,
+NDK — 27.2.12479018, CMake — 3.22.1. Нативные источники и параметры JNI/VPN
+не изменены. VersionCode 4 позволяет установить подписанный release APK
+поверх предыдущего пилота без удаления данных. Выпуск хранится отдельно в
+`release-artifacts/android/0.1.3-pilot`; публикация в панели выполняется отдельно.
+
+Совместимость проверена по [AAR-метаданным Google Maven](https://dl.google.com/dl/android/maven2/),
+[AGP 9.3](https://developer.android.com/build/releases/agp-9-3-0-release-notes),
+[миграции встроенного Kotlin](https://developer.android.com/build/migrate-to-built-in-kotlin),
+[Lifecycle](https://developer.android.com/jetpack/androidx/releases/lifecycle) и
+[Compose BOM](https://developer.android.com/develop/ui/compose/bom).
+
+Перед слиянием оператор проверяет свежую сборку на эмуляторе: вход,
+отмену входа, выход, подключение/отключение VPN и выбор приложений.
+Для debug-фикстур также проверить разрешённую отправку через ADB shell
+и отказ отправки обычным приложением. Результат предыдущей проверки
+0.1.2-pilot не заменяет проверку после обновления зависимостей.
+
+Локальная проверка обновления: 18 JVM-тестов без ошибок, `lintDebug` без ошибок,
+собраны debug/release APK и APK инструментальных тестов для arm64-v8a/x86_64.
+Объединённые манифесты сохраняют DUMP для debug-приёмника и исключают его
+из release. Инструментальные тесты на эмуляторе в этой проверке не запускались.
+
+Новый lint сообщает три предупреждения: `OldTargetApi` (targetSdk 35),
+`AndroidGradlePluginVersion` (Gradle 9.8.1 доступен вместо 9.5.0) и
+`NewerVersionAvailable` (Coroutines 1.11.0 вместо 1.10.2). Они не подавлены.
+Повышение targetSdk требует отдельной проверки изменений поведения Android;
+Gradle закреплён в версии из таблицы совместимости выбранного AGP,
+Coroutines не входит в исходные семь обновлений. Существующие 734 записи
+контрольных сумм сохранены без изменений; добавлены 464 записи новых артефактов.

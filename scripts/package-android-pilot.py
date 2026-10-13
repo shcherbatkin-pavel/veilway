@@ -17,7 +17,7 @@ def main():
     parser.add_argument("--sdk-root", type=Path, required=True)
     args = parser.parse_args()
     apk = ROOT / "android/app/build/outputs/apk/release/app-release.apk"
-    subprocess.run([str(args.sdk_root / "build-tools/35.0.0/apksigner"), "verify", str(apk)], check=True)
+    subprocess.run([str(args.sdk_root / "build-tools/36.0.0/apksigner"), "verify", str(apk)], check=True)
     metadata = json.loads((apk.parent / "output-metadata.json").read_text())
     version = metadata["elements"][0]["versionName"]
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-pilot", version):
