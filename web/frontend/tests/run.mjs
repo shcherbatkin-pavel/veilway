@@ -12,7 +12,7 @@ try {
     "--target", "ES2022", "--module", "commonjs", "--jsx", "react-jsx",
     "--moduleResolution", "node", "--strict", "--skipLibCheck", "--outDir", output,
   ], { cwd: root, stdio: "inherit" });
-  execFileSync(process.execPath, ["--test", "tests/polling.test.cjs", "tests/auth.test.cjs", "tests/profiles.test.cjs", "tests/http.test.cjs", "tests/guide.test.cjs", "tests/android-release.test.cjs"], {
+  execFileSync(process.execPath, ["--test", "tests/polling.test.cjs", "tests/auth.test.cjs", "tests/profiles.test.cjs", "tests/http.test.cjs", "tests/health.test.cjs", "tests/guide.test.cjs", "tests/android-release.test.cjs"], {
     cwd: root, stdio: "inherit",
     env: {
       ...process.env, VEILWAY_POLLING_MODULE: join(output, "polling.js"),
