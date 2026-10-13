@@ -1,3 +1,7 @@
+import { ApiError, fetchResponse, listAll, request } from "./http";
+
+export { ApiError } from "./http";
+
 export type VmSlug = "aws-direct" | "yc-direct";
 
 export interface Session {
@@ -33,12 +37,6 @@ export interface RestartJob {
   targets: RestartTarget[];
 }
 
-export class ApiError extends Error {
-  constructor(public status: number, message: string) {
-    super(message);
-  }
-}
-
 export async function together<T extends unknown[]>(promises: { [K in keyof T]: Promise<T[K]> }): Promise<T> {
   // Settle the whole group before polling again, and never hide an expired session.
   const results = await Promise.allSettled(promises);
@@ -47,34 +45,6 @@ export async function together<T extends unknown[]>(promises: { [K in keyof T]: 
   if (unauthorized) throw unauthorized.reason;
   if (rejected.length) throw rejected[0].reason;
   return results.map(item => (item as PromiseFulfilledResult<unknown>).value) as T;
-}
-
-async function request<T>(
-  path: string,
-  init: RequestInit = {},
-  csrfToken?: string,
-): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (init.body) headers.set("Content-Type", "application/json");
-  if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
-  const response = await fetch(path, {
-    ...init,
-    headers,
-    credentials: "same-origin",
-    cache: "no-store",
-  });
-  if (!response.ok) {
-    let message = `HTTP ${response.status}`;
-    try {
-      const payload = (await response.json()) as { detail?: string };
-      if (payload.detail) message = payload.detail;
-    } catch {
-      // Error bodies are deliberately optional.
-    }
-    throw new ApiError(response.status, message);
-  }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
 }
 
 export const api = {
@@ -114,15 +84,6 @@ export interface CreateProfile {
   owner_id?: string; duration_days: number;
 }
 
-async function listAll<T>(path: string, signal?: AbortSignal): Promise<T[]> {
-  const items: T[] = [];
-  for (let offset = 0; ; offset += 100) {
-    const page = await request<T[]>(`${path}?limit=100&offset=${offset}`, { signal });
-    items.push(...page);
-    if (page.length < 100) return items;
-  }
-}
-
 export const profilesApi = {
   profiles: (signal?: AbortSignal) => listAll<Profile>("/api/v1/profiles", signal),
   jobs: (signal?: AbortSignal) => listAll<ProfileJob>("/api/v1/profile-jobs", signal),
@@ -134,7 +95,7 @@ export const profilesApi = {
   assign: (id: string, owner_id: string, csrf: string) => request<Profile>(`/api/v1/profiles/${id}/owner`, { method: "POST", body: JSON.stringify({ owner_id }) }, csrf),
   revoke: (id: string, key: string, csrf: string) => request<ProfileJob>(`/api/v1/profiles/${id}/revoke`, { method: "POST", body: JSON.stringify({ idempotency_key: key }) }, csrf),
   async download(id: string, csrf: string) {
-    const response = await fetch(`/api/v1/profiles/${id}/download`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "X-CSRF-Token": csrf } });
+    const response = await fetchResponse(`/api/v1/profiles/${id}/download`, { method: "POST", headers: { "X-CSRF-Token": csrf } });
     if (!response.ok) throw new ApiError(response.status, "download failed");
     const url = URL.createObjectURL(await response.blob());
     const link = document.createElement("a");
