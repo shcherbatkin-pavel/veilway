@@ -1,5 +1,6 @@
 import { ReactNode, useMemo, useRef, useState } from "react";
-import { analyticsApi, ApiError, BusinessOverview, ProfileAnalytics, SessionAnalytics, ProfileMode, together } from "./api";
+import { BusinessOverview, ProfileAnalytics, ProfileMode } from "./api";
+import { AnalyticsView, AnalyticsSnapshot, buildAnalyticsRequest, loadAnalytics } from "./analyticsResource";
 import { useResource } from "./useResource";
 
 const modeNames: Record<ProfileMode, string> = { "aws-direct": "AWS напрямую", "yc-direct": "Yandex напрямую", "yc-aws-multihop": "Yandex → AWS" };
@@ -21,17 +22,8 @@ function duration(value: number | null) {
 function Metric({ title, value, hint }: { title: string; value: string; hint?: string }) {
   return <article className="analytics-metric"><span>{title}</span><strong>{value}</strong>{hint && <small>{hint}</small>}</article>;
 }
-type View = "overview" | "activity" | "profiles" | "sessions";
 type ChartMetric = "users" | "profiles" | "sessions_started" | "traffic";
-const tabs: { id: View; label: string }[] = [{ id: "overview", label: "Обзор" }, { id: "activity", label: "Активность" }, { id: "profiles", label: "Профили" }, { id: "sessions", label: "Сессии" }];
-type Snapshot = { key: string; overview: BusinessOverview; profiles?: { items: ProfileAnalytics[]; total: number }; sessions?: { items: SessionAnalytics[]; total: number } };
-function adminRequest<T>(promise: Promise<T>): Promise<T> {
-  // Normalize before grouping so a simultaneous 503 cannot hide a revoked role.
-  return promise.catch(reason => {
-    if (reason instanceof ApiError && reason.status === 403) throw new ApiError(401, "administrator access changed");
-    throw reason;
-  });
-}
+const tabs: { id: AnalyticsView; label: string }[] = [{ id: "overview", label: "Обзор" }, { id: "activity", label: "Активность" }, { id: "profiles", label: "Профили" }, { id: "sessions", label: "Сессии" }];
 function Help({ children }: { children: ReactNode }) {
   return <details className="analytics-help"><summary>Как считается</summary><div className="muted">{children}</div></details>;
 }
@@ -71,7 +63,7 @@ function Pagination({ offset, total, change, label }: { offset: number; total: n
   return <div className="analytics-pagination"><span>{total ? `${offset + 1}–${Math.min(offset + 50, total)} из ${total}` : "Нет записей"}</span><div className="actions"><button className="secondary" aria-label={`Предыдущие ${label}`} disabled={offset === 0} onClick={() => change(Math.max(0, offset - 50))}>Назад</button><button className="secondary" aria-label={`Следующие ${label}`} disabled={offset + 50 >= total} onClick={() => change(offset + 50)}>Далее</button></div></div>;
 }
 export function Analytics({ onLogout }: { onLogout: () => void }) {
-  const [view, setView] = useState<View>("overview");
+  const [view, setView] = useState<AnalyticsView>("overview");
   const [days, setDays] = useState(30);
   const [mode, setMode] = useState<ProfileMode | "">("");
   const [onlineOnly, setOnlineOnly] = useState(false);
@@ -81,21 +73,10 @@ export function Analytics({ onLogout }: { onLogout: () => void }) {
   const [chartMetric, setChartMetric] = useState<ChartMetric>("users");
   const [failureKey, setFailureKey] = useState("");
   const tabButtons = useRef<(HTMLButtonElement | null)[]>([]);
-  const query = new URLSearchParams({ days: String(view === "overview" ? 30 : days) }); if (mode) query.set("mode", mode);
-  const overviewQuery = query.toString();
-  const detailQuery = view === "overview" ? `${query}&online_only=true&limit=8&offset=0` : view === "profiles" ? `${query}&online_only=${onlineOnly}&limit=50&offset=${profileOffset}` : view === "sessions" ? `${query}&limit=50&offset=${sessionOffset}${selected ? `&profile_id=${selected.id}` : ""}` : "";
-  const key = `${view}:${overviewQuery}:${detailQuery}`;
-  const load = useMemo(() => async (signal: AbortSignal): Promise<Snapshot> => {
+  const { key, overviewQuery, detailQuery } = buildAnalyticsRequest({ view, days, mode, onlineOnly, profileOffset, sessionOffset, selected });
+  const load = useMemo(() => async (signal: AbortSignal): Promise<AnalyticsSnapshot> => {
     try {
-      if (view === "overview" || view === "profiles") {
-        const [overview, profiles] = await together([adminRequest(analyticsApi.overview(overviewQuery, signal)), adminRequest(analyticsApi.profiles(detailQuery, signal))]);
-        return { key, overview, profiles };
-      }
-      if (view === "sessions") {
-        const [overview, sessions] = await together([adminRequest(analyticsApi.overview(overviewQuery, signal)), adminRequest(analyticsApi.sessions(detailQuery, signal))]);
-        return { key, overview, sessions };
-      }
-      return { key, overview: await adminRequest(analyticsApi.overview(overviewQuery, signal)) };
+      return await loadAnalytics({ view, key, overviewQuery, detailQuery }, signal);
     } catch (reason) {
       if (!signal.aborted) setFailureKey(key);
       throw reason;
