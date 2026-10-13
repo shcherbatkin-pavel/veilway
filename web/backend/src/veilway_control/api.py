@@ -19,6 +19,7 @@ from .models import (
     utcnow,
 )
 from .auth_api import router as auth_router
+from .mobile_api import router as mobile_router
 from .analytics_api import router as analytics_router
 from .analytics_ingest import router as analytics_ingest_router
 from .profile_api import router as profile_router
@@ -45,6 +46,7 @@ router.include_router(profile_router, prefix="")
 router.include_router(crl_router)
 router.include_router(observability_router)
 router.include_router(auth_router)
+router.include_router(mobile_router)
 router.include_router(analytics_router)
 router.include_router(analytics_ingest_router)
 

@@ -1208,6 +1208,16 @@ fieldset:disabled {
   color:var(--accent);
   text-underline-offset:3px;
 }
+.connection-guide a.guide-download {
+  display:inline-block;
+  color:#12251e;
+  border-radius:9px;
+  padding:11px 17px;
+  font-size:13px;
+  font-weight:650;
+  text-decoration:none;
+}
+.connection-guide a.guide-download:hover { filter:brightness(1.12); }
 .guide-steps {
   padding-left:26px;
   margin-bottom:0;

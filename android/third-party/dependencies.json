@@ -1,0 +1,30 @@
+[
+  {
+    "name": "openvpn3",
+    "version": "3.11.7",
+    "root": "openvpn3-18edfae7e7fd8051c93bd4746ec69be91eb02dbb",
+    "url": "https://codeload.github.com/OpenVPN/openvpn3/tar.gz/18edfae7e7fd8051c93bd4746ec69be91eb02dbb",
+    "sha256": "94df957ac9782ce077b55dc4451fc7aa087ebfaaa26962fbb3fad7596e91d97a"
+  },
+  {
+    "name": "asio",
+    "version": "1.30.2",
+    "root": "asio-asio-1-30-2",
+    "url": "https://codeload.github.com/chriskohlhoff/asio/tar.gz/refs/tags/asio-1-30-2",
+    "sha256": "755bd7f85a4b269c67ae0ea254907c078d408cce8e1a352ad2ed664d233780e8"
+  },
+  {
+    "name": "lz4",
+    "version": "1.10.0",
+    "root": "lz4-1.10.0",
+    "url": "https://codeload.github.com/lz4/lz4/tar.gz/refs/tags/v1.10.0",
+    "sha256": "537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b"
+  },
+  {
+    "name": "openssl",
+    "version": "3.5.9",
+    "root": "openssl-45e844fa2a14ec92d146bd8f5778ac130b6625fb",
+    "url": "https://codeload.github.com/openssl/openssl/tar.gz/45e844fa2a14ec92d146bd8f5778ac130b6625fb",
+    "sha256": "f54250b21795bb01240f3f9b42c384868d04460e339e39275aaaf93487f2d903"
+  }
+]

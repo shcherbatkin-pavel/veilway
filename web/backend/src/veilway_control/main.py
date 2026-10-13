@@ -56,6 +56,7 @@ app.add_middleware(
 )
 app.add_middleware(ApiNoStoreMiddleware)
 app.add_middleware(AnalyticsBodyLimit)
+app.add_middleware(AnalyticsBodyLimit, limit=4096, prefix="/api/v1/mobile/", detail="mobile payload too large")
 app.add_exception_handler(RequestValidationError, safe_validation_error)
 app.include_router(router)
 

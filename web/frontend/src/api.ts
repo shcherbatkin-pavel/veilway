@@ -79,6 +79,7 @@ async function request<T>(
 
 export const api = {
   session: () => request<Session>("/api/v1/auth/session"),
+  approveMobile: (user_code: string, csrf: string) => request<void>("/api/v1/mobile/auth/approve", { method: "POST", body: JSON.stringify({ user_code }) }, csrf),
   logout: (csrf: string) =>
     request<void>("/api/v1/auth/logout", { method: "POST" }, csrf),
   vms: (signal?: AbortSignal) => request<VpnVm[]>("/api/v1/vpn-vms", { signal }),

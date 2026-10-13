@@ -3,6 +3,9 @@ WORKDIR /build
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY tsconfig.json tsconfig.app.json vite.config.ts index.html ./
+COPY android-release.json stage-android-release.mjs ./
+COPY android-release ./android-release
+RUN node stage-android-release.mjs --verify android-release
 COPY src ./src
 COPY tests ./tests
 RUN npm run test && npm run build
@@ -10,6 +13,7 @@ RUN npm run test && npm run build
 FROM caddy:2.9.1-alpine
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /build/dist /srv/veilway
+COPY --from=build /build/android-release /srv/veilway/downloads/android
 RUN addgroup -g 10001 veilway \
     && adduser -D -H -u 10001 -G veilway veilway \
     && chown -R 10001:10001 /srv/veilway /config /data
