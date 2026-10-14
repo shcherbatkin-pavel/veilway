@@ -8,9 +8,9 @@ if [[ "${1:-}" == '--download-gradle' ]]; then
 fi
 readonly gradle_cache="${GRADLE_USER_HOME:-${HOME}/.gradle}"
 shopt -s nullglob
-cached_gradle=("${gradle_cache}/wrapper/dists/gradle-8.13-bin"/*/gradle-8.13/bin/gradle)
+cached_gradle=("${gradle_cache}/wrapper/dists/gradle-9.5.0-bin"/*/gradle-9.5.0/bin/gradle)
 if [[ ${#cached_gradle[@]} -eq 0 && "${gradle_download}" != true ]]; then
-    printf '%s\n' 'Gradle 8.13 is not cached. Pass --download-gradle to permit its checksum-verified download.' >&2
+    printf '%s\n' 'Gradle 9.5.0 is not cached. Pass --download-gradle to permit its checksum-verified download.' >&2
     exit 2
 fi
 if [[ -n "${JAVA_HOME:-}" ]]; then
