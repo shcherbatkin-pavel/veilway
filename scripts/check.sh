@@ -9,7 +9,7 @@ readonly REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 cd -- "${REPOSITORY_ROOT}"
 
 shell_files=(
-    android/gradlew
+    android/gradlew scripts/lib/diagnostic_inputs.sh scripts/lib/data_channel_checks.sh
     scripts/acceptance-ubuntu-direct scripts/check.sh
     scripts/container-smoke.sh scripts/test-profile-security.sh scripts/diagnose-aws-container-client
     scripts/diagnose-aws-data-channel scripts/test-control-plane.sh scripts/test-pki-service.sh scripts/test-profile-api.sh scripts/test-crl-mount.sh scripts/test-profile-panel.sh scripts/veilway-pki
@@ -51,6 +51,7 @@ python3 -m py_compile \
     scripts/test-pki-benchmark.py \
     scripts/test-pki-expiry.py \
     scripts/test-operator-tools.py \
+    scripts/test-operator-policy.py \
     scripts/check-public-diff.py \
     scripts/render-inventory.py \
     scripts/review-aws-direct-plan.py \
@@ -70,6 +71,7 @@ python3 -m py_compile "${control_python_files[@]}" "${operator_python_files[@]}"
 python3 scripts/test-pki-expiry.py
 python3 scripts/test-pki-benchmark.py
 python3 scripts/test-operator-tools.py
+python3 scripts/test-operator-policy.py
 python3 scripts/test-profile-rollout.py
 python3 scripts/test-api-web-release.py
 valid_result="$(printf '%s\n' '{"vpc_cidr":"10.241.1.0/24","vpn_cidr":"10.242.10.0/24","future_multihop_cidr":"10.242.30.0/24","transit_cidr":"10.242.40.0/29","operator_cidrs_json":"[\"198.51.100.10/32\"]"}' | scripts/validate-network-plan.py)"

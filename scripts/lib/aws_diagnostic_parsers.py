@@ -17,7 +17,10 @@ def active_tunnel_count():
     import json
     import sys
 
-    links = json.load(sys.stdin)
+    try:
+        links = json.load(sys.stdin)
+    except (json.JSONDecodeError, TypeError):
+        raise SystemExit(1)
     count = 0
     for link in links:
         name = link.get("ifname", "")
@@ -31,7 +34,10 @@ def active_tunnel_interface():
     import json
     import sys
 
-    links = json.load(sys.stdin)
+    try:
+        links = json.load(sys.stdin)
+    except (json.JSONDecodeError, TypeError):
+        raise SystemExit(1)
     matches = []
     for link in links:
         name = link.get("ifname", "")
@@ -323,7 +329,104 @@ def read_state():
     print(document["data_path"])
 
 
+def container_has_vpn_address():
+    import ipaddress
+    import json
+    import sys
+
+    network = ipaddress.ip_network(sys.argv[1])
+    try:
+        links = json.load(sys.stdin)
+    except (json.JSONDecodeError, TypeError):
+        raise SystemExit(1)
+    matches = {
+        ipaddress.ip_address(address["local"])
+        for link in links
+        for address in link.get("addr_info", [])
+        if address.get("family") == "inet" and address.get("local")
+        and ipaddress.ip_address(address["local"]) in network
+    }
+    raise SystemExit(0 if len(matches) == 1 else 1)
+
+
+def container_routes_dns_through_tunnel():
+    import json
+    import sys
+
+    try:
+        routes = json.load(sys.stdin)
+    except (json.JSONDecodeError, TypeError):
+        raise SystemExit(1)
+    if len(routes) != 1:
+        raise SystemExit(1)
+    device = routes[0].get("dev", "")
+    raise SystemExit(0 if device.startswith("tun") else 1)
+
+
+def classify_openvpn_failure():
+    import sys
+
+    try:
+        text = sys.stdin.buffer.read().decode("utf-8", errors="replace").lower()
+    except OSError:
+        print("isolated OpenVPN failure category: unavailable")
+        raise SystemExit(0)
+
+    stages = (
+        ("process startup", ("openvpn 2.6.",)),
+        ("outer UDP transport", ("udp link remote", "preserving recently used remote")),
+        ("TLS peer authentication", ("peer connection initiated", "control channel: tlsv1.3")),
+        ("server configuration PUSH", ("push_reply", "options imported")),
+        ("TUN device setup", ("tun/tap device", "net_iface_up")),
+        ("data-channel initialization", ("data channel: cipher",)),
+        ("completed initialization", ("initialization sequence completed",)),
+    )
+    last_stage = "no OpenVPN startup marker"
+    for label, markers in stages:
+        if any(marker in text for marker in markers):
+            last_stage = label
+    print(f"isolated OpenVPN last reached stage: {last_stage}")
+
+    categories = (
+        ("configuration option rejected", (
+            "options error", "unrecognized option", "failed to apply push options")),
+        ("TUN device unavailable", (
+            "cannot open tun", "error opening tun", "tunsetiff")),
+        ("container permission denied", ("operation not permitted", "permission denied")),
+        ("IPv4 or IPv6 interface configuration failed", (
+            "rtnetlink answers", "netlink error", "ip route add command failed",
+            "ip -6 addr add failed", "external program exited with error status")),
+        ("certificate or private-key loading failed", (
+            "cannot load certificate", "cannot load inline certificate",
+            "cannot pre-load keyfile", "error parsing private key",
+            "private key password verification failed")),
+        ("certificate verification failed", ("verify error", "certificate verify failed")),
+        ("data-cipher negotiation failed", (
+            "data channel cipher negotiation failed", "no shared cipher")),
+        ("tls-crypt-v2 processing failed", (
+            "tls-crypt-v2 error", "cannot unwrap wrapped client key",
+            "failed to unwrap", "invalid tls-crypt-v2")),
+        ("TLS control-channel failure", ("tls error", "tls handshake failed")),
+        ("outer network unreachable", ("network is unreachable", "no route to host")),
+        ("connection timeout", ("inactivity timeout", "ping-restart")),
+    )
+    for label, markers in categories:
+        if any(marker in text for marker in markers):
+            print(f"isolated OpenVPN failure category: {label}")
+            break
+    else:
+        if not text.strip():
+            print("isolated OpenVPN failure category: empty protected log")
+        elif "initialization sequence completed" in text:
+            print("isolated OpenVPN failure category: exited after initialization")
+        else:
+            print("isolated OpenVPN failure category: unclassified")
+
+
 PARSERS = {
+    "classify_openvpn_failure": classify_openvpn_failure,
+    "container_has_vpn_address": container_has_vpn_address,
+    "container_routes_dns_through_tunnel": container_routes_dns_through_tunnel,
     "read_state": read_state,
     "write_state": write_state,
     "validate_ipv4": validate_ipv4,

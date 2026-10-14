@@ -89,8 +89,68 @@ class ParserTests(unittest.TestCase):
     def test_unknown_parser(self):
         self.run_parser("missing", "", code=2)
 
+    def test_container_predicates_keep_address_and_route_contracts(self):
+        links=[{"addr_info":[{"family":"inet","local":"10.242.20.2"}]}]
+        self.run_parser("container_has_vpn_address",links,"10.242.20.0/24")
+        self.run_parser("container_has_vpn_address",links*2,"10.242.20.0/24")
+        for invalid in ([],"bad-json",[{"addr_info":[{"family":"inet","local":"192.0.2.1"}]}]):
+            self.run_parser("container_has_vpn_address",invalid,"10.242.20.0/24",code=1)
+        self.run_parser("container_routes_dns_through_tunnel",[{"dev":"tun0"}])
+        for invalid in ([],[{"dev":"eth0"}],[{"dev":"tun0"}]*2,"bad-json"):
+            self.run_parser("container_routes_dns_through_tunnel",invalid,code=1)
+
+    def test_failure_classification_only_emits_fixed_categories(self):
+        text='OpenVPN 2.6. synthetic-private-address\nTLS Error: synthetic-private-material\n'
+        output=self.run_parser("classify_openvpn_failure",text)
+        self.assertIn('process startup',output)
+        self.assertIn('TLS control-channel failure',output)
+        self.assertNotIn('synthetic-private',output)
+        self.assertIn('empty protected log',self.run_parser("classify_openvpn_failure",''))
+
 
 class OperatorContracts(unittest.TestCase):
+    def test_counter_report_boundaries_without_running_diagnostic_commands(self):
+        observations=['probed','1','2','3','4','10','10','1','true','true','classic-tun']
+        counters=['10','20','11','21','30','40','50','60']
+        flags=['false','false','false','false','false','false','false','50','30']
+        def report(state=observations, numbers=counters, options=flags):
+            return subprocess.run(['bash','-c',
+                'set -euo pipefail; source "$1"; shift; state_values=("${@:1:11}"); shift 11; report_data_channel_checks state_values "$@"',
+                'counter-test',str(ROOT/'scripts/lib/data_channel_checks.sh'),*state,*numbers,*options],
+                capture_output=True,text=True)
+        result=report()
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertNotIn('FAILED',result.stdout)
+        for index,value,expected in [(5,'9','client sent packets into TUN: FAILED'),
+            (6,'9','client emitted UDP datagrams after tunnel traffic: FAILED'),
+            (7,'0','client TUN received reply packets: FAILED'),(8,'false','AWS tunnel gateway ping: FAILED'),
+            (9,'false','AWS outer endpoint route or source: FAILED')]:
+            state=observations.copy();state[index]=value
+            result=report(state=state)
+            self.assertEqual(result.returncode,1,result.stderr)
+            self.assertIn(expected,result.stdout)
+        for after,expected in [('51','only sparse OpenVPN UDP'),('50','no OpenVPN UDP')]:
+            numbers=counters.copy();numbers[7]=after
+            result=report(numbers=numbers)
+            self.assertEqual(result.returncode,1)
+            self.assertIn(expected,result.stdout)
+        options=flags.copy();options[0]='true'
+        result=report(options=options)
+        self.assertEqual(result.returncode,1)
+        self.assertIn('existing VPN tunnel: FAILED',result.stdout)
+
+    def test_endpoint_reader_accepts_one_literal_value_and_rejects_duplicates(self):
+        with tempfile.TemporaryDirectory(prefix='veilway-endpoint-reader-') as directory:
+            path=Path(directory)/'synthetic-input'
+            for content,code,expected in [('aws_direct_endpoint=192.0.2.1\n',0,'192.0.2.1\n'),
+                ('aws_direct_endpoint=${HOME}\n',0,'${HOME}\n'),
+                ('aws_direct_endpoint=192.0.2.1\naws_direct_endpoint=192.0.2.2\n',1,''),('',1,'')]:
+                path.write_text(content)
+                result=subprocess.run(['bash','-c','set -euo pipefail; source "$1"; read_aws_endpoint "$2"',
+                    'endpoint-test',str(ROOT/'scripts/lib/diagnostic_inputs.sh'),str(path)],capture_output=True,text=True)
+                self.assertEqual(result.returncode,code,result.stderr)
+                self.assertEqual(result.stdout,expected)
+
     def test_cli_rejections_do_not_require_private_inputs(self):
         temporary = tempfile.TemporaryDirectory(prefix="veilway-cli-contract-")
         self.addCleanup(temporary.cleanup)
@@ -105,6 +165,7 @@ class OperatorContracts(unittest.TestCase):
             ("diagnose-aws-data-channel", ["invalid"], 1, "Usage:"),
             ("review-aws-direct-plan.py", ["--invalid"], 2, "usage:"),
             ("review-yandex-multihop-plan.py", ["--invalid"], 2, "usage:"),
+            ("render-inventory.py", ["--invalid"], 1, "usage:"),
             ("test-control-plane.sh", [], 2, "Usage:"),
         ):
             with self.subTest(command=command, args=args):
@@ -115,7 +176,7 @@ class OperatorContracts(unittest.TestCase):
                 self.assertIn(message, result.stdout + result.stderr)
 
     def test_modules_only_define_functions(self):
-        modules = sorted((ROOT / "scripts/lib/pki").glob("*.sh"))
+        modules = sorted((ROOT / "scripts/lib/pki").glob("*.sh")) + [ROOT / "scripts/lib/diagnostic_inputs.sh", ROOT / "scripts/lib/data_channel_checks.sh"]
         with tempfile.TemporaryDirectory(prefix="veilway-source-test.") as directory:
             result = subprocess.run(
                 ["bash", "-c", 'set -euo pipefail; for module in "$@"; do source "$module"; done', "source-test", *map(str, modules)],
