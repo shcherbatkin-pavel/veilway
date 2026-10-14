@@ -1,0 +1,44 @@
+{
+  "ddl": "97aa0dc5f722861f895125aad8af186bec7bbea949d6ff4f7fe16251d32f2862",
+  "defaults": "3838b012713708002306e73b6a8405f365bbe4b77aa63a0d6818dd76adf1c7e3",
+  "registration": [
+    "users",
+    "user_sessions",
+    "oauth_login_attempts",
+    "google_admin_binding",
+    "vpn_profiles",
+    "profile_jobs",
+    "profile_audit_events",
+    "vpn_vms",
+    "vm_heartbeats",
+    "restart_jobs",
+    "restart_targets",
+    "crl_publications",
+    "crl_agents",
+    "crl_sync_state",
+    "analytics_agents",
+    "analytics_sources",
+    "profile_ownership",
+    "vpn_sessions",
+    "analytics_receipts",
+    "profile_usage",
+    "analytics_owners",
+    "analytics_daily_usage",
+    "analytics_coverage"
+  ],
+  "relationships": "2bda251eff65da2304a0357f1989ccba1bda4255cabc8194a1b64d982e4a1c8b",
+  "vm_configuration": {
+    "aws-direct": [
+      "aws",
+      1
+    ],
+    "yc-direct": [
+      "yandex",
+      2
+    ]
+  },
+  "vm_slugs": [
+    "aws-direct",
+    "yc-direct"
+  ]
+}

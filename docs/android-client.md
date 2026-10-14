@@ -1,5 +1,9 @@
 # Android-клиент Veilway: сборка и пилот
 
+Актуальные слияния, автоматическая и отложенная ручная приёмка —
+в [status.md](status.md). Датированные результаты старых пилотов ниже
+сохранены как история; локальный 0.1.3 и раздача 0.1.2 в панели — разные состояния.
+
 Нативный клиент `ru.veilway.android` работает на Android 10+ (API 29), ARM64
 и x86_64. Kotlin/Compose отвечает за интерфейс, OpenVPN 3 Core через JNI —
 за протокол, Android VpnService — за выбор приложений. Профили и токен
@@ -18,7 +22,7 @@ ViewModel в `MobileSession.kt`, поиск установленных прил�
 ## Сборка на Linux
 
 Нужны JDK 17+ (проверено с 21), Python 3.12+, curl, Perl, make, Android SDK:
-platform 35, build-tools 35.0.0, NDK 27.2.12479018, CMake 3.22.1. Подготовка
+Platform 37, Build Tools 36.0.0, NDK 27.2.12479018, CMake 3.22.1. Подготовка
 SDK — явный шаг разработчика; скрипты не устанавливают системные пакеты.
 Укажите SDK через `ANDROID_HOME` или игнорируемый `android/local.properties`.
 
@@ -38,7 +42,7 @@ python3 scripts/package-android-pilot.py --sdk-root /path/to/sdk
 кеша. Не используйте `--write-locks` или `--write-verification-metadata` для
 обычной сборки: обновление зависимостей требует отдельного ревью.
 
-### Разбор Android lint
+### История разбора Android lint (до 0.1.3-pilot)
 
 До обновления зависимостей разбор исходных 11 предупреждений оставил 0 ошибок и
 7 предупреждений `GradleDependency`. Проверки не отключены, baseline не добавлен.
@@ -68,9 +72,9 @@ python3 scripts/package-android-pilot.py --sdk-root /path/to/sdk
 | test.ext:junit | 1.2.1 | 1.3.0 |
 | test:runner | 1.6.2 | 1.7.0 |
 
-Обновление выполняется отдельным изменением: проверить требования к compileSdk,
-AGP/Kotlin и совместимость Compose, затем обновить lockfile и метаданные проверки,
-выполнить unit/lint и инструментальные тесты входа и VPN на эмуляторе.
+Этот список относится к состоянию до PR #24. Обновление семи зависимостей
+и инструментальная приёмка 0.1.3 описаны ниже; новые обновления требуют
+отдельного изменения lockfile/метаданных и проверок совместимости.
 Описание правил: [GradleDependency](https://googlesamples.github.io/android-custom-lint-rules/checks/GradleDependency.md.html),
 [stopService](https://developer.android.com/reference/android/content/Context#stopService(android.content.Intent)),
 [разрешения ADB shell](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/packages/Shell/AndroidManifest.xml).
@@ -136,7 +140,12 @@ Always-on отключён. Неподдерживаемые/внешние ко
 
 ## Проверки и развёртывание
 
-Запустите `./scripts/check.sh`, тесты backend/frontend и Android unit/lint.
+Для полного локального набора запустите `./scripts/test-all.sh --build`
+по [матрице](test-matrix.md). Он включает backend/frontend и Android unit/lint.
+Общий fixture `web/backend/tests/fixtures/client-contract.properties`
+используется Python/TypeScript/Kotlin-проверками. Gradle копирует только этот
+файл в JVM test resources; упаковщик включает его в архив соответствующих
+исходников. APK runtime, enum-поля и формат API не меняются.
 PostgreSQL-тесты `test_mobile_postgres.py` проверяют конкурентный одноразовый
 обмен и отсутствие потерянных обновлений лимита на отдельной тестовой БД.
 

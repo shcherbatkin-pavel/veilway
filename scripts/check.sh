@@ -55,6 +55,7 @@ python3 -m py_compile \
     scripts/test-operator-tools.py \
     scripts/test-operator-policy.py \
     scripts/check-public-diff.py \
+    scripts/check-doc-links.py \
     scripts/render-inventory.py \
     scripts/review-aws-direct-plan.py \
     scripts/review-yandex-multihop-plan.py \
@@ -152,6 +153,7 @@ fi
 printf '%s\n' '[7/9] Frontend build inputs'
 test -f web/frontend/package-lock.json
 if [[ -d web/frontend/node_modules ]]; then
+    node scripts/check-client-contract.mjs
     npm --prefix web/frontend run typecheck
     npm --prefix web/frontend run test
 else
@@ -185,6 +187,7 @@ fi
 printf '%s\n' '[9/9] Diff whitespace and changed public-file credential scan'
 git diff --check
 python3 scripts/check-public-diff.py
+python3 scripts/check-doc-links.py
 
 printf '%s\n' 'Container smoke tests are separate: scripts/test-control-plane.sh --build, scripts/test-pki-service.sh --build, scripts/pki-smoke.py, scripts/container-smoke.sh'
 printf '%s\n' "${PROGRAM_NAME}: all available static checks passed"

@@ -6,6 +6,10 @@ plugins {
 }
 val signingFile = rootProject.file("../private/android/signing.properties")
 val signing = Properties().apply { if (signingFile.exists()) signingFile.inputStream().use { load(it) } }
+val clientContractResources by tasks.registering(Sync::class) {
+    from(rootProject.file("../web/backend/tests/fixtures/client-contract.properties"))
+    into(layout.buildDirectory.dir("generated/client-contract"))
+}
 android {
     namespace = "ru.veilway.android"
     compileSdk = 37
@@ -39,6 +43,12 @@ android {
     buildFeatures { compose = true; buildConfig = true }
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
     packaging { resources.excludes += setOf("META-INF/AL2.0", "META-INF/LGPL2.1") }
+    sourceSets.getByName("test").resources.directories.add(
+        layout.buildDirectory.dir("generated/client-contract").get().asFile.absolutePath
+    )
+}
+tasks.matching { it.name.startsWith("process") && it.name.endsWith("UnitTestJavaRes") }.configureEach {
+    dependsOn(clientContractResources)
 }
 dependencies {
     implementation("androidx.core:core-ktx:1.19.1")

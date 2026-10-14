@@ -32,7 +32,7 @@ def main():
     files = ["LICENSE", "android/settings.gradle.kts", "android/build.gradle.kts", "android/gradle.properties", "android/gradlew", "android/gradlew.bat",
         "android/app/build.gradle.kts", "android/app/gradle.lockfile", "android/third-party/dependencies.json", "android/third-party/NOTICE.md",
         "scripts/prepare-android-native.py", "scripts/android-pilot-key.py", "scripts/package-android-pilot.py", "scripts/test-android-tunnel.py",
-        "docs/android-client.md"]
+        "docs/android-client.md", "web/backend/tests/fixtures/client-contract.properties"]
     dependencies = json.loads((ROOT / "android/third-party/dependencies.json").read_text())
     for dep in dependencies:
         archive = ROOT / "android/third-party/sources" / (dep["name"] + ".tar.gz")

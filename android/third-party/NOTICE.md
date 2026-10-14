@@ -4,7 +4,7 @@ Veilway's Kotlin/JNI adapter remains under the repository MIT license. OpenVPN
 3 Core is used under **MPL-2.0**, one of its upstream licensing alternatives.
 Its original copyright/SPDX notices remain intact. No upstream source is
 patched. The full, checksum-pinned source archives accompany the pilot APK in
-`veilway-0.1.0-pilot-sources.tar.gz`; offer this source bundle with every APK.
+`veilway-<version>-sources.tar.gz`; offer the matching source bundle with every APK.
 
 Native versions, origins and SHA-256 digests are in `dependencies.json`:
 

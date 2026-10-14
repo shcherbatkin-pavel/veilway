@@ -7,6 +7,9 @@
 ./scripts/test-all.sh --build
 ```
 
+Последние результаты и незавершённые ручные шаги — в [status.md](status.md).
+Количество тестов в датированных планах не является текущим размером набора.
+
 Запуск требует существующих Docker/Compose, Python 3, Node/npm, Java,
 Ansible и Terraform; frontend `node_modules`, настроенного Android SDK,
 кеша закреплённого Gradle/Android-зависимостей и локально подготовленных providers
@@ -23,6 +26,7 @@ Runner не устанавливает инструменты и не иници
 | Уровень | Содержание | Отдельная команда |
 | --- | --- | --- |
 | Static/unit операторских инструментов | Bash/Python, Ansible syntax, Terraform format/validate, политики планов/inventory, релиз, агенты, ignore policy и credential scan | `./scripts/check.sh` |
+| Общий контракт клиентов | Один backend fixture, Pydantic/SQL/HTTP, TypeScript union-типы и потребители, Kotlin profile/polling | `node scripts/check-client-contract.mjs`; Python и Kotlin входят в строки ниже |
 | Frontend unit/build | HTTP/CSRF, загрузка и состояние аналитики, геометрия графика, действия и повторы профилей, production build | `npm --prefix web/frontend test` и `npm --prefix web/frontend run build` |
 | Android JVM/lint | Вход, отмена, поздние ответы, профильная политика, lint | `cd android && ./gradlew --offline testDebugUnitTest lintDebug` |
 | Backend integration | Полный набор SQLite + PostgreSQL, mobile concurrency, accounting, реальные синтетические PKI/socket и CRL-agent | `./scripts/test-profile-security.sh --build` |
@@ -56,3 +60,10 @@ Android JNI/TUN и реальный Google-вход остаются отдел�
 и использует синтетический локальный сервер. Runner не запускает эмулятор,
 не подключает реальные устройства и не подтверждает ручную проверку приложения.
 CI и развёртывание не добавляются этим рефакторингом.
+
+`check.sh` также проверяет относительные ссылки и Markdown-якоря публичных
+документов через `python3 scripts/check-doc-links.py`. Внешние URL не загружаются;
+закрытые/игнорируемые документы и операторские файлы не читаются.
+ORM baseline из `409a2ff` проверяется отдельными процессами: прежние импорты,
+порядок регистрации, mapper relationships/defaults и DDL SQLite/PostgreSQL.
+PostgreSQL migrations дополнительно требуют пустой Alembic metadata diff.
