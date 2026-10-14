@@ -9,13 +9,12 @@ import os
 import shutil
 import subprocess
 import tempfile
-import uuid
 from pathlib import Path
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = REPOSITORY_ROOT / "web/compose.yaml"
-POSTGRES_IMAGE = "postgres:17.4-alpine"
+from lib.test_resources import POSTGRES_IMAGE, test_name, smoke_directories, smoke_cleanup
 
 
 def run(command: list[str], *, environment: dict[str, str], stdin: object = None) -> None:
@@ -29,10 +28,10 @@ def run(command: list[str], *, environment: dict[str, str], stdin: object = None
     )
 
 
-def main() -> None:
+def main(*, build: bool = True) -> None:
     if shutil.which("docker") is None:
         raise SystemExit("docker is required")
-    project = f"veilway-control-pg-smoke-{uuid.uuid4().hex[:8]}"
+    project = test_name("veilway-control-pg-smoke")
     compose = [
         "docker",
         "compose",
@@ -43,14 +42,7 @@ def main() -> None:
     ]
     with tempfile.TemporaryDirectory(prefix="veilway-pg-smoke-") as directory:
         root = Path(directory)
-        secret_root = root / "secrets"
-        data_root = root / "data"
-        runtime_root = root / "run"
-        pki_runtime_root = root / "pki-run"
-        secret_root.mkdir(mode=0o700)
-        data_root.mkdir(mode=0o777)
-        runtime_root.mkdir(mode=0o777)
-        pki_runtime_root.mkdir(mode=0o755)
+        secret_root, data_root, runtime_root, pki_runtime_root = smoke_directories(root)
         test_secrets = {
             "postgres_password": "test-postgres-password-value",
             "aws_access_key_id": "test-access-key-id-value",
@@ -75,8 +67,9 @@ def main() -> None:
                 "VEILWAY_PKI_RUNTIME_ROOT": str(pki_runtime_root),
             }
         )
-        try:
-            run(compose + ["build", "api"], environment=environment)
+        with smoke_cleanup(compose, root, data_root, environment, REPOSITORY_ROOT):
+            if build:
+                run(compose + ["build", "api"], environment=environment)
             run(
                 compose + ["up", "--detach", "--wait", "db"],
                 environment=environment,
@@ -172,31 +165,7 @@ VALUES ('yc-direct',decode(repeat('ab',32),'hex'),4099,repeat('b',64),now()+inte
                 raise RuntimeError("synthetic PostgreSQL recovery metadata did not match")
             print("temporary PostgreSQL dump/restore preserved binding, revoked profile and CRL acknowledgement")
             print("temporary PostgreSQL migration/sync passed")
-        finally:
-            subprocess.run(
-                compose + ["down", "--volumes", "--remove-orphans"],
-                cwd=REPOSITORY_ROOT,
-                env=environment,
-                check=False,
-            )
-            postgres_data = data_root / "postgres"
-            if postgres_data.exists():
-                subprocess.run(
-                    [
-                        "docker",
-                        "run",
-                        "--rm",
-                        "--volume",
-                        f"{root}:/cleanup",
-                        POSTGRES_IMAGE,
-                        "rm",
-                        "-rf",
-                        "--",
-                        "/cleanup/data/postgres",
-                    ],
-                    cwd=REPOSITORY_ROOT,
-                    check=True,
-                )
+
 
 
 if __name__ == "__main__":
