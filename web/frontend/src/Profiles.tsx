@@ -1,17 +1,16 @@
-import { FormEvent, useCallback, useMemo, useRef, useState } from "react";
-import { ApiError, errorMessage, Profile, ProfileJob, profilesApi, RegisteredUser, Session, together } from "./api";
+import { useCallback, useMemo, useState } from "react";
+import { Profile, ProfileJob, profilesApi, RegisteredUser, Session, together } from "./api";
 import { ProfileRow } from "./ProfileRow";
-import { ProfileCreateForm, ProfileDraft } from "./ProfileCreateForm";
-import { ProfileActionDialog, ProfileAction } from "./ProfileActionDialog";
+import { ProfileCreateForm } from "./ProfileCreateForm";
+import { ProfileActionDialog } from "./ProfileActionDialog";
 import { indexProfiles } from "./profileIndexes";
 import { effectiveStatus } from "./profilePresentation";
 import { ProfileFilters } from "./ProfileFilters";
 import { ProfileFilterValues, profileOwnerLabel, selectProfiles } from "./profileSelection";
+import { useProfileActions } from "./useProfileActions";
 import { useResource } from "./useResource";
 
 type Data = [Profile[], ProfileJob[], RegisteredUser[]];
-const newDraft = (): ProfileDraft => ({ device_name: "", mode: "yc-direct", owner_id: "", days: "365", key: crypto.randomUUID() });
-
 export function Profiles({ session, onLogout, onlyOwner }: { session: Session; onLogout: () => void; onlyOwner?: string }) {
   const admin = session.role === "ADMIN";
   const load = useCallback((signal: AbortSignal): Promise<Data> => together([
@@ -21,15 +20,9 @@ export function Profiles({ session, onLogout, onlyOwner }: { session: Session; o
   const [filters, setFilters] = useState<ProfileFilterValues>({
     query: "", status: "", mode: "", owner: onlyOwner ?? "",
   });
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [busy, setBusy] = useState("");
-  const lock = useRef(false);
-  const [action, setAction] = useState<ProfileAction | null>(null);
-  const [value, setValue] = useState("");
-  const [formOpen, setFormOpen] = useState(false);
-  const [draft, setDraft] = useState<ProfileDraft>(() => newDraft());
-  const [formError, setFormError] = useState("");
+  const { error, notice, busy, action, value, formOpen, draft, formError,
+    setAction, setValue, setFormOpen, setDraft, setFormError, download, openAction, mutate, create } =
+    useProfileActions({ session, onLogout, refresh });
   const profiles = data?.[0] ?? [], users = data?.[2] ?? [];
   const indexes = useMemo(() => indexProfiles(data?.[0] ?? [], data?.[1] ?? [], data?.[2] ?? []), [data]);
   const ownerName = (id: string | null) => profileOwnerLabel(id, indexes.usersById);
@@ -37,53 +30,6 @@ export function Profiles({ session, onLogout, onlyOwner }: { session: Session; o
     admin, onlyOwner, usersById: indexes.usersById, now: Date.now(),
   });
 
-  function failed(reason: unknown, download = false) {
-    if (reason instanceof ApiError && reason.status === 401) onLogout();
-    else setError(errorMessage(reason, download));
-  }
-  async function download(profile: Profile) {
-    if (lock.current) return;
-    lock.current = true; setBusy(profile.id); setError(""); setNotice("");
-    try { await profilesApi.download(profile.id, session.csrf_token); setNotice(`Скачивание «${profile.device_name}» началось.`); }
-    catch (reason) { failed(reason, true); }
-    finally { lock.current = false; setBusy(""); }
-  }
-  function openAction(kind: ProfileAction["kind"], profile: Profile) {
-    setAction({ kind, profile, key: crypto.randomUUID() }); setValue(kind === "rename" ? profile.device_name : ""); setFormError("");
-  }
-  async function mutate(event: FormEvent) {
-    event.preventDefault();
-    if (!action || lock.current) return;
-    if (action.kind === "revoke" && effectiveStatus(action.profile) === "expired") {
-      setFormError("Срок действия профиля истёк. Отзыв недоступен.");
-      return;
-    }
-    lock.current = true; setBusy(action.profile.id); setFormError(""); setNotice("");
-    try {
-      if (action.kind === "rename") await profilesApi.rename(action.profile.id, value.trim(), session.csrf_token);
-      if (action.kind === "assign") await profilesApi.assign(action.profile.id, value, session.csrf_token);
-      if (action.kind === "revoke") await profilesApi.revoke(action.profile.id, action.key, session.csrf_token);
-      setNotice(action.kind === "revoke" ? "Отзыв принят. Ожидаем применения на VPN-узле." : "Изменения сохранены.");
-      setAction(null); await refresh();
-    } catch (reason) { if (reason instanceof ApiError && reason.status === 401) onLogout(); else setFormError(errorMessage(reason)); }
-    finally { lock.current = false; setBusy(""); }
-  }
-  async function create(event: FormEvent) {
-    event.preventDefault();
-    if (lock.current) return;
-    const payload = draft.sent ?? { idempotency_key: draft.key, device_name: draft.device_name.trim(), mode: draft.mode, duration_days: Number(draft.days), ...(draft.owner_id ? { owner_id: draft.owner_id } : {}) };
-    lock.current = true; setBusy("create"); setFormError(""); setDraft(current => ({ ...current, sent: payload }));
-    try {
-      await profilesApi.create(payload, session.csrf_token); setFormOpen(false); setDraft(newDraft());
-      setNotice("Профиль выпускается. Его статус обновится автоматически."); await refresh();
-    } catch (reason) {
-      if (reason instanceof ApiError && reason.status === 401) onLogout();
-      else {
-        setFormError(errorMessage(reason));
-        if (reason instanceof ApiError && [403, 422].includes(reason.status)) setDraft(current => ({ ...current, sent: undefined }));
-      }
-    } finally { lock.current = false; setBusy(""); }
-  }
   return <>
     <header className="page-heading"><div><p className="eyebrow">{admin ? "ДОСТУП К VPN" : "ЛИЧНЫЙ КАБИНЕТ"}</p><h1>{admin ? "Профили" : "Мои профили"}<span className="count">{scoped.length}</span></h1><p className="muted">{admin ? onlyOwner ? `Профили пользователя ${ownerName(onlyOwner)}` : "Создавайте доступ и управляйте профилями устройств." : "Ваши подключения, сроки действия и файлы настройки."}</p></div><div className="actions"><button className="ghost" onClick={() => void refresh()}>Обновить</button>{admin && <button className="primary" onClick={() => { setFormError(""); setFormOpen(true); }}>＋ Создать профиль</button>}</div></header>
     <div className="summary"><div><span>Всего профилей</span><strong>{counts.total}</strong></div><div><span>Активные</span><strong className="accent">{counts.active}</strong></div><div><span>Ожидают обновления</span><strong>{counts.pending}</strong></div></div>

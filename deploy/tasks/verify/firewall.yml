@@ -1,0 +1,171 @@
+---
+- name: Validate the installed nftables file
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/nft
+      - --check
+      - --file
+      - /etc/nftables.conf
+  changed_when: false
+
+- name: Require the OpenVPN ingress rule to use its named counter
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/grep
+      - --fixed-strings
+      - --quiet
+      - --
+      - counter name openvpn_ingress accept
+      - /etc/nftables.conf
+  changed_when: false
+
+- name: Require the raw OpenVPN counter before conntrack validation
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - >-
+        from pathlib import Path;
+        text = Path('/etc/nftables.conf').read_text(encoding='utf-8');
+        raw = 'udp dport {{ veilway_openvpn_port }} counter name openvpn_ingress_raw';
+        invalid = 'ct state invalid drop';
+        accepted = 'udp dport {{ veilway_openvpn_port }} counter name openvpn_ingress accept';
+        raise SystemExit(0 if text.index(raw) < text.index(invalid) <
+        text.index(accepted) else 1)
+  changed_when: false
+  no_log: true
+
+- name: Read only the active OpenVPN ingress counter
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/nft
+      - --json
+      - list
+      - counter
+      - inet
+      - veilway_filter
+      - openvpn_ingress
+  register: veilway_openvpn_ingress_counter_json
+  changed_when: false
+  no_log: true
+
+- name: Select the active OpenVPN ingress counter without displaying it
+  ansible.builtin.set_fact:
+    veilway_openvpn_ingress_counters: >-
+      {{ (veilway_openvpn_ingress_counter_json.stdout |
+      from_json).nftables |
+      selectattr('counter', 'defined') |
+      map(attribute='counter') |
+      selectattr('family', 'equalto', 'inet') |
+      selectattr('table', 'equalto', 'veilway_filter') |
+      selectattr('name', 'equalto', 'openvpn_ingress') | list }}
+  no_log: true
+
+- name: Require one valid active OpenVPN ingress counter
+  ansible.builtin.assert:
+    that:
+      - veilway_openvpn_ingress_counters | length == 1
+      - veilway_openvpn_ingress_counters[0].packets is integer
+      - veilway_openvpn_ingress_counters[0].bytes is integer
+      - veilway_openvpn_ingress_counters[0].packets >= 0
+      - veilway_openvpn_ingress_counters[0].bytes >= 0
+    quiet: true
+  no_log: true
+
+- name: Read only the active raw OpenVPN ingress counter
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/nft
+      - --json
+      - list
+      - counter
+      - inet
+      - veilway_filter
+      - openvpn_ingress_raw
+  register: veilway_openvpn_ingress_raw_counter_json
+  changed_when: false
+  no_log: true
+
+- name: Select the active raw OpenVPN ingress counter without displaying it
+  ansible.builtin.set_fact:
+    veilway_openvpn_ingress_raw_counters: >-
+      {{ (veilway_openvpn_ingress_raw_counter_json.stdout |
+      from_json).nftables |
+      selectattr('counter', 'defined') |
+      map(attribute='counter') |
+      selectattr('family', 'equalto', 'inet') |
+      selectattr('table', 'equalto', 'veilway_filter') |
+      selectattr('name', 'equalto', 'openvpn_ingress_raw') | list }}
+  no_log: true
+
+- name: Require one valid active raw OpenVPN ingress counter
+  ansible.builtin.assert:
+    that:
+      - veilway_openvpn_ingress_raw_counters | length == 1
+      - veilway_openvpn_ingress_raw_counters[0].packets is integer
+      - veilway_openvpn_ingress_raw_counters[0].bytes is integer
+      - veilway_openvpn_ingress_raw_counters[0].packets >= 0
+      - veilway_openvpn_ingress_raw_counters[0].bytes >= 0
+    quiet: true
+  no_log: true
+
+- name: Read active nftables table names
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/nft
+      - list
+      - tables
+  register: veilway_nft_tables
+  changed_when: false
+
+- name: Require Veilway to be the sole nftables owner
+  ansible.builtin.assert:
+    that:
+      - >-
+        (veilway_nft_tables.stdout_lines | sort) ==
+        ((['table inet veilway_filter', 'table ip veilway_nat4'] +
+        (['table ip6 veilway_nat6'] if veilway_enable_ipv6 else [])) | sort)
+
+- name: Require fail-closed Yandex multi-hop forwarding policy
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - >-
+        from pathlib import Path;
+        text = Path('/etc/nftables.conf').read_text(encoding='utf-8');
+        required = [
+          'iifname $multihop_if ip daddr @blocked_v4 drop',
+          'iifname $multihop_if oifname $transit_if ip saddr $multihop_v4 accept',
+          'iifname $multihop_if ip6 daddr @blocked_v6 drop',
+          'iifname $multihop_if oifname $transit_if ip6 saddr {{ veilway_multihop_ipv6_cidr }} accept'
+        ];
+        forbidden = [
+          'oifname $wan_if ip saddr $multihop_v4 masquerade',
+          'iifname $multihop_if oifname $wan_if'
+        ];
+        raise SystemExit(0 if all(value in text for value in required)
+        and all(value not in text for value in forbidden) else 1)
+  changed_when: false
+  when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+- name: Require AWS multi-hop forwarding and NAT policy
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - >-
+        from pathlib import Path;
+        text = Path('/etc/nftables.conf').read_text(encoding='utf-8');
+        required = [
+          'ip saddr {{ veilway_yc_public_ipv4 }} udp dport {{ veilway_transit_port }} counter name transit_ingress accept',
+          'iifname $transit_if ip daddr @blocked_v4 drop',
+          'iifname $transit_if oifname $wan_if ip saddr $multihop_v4 accept',
+          'oifname $wan_if ip saddr $multihop_v4 masquerade',
+          'oifname $wan_if ip6 saddr {{ veilway_multihop_ipv6_cidr }} masquerade'
+        ];
+        raise SystemExit(0 if all(value in text for value in required) else 1)
+  changed_when: false
+  no_log: true
+  when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+

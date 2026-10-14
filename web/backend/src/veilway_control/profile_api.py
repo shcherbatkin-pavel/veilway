@@ -7,21 +7,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .access import registered_users, visible_jobs, visible_profiles
-from .config import Settings, get_settings
 from .database import get_db
-from .models import ProfileAuditEvent, ProfileJob, User, VpnProfile, as_utc, utcnow
-from .pki import PkiClient, PkiUnavailable
-from .profiles import (assign_profile, audit, create_profile, job_response, locked_profile,
+from .models import ProfileAuditEvent, ProfileJob, User, VpnProfile
+from .pki import PkiClient
+# Same dependency object is re-exported for existing overrides.
+from .profile_download import download_response, get_pki_client
+from .profiles import (assign_profile, create_profile, job_response, locked_profile,
                        profile_response, rename_profile, revoke_profile)
 from .schemas import (ProfileAssignRequest, ProfileAuditResponse, ProfileCreateRequest, ProfileCreateResponse,
                       ProfileJobResponse, ProfileRenameRequest, ProfileResponse, ProfileRevokeRequest, RegisteredUserResponse)
 from .security import AuthenticatedUser, authenticate_user, require_admin, require_admin_csrf, require_csrf
 
 router = APIRouter()
-
-
-def get_pki_client(settings: Settings = Depends(get_settings)):
-    return PkiClient(settings.pki_socket_path)
 
 
 @router.get("/users", response_model=list[RegisteredUserResponse])
@@ -71,32 +68,6 @@ def revoke(profile_id: uuid.UUID, payload: ProfileRevokeRequest,
 def download(profile_id: uuid.UUID, auth: AuthenticatedUser = Depends(require_csrf), db: Session = Depends(get_db),
              client: PkiClient = Depends(get_pki_client)):
     return download_response(profile_id, auth.user, db, client)
-
-
-def download_response(profile_id: uuid.UUID, user: User, db: Session, client: PkiClient, *, owner_only: bool = False):
-    if owner_only:
-        profile = db.scalar(select(VpnProfile).where(VpnProfile.id == profile_id, VpnProfile.owner_id == user.id).with_for_update())
-        if profile is None:
-            raise HTTPException(404, headers={"Cache-Control": "no-store"})
-    else:
-        profile = locked_profile(db, user, profile_id)
-    if profile.status != "active" or as_utc(profile.expires_at) <= utcnow():
-        audit(db, user.id, "download", profile.id, "denied")
-        db.commit()
-        raise HTTPException(409, "profile is not active", headers={"Cache-Control": "no-store"})
-    try:
-        material = client.download(profile.id)
-    except PkiUnavailable:
-        audit(db, user.id, "download", profile.id, "unavailable")
-        db.commit()
-        raise HTTPException(503, "profile download unavailable", headers={"Cache-Control": "no-store"}) from None
-    audit(db, user.id, "download", profile.id, "succeeded")
-    db.commit()
-    return Response(material, media_type="application/x-openvpn-profile", headers={
-        "Content-Disposition": f'attachment; filename="veilway-{profile.id}.ovpn"',
-        "Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff",
-        "Referrer-Policy": "no-referrer",
-    })
 
 
 @router.get("/profile-jobs", response_model=list[ProfileJobResponse])

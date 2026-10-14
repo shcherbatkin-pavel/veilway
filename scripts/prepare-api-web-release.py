@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -13,10 +14,18 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCKER = ["docker", "--host", "unix:///var/run/docker.sock"]
-INPUTS = {
-    "backend": (".dockerignore", "Dockerfile", "alembic.ini", "container-entrypoint.py", "migrations", "pyproject.toml", "src"),
-    "frontend": (".dockerignore", "Dockerfile", "Caddyfile", "index.html", "package.json", "package-lock.json", "src", "tests", "tsconfig.app.json", "tsconfig.json", "vite.config.ts"),
-}
+def checker_inputs() -> dict[str, tuple[str, ...]]:
+    # The inspector is also shipped alone: its contract has no repo dependencies.
+    checker = Path(__file__).with_name("inspect-api-web-release.py")
+    if checker.is_symlink() or not checker.is_file():
+        raise ValueError("expected regular release inspector")
+    spec = importlib.util.spec_from_file_location("veilway_release_inspector", checker)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.INPUTS
+
+
+INPUTS = checker_inputs()
 
 
 def git(*arguments: str) -> bytes:

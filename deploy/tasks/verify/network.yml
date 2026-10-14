@@ -1,0 +1,70 @@
+---
+- name: Read required sysctl values
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/sysctl
+      - -n
+      - "{{ item.name }}"
+  loop: >-
+    {{ veilway_expected_sysctls_base +
+    (veilway_expected_sysctls_ipv6_enabled if (veilway_enable_ipv6 or veilway_multihop_enabled)
+    else veilway_expected_sysctls_ipv6_disabled) +
+    ([
+      {'name': 'net.ipv6.conf.' ~ veilway_cloud_interface ~ '.disable_ipv6', 'value': '0'},
+      {'name': 'net.ipv6.conf.' ~ veilway_cloud_interface ~ '.accept_ra', 'value': '0'},
+      {'name': 'net.ipv6.conf.' ~ veilway_cloud_interface ~ '.autoconf', 'value': '0'}
+    ] if veilway_enable_ipv6 else []) }}
+  register: veilway_sysctl_values
+  changed_when: false
+
+- name: Require the deployed forwarding and rp_filter policy
+  ansible.builtin.assert:
+    that:
+      - item.stdout | trim == item.item.value
+  loop: "{{ veilway_sysctl_values.results }}"
+
+- name: Read the effective Netplan configuration without displaying it
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/netplan
+      - get
+  register: veilway_effective_netplan
+  changed_when: false
+  no_log: true
+  when: veilway_enable_ipv6
+
+- name: Initialize matching AWS Netplan definitions
+  ansible.builtin.set_fact:
+    veilway_aws_netplan_definitions: []
+  no_log: true
+  when: veilway_enable_ipv6
+
+- name: Select matching AWS Netplan definitions
+  ansible.builtin.set_fact:
+    veilway_aws_netplan_definitions: >-
+      {{ veilway_aws_netplan_definitions + [item.value] }}
+  loop: >-
+    {{ ((veilway_effective_netplan.stdout | from_yaml)
+    .get('network', {}).get('ethernets', {})) | dict2items }}
+  no_log: true
+  when:
+    - veilway_enable_ipv6
+    - >-
+      item.key == veilway_cloud_interface or
+      item.value.get('set-name', '') == veilway_cloud_interface
+
+- name: Require the assigned AWS ENI IPv6 in Netplan
+  ansible.builtin.assert:
+    that:
+      - veilway_aws_netplan_definitions | length == 1
+      - >-
+        veilway_public_ipv6 ~ '/128' in
+        (veilway_aws_netplan_definitions |
+        first | default({})).get('addresses', [])
+      - >-
+        (veilway_aws_netplan_definitions |
+        first | default({})).get('accept-ra', false) | bool
+    quiet: true
+  no_log: true
+  when: veilway_enable_ipv6
+

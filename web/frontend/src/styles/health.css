@@ -1,0 +1,45 @@
+/* Health uses compact rows with details, independent of shared panel spacing. */
+.health-page { display: grid; gap: 1.5rem; min-width: 0; }
+.health-page .page-heading { margin-bottom: 0; }
+.health-summary { display: flex; flex-wrap: wrap; gap: .6rem 1.2rem; align-items: center; font-size: .875rem; }
+.health-section { min-width: 0; padding: 1.25rem; background: var(--surface); border-radius: 12px; }
+.health-section h2 { margin: 0 0 1rem; font-size: 1.15rem; }
+.health-section .section-heading { flex-wrap: wrap; gap: .6rem; margin-bottom: .75rem; }
+.health-section .section-heading h2 { margin: 0; }
+.health-row { border-top: 1px solid var(--line); min-width: 0; }
+.health-row > summary { list-style: none; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto; align-items: center; gap: 1rem; padding: .9rem 0; cursor: pointer; font-size: .875rem; }
+.health-row > summary::-webkit-details-marker { display: none; }
+.health-row-title { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; font-weight: 600; }
+.health-row-summary { display: grid; gap: .3rem; min-width: 0; }
+.health-row-reasons { font-size: .8rem; }
+.health-disclosure { color: var(--muted); font-size: .8rem; }
+.health-disclosure::after { content: " +"; }
+.health-row[open] .health-disclosure::after { content: " −"; }
+.health-row-details { padding: 0 0 1rem; font-size: .875rem; }
+.health-row dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .5rem 1rem; margin: .5rem 0; }
+.health-row dt { color: var(--muted); }
+.health-row dd { margin: 0; }
+.health-page :is(p, span, dt, dd, li, strong) { overflow-wrap: anywhere; }
+.health-counts { display: flex; flex-wrap: wrap; gap: .5rem 1rem; color: var(--muted); }
+.health-counts strong { color: #eef3f0; margin-left: .25rem; }
+.health-help { margin-top: .75rem; font-size: .8rem; color: var(--muted); }
+.health-help summary { cursor: pointer; }
+.health-problems > p { margin: 0; }
+.health-problems > ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; }
+.health-problems li + li { padding-top: 1rem; border-top: 1px solid var(--line); }
+.health-problem-heading { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.health-problems li p { font-size: .875rem; margin: .5rem 0; }
+.health-page .ghost { padding: .5rem .75rem; font-size: .875rem; }
+.health-row > summary:focus-visible, .health-help > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.health-ok { color: var(--accent); }
+.health-attention { color: #ffd08b; }
+.health-unknown { color: var(--muted); }
+@media (max-width: 600px) {
+  .health-page { gap: 1rem; }
+  .health-section { padding: 1rem; }
+  .health-row > summary { grid-template-columns: minmax(0, 1fr); gap: .5rem; }
+  .health-row dl { grid-template-columns: minmax(0, 1fr); gap: .3rem; }
+  .health-row dd { margin-bottom: .5rem; }
+}
+
+

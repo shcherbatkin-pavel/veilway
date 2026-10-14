@@ -10,7 +10,7 @@ cd -- "${REPOSITORY_ROOT}"
 
 shell_files=(
     android/gradlew scripts/lib/diagnostic_inputs.sh scripts/lib/data_channel_checks.sh
-    scripts/acceptance-ubuntu-direct scripts/check.sh
+    scripts/acceptance-ubuntu-direct scripts/check.sh scripts/test-all.sh
     scripts/container-smoke.sh scripts/test-profile-security.sh scripts/diagnose-aws-container-client
     scripts/diagnose-aws-data-channel scripts/test-control-plane.sh scripts/test-pki-service.sh scripts/test-profile-api.sh scripts/test-crl-mount.sh scripts/test-profile-panel.sh scripts/veilway-pki
     scripts/verify-aws-host-key.sh scripts/verify-client-profiles deploy/image/wait-for-interface
@@ -31,6 +31,8 @@ fi
 
 printf '%s\n' '[3/9] Python syntax and CIDR validation'
 python3 -m py_compile \
+    scripts/run-tests.py \
+    scripts/test-test-runner.py \
     scripts/android-pilot-key.py \
     scripts/prepare-android-native.py \
     scripts/test-android-tunnel.py \
@@ -71,6 +73,7 @@ python3 -m py_compile "${control_python_files[@]}" "${operator_python_files[@]}"
 python3 scripts/test-pki-expiry.py
 python3 scripts/test-pki-benchmark.py
 python3 scripts/test-operator-tools.py
+python3 scripts/test-test-runner.py
 python3 scripts/test-operator-policy.py
 python3 scripts/test-profile-rollout.py
 python3 scripts/test-api-web-release.py
