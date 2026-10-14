@@ -1,0 +1,69 @@
+---
+- name: Build the deployed endpoint PKI metadata contract
+  ansible.builtin.set_fact:
+    veilway_expected_remote_pki_files: >-
+      {{
+        [
+          {'path': '/etc/veilway/pki/ca.crt', 'mode': '0644', 'group': 'veilway'},
+          {'path': '/etc/veilway/pki/crl.pem', 'mode': '0644', 'group': 'veilway'},
+          {'path': '/etc/veilway/pki/server.crt', 'mode': '0644', 'group': 'veilway'},
+          {'path': '/etc/veilway/pki/server.key', 'mode': '0640', 'group': 'veilway'},
+          {'path': '/etc/veilway/pki/tls-crypt-v2-server.key', 'mode': '0640', 'group': 'veilway'}
+        ]
+        + (
+          [
+            {'path': '/etc/veilway/pki/multihop-ingress/server.crt', 'mode': '0644', 'group': 'veilway'},
+            {'path': '/etc/veilway/pki/multihop-ingress/server.key', 'mode': '0640', 'group': 'veilway'},
+            {'path': '/etc/veilway/pki/multihop-ingress/tls-crypt-v2-server.key', 'mode': '0640', 'group': 'veilway'},
+            {'path': '/etc/veilway/pki/transit-client/client.crt', 'mode': '0644', 'group': 'veilway'},
+            {'path': '/etc/veilway/pki/transit-client/client.key', 'mode': '0640', 'group': 'veilway'},
+            {'path': '/etc/veilway/pki/transit-client/tls-crypt-v2-client.key', 'mode': '0640', 'group': 'veilway'}
+          ]
+          if veilway_multihop_enabled and veilway_mode == 'yc-direct'
+          else []
+        )
+        + (
+          [
+            {'path': '/etc/veilway/pki/transit-server/server.crt', 'mode': '0644', 'group': 'veilway'},
+            {'path': '/etc/veilway/pki/transit-server/server.key', 'mode': '0640', 'group': 'veilway'},
+            {'path': '/etc/veilway/pki/transit-server/tls-crypt-v2-server.key', 'mode': '0640', 'group': 'veilway'}
+          ]
+          if veilway_multihop_enabled and veilway_mode == 'aws-direct'
+          else []
+        )
+      }}
+
+- name: Read deployed endpoint PKI metadata
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+    get_attributes: false
+    get_checksum: false
+    get_mime: false
+  loop: "{{ veilway_expected_remote_pki_files }}"
+  register: veilway_remote_pki_files
+  no_log: true
+
+- name: Require protected endpoint-only PKI on the VM
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg | default(false)
+      - not (item.stat.islnk | default(false))
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == item.item.group
+      - item.stat.mode == item.item.mode
+  loop: "{{ veilway_remote_pki_files.results }}"
+  no_log: true
+
+- name: Check that the offline CA private key is absent
+  ansible.builtin.stat:
+    path: /etc/veilway/pki/ca.key
+    get_attributes: false
+    get_checksum: false
+    get_mime: false
+  register: veilway_remote_ca_private_key
+
+- name: Require the offline CA private key to remain local
+  ansible.builtin.assert:
+    that:
+      - not veilway_remote_ca_private_key.stat.exists

@@ -1,0 +1,34 @@
+---
+- name: Read required systemd service state
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/systemctl
+      - show
+      - "{{ item.name }}"
+      - --property=LoadState
+      - --property=ActiveState
+      - --property=SubState
+      - --property=UnitFileState
+      - --property=Result
+      - --no-pager
+  loop:
+    - name: docker.service
+      substate: running
+    - name: nftables.service
+      substate: exited
+  register: veilway_service_states
+  changed_when: false
+
+- name: Require Docker and nftables to be running and enabled
+  ansible.builtin.assert:
+    that:
+      - "'LoadState=loaded' in item.stdout_lines"
+      - "'ActiveState=active' in item.stdout_lines"
+      - "('SubState=' ~ item.item.substate) in item.stdout_lines"
+      - "'UnitFileState=enabled' in item.stdout_lines"
+      - "'Result=success' in item.stdout_lines"
+    quiet: true
+  loop: "{{ veilway_service_states.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+

@@ -1,0 +1,265 @@
+---
+- name: Validate the deployed Compose model
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - compose
+      - --project-directory
+      - /opt/veilway
+      - --file
+      - /opt/veilway/compose.yaml
+      - config
+      - --quiet
+  changed_when: false
+
+- name: Require client-side local-network blocking policy
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/grep
+      - --fixed-strings
+      - --quiet
+      - --
+      - >-
+        push "redirect-gateway def1 bypass-dhcp block-local{{
+        ' ipv6' if veilway_enable_ipv6 else '' }}"
+      - /etc/veilway/openvpn/server.conf
+  changed_when: false
+
+- name: Build the exact expected container name list
+  ansible.builtin.set_fact:
+    veilway_expected_container_names: >-
+      {{
+        ['veilway-openvpn', 'veilway-unbound']
+        + (
+          ['veilway-openvpn-multihop', 'veilway-openvpn-transit']
+          if veilway_multihop_enabled and veilway_mode == 'yc-direct'
+          else []
+        )
+        + (
+          ['veilway-openvpn-transit', 'veilway-unbound-transit']
+          if veilway_multihop_enabled and veilway_mode == 'aws-direct'
+          else []
+        )
+      }}
+
+- name: Read container runtime metadata
+  ansible.builtin.command:
+    argv: >-
+      {{ ['/usr/bin/docker', 'inspect', '--type', 'container'] +
+      veilway_expected_container_names }}
+  register: veilway_container_inspect
+  changed_when: false
+  no_log: true
+
+- name: Parse container runtime metadata without displaying it
+  ansible.builtin.set_fact:
+    veilway_containers: "{{ veilway_container_inspect.stdout | from_json }}"
+  no_log: true
+
+- name: Require exactly the expected containers
+  ansible.builtin.assert:
+    that:
+      - veilway_containers | length == veilway_expected_container_names | length
+      - >-
+        (veilway_containers | map(attribute='Name') | sort | list) ==
+        (veilway_expected_container_names |
+        map('regex_replace', '^', '/') | sort | list)
+    quiet: true
+
+- name: Select the expected container records without displaying them
+  ansible.builtin.set_fact:
+    veilway_openvpn_runtime: >-
+      {{ veilway_containers |
+      selectattr('Name', 'equalto', '/veilway-openvpn') | first }}
+    veilway_unbound_runtime: >-
+      {{ veilway_containers |
+      selectattr('Name', 'equalto', '/veilway-unbound') | first }}
+  no_log: true
+
+- name: Build non-sensitive named container checks
+  ansible.builtin.set_fact:
+    veilway_container_runtime_checks:
+      - name: openvpn is running and healthy
+        passed: >-
+          {{ veilway_openvpn_runtime.State.Status == 'running' and
+          veilway_openvpn_runtime.State.Health.Status == 'healthy' }}
+      - name: unbound is running and healthy
+        passed: >-
+          {{ veilway_unbound_runtime.State.Status == 'running' and
+          veilway_unbound_runtime.State.Health.Status == 'healthy' }}
+      - name: both containers use host networking
+        passed: >-
+          {{ veilway_openvpn_runtime.HostConfig.NetworkMode == 'host' and
+          veilway_unbound_runtime.HostConfig.NetworkMode == 'host' }}
+      - name: both container root filesystems are read-only
+        passed: >-
+          {{ veilway_openvpn_runtime.HostConfig.ReadonlyRootfs and
+          veilway_unbound_runtime.HostConfig.ReadonlyRootfs }}
+      - name: neither container is privileged
+        passed: >-
+          {{ not veilway_openvpn_runtime.HostConfig.Privileged and
+          not veilway_unbound_runtime.HostConfig.Privileged }}
+      - name: both containers drop all inherited capabilities
+        passed: >-
+          {{ (veilway_openvpn_runtime.HostConfig.CapDrop |
+          default([], true) | map('regex_replace', '^CAP_', '') | list) ==
+          ['ALL'] and
+          (veilway_unbound_runtime.HostConfig.CapDrop | default([], true) |
+          map('regex_replace', '^CAP_', '') | list) == ['ALL'] }}
+      - name: openvpn has only its required capabilities
+        passed: >-
+          {{ (veilway_openvpn_runtime.HostConfig.CapAdd | default([], true) |
+          map('regex_replace', '^CAP_', '') | sort | list) ==
+          (['KILL', 'NET_ADMIN', 'SETGID', 'SETUID'] | sort) }}
+      - name: unbound has only its required capabilities
+        passed: >-
+          {{ (veilway_unbound_runtime.HostConfig.CapAdd | default([], true) |
+          map('regex_replace', '^CAP_', '') | sort | list) ==
+          (['NET_BIND_SERVICE', 'SETGID', 'SETUID'] | sort) }}
+      - name: both containers enforce no-new-privileges
+        passed: >-
+          {{ (veilway_openvpn_runtime.HostConfig.SecurityOpt |
+          default([], true)) in
+          [['no-new-privileges'], ['no-new-privileges:true']] and
+          (veilway_unbound_runtime.HostConfig.SecurityOpt |
+          default([], true)) in
+          [['no-new-privileges'], ['no-new-privileges:true']] }}
+      - name: both containers restart unless explicitly stopped
+        passed: >-
+          {{ veilway_openvpn_runtime.HostConfig.RestartPolicy.Name ==
+          'unless-stopped' and
+          veilway_unbound_runtime.HostConfig.RestartPolicy.Name ==
+          'unless-stopped' }}
+      - name: both containers use bounded local logging
+        passed: >-
+          {{ veilway_openvpn_runtime.HostConfig.LogConfig.Type == 'local' and
+          veilway_openvpn_runtime.HostConfig.LogConfig.Config['max-size'] ==
+          '10m' and
+          veilway_openvpn_runtime.HostConfig.LogConfig.Config['max-file'] ==
+          '3' and
+          veilway_unbound_runtime.HostConfig.LogConfig.Type == 'local' and
+          veilway_unbound_runtime.HostConfig.LogConfig.Config['max-size'] ==
+          '10m' and
+          veilway_unbound_runtime.HostConfig.LogConfig.Config['max-file'] ==
+          '3' }}
+      - name: openvpn receives only the TUN device
+        passed: >-
+          {{ veilway_openvpn_runtime.HostConfig.Devices |
+          default([], true) | length == 1 and
+          veilway_openvpn_runtime.HostConfig.Devices[0].PathOnHost ==
+          '/dev/net/tun' and
+          veilway_openvpn_runtime.HostConfig.Devices[0].PathInContainer ==
+          '/dev/net/tun' and
+          veilway_openvpn_runtime.HostConfig.Devices[0].CgroupPermissions ==
+          'rwm' }}
+      - name: unbound receives no host devices
+        passed: >-
+          {{ veilway_unbound_runtime.HostConfig.Devices |
+          default([], true) | length == 0 }}
+  no_log: true
+
+- name: Require healthy hardened host-network containers
+  ansible.builtin.assert:
+    that:
+      - item.passed | bool
+    fail_msg: "Container runtime invariant failed: {{ item.name }}"
+    quiet: true
+  loop: "{{ veilway_container_runtime_checks }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require baseline hardening on every additional multi-hop container
+  ansible.builtin.assert:
+    that:
+      - item.State.Status == 'running'
+      - item.State.Health.Status == 'healthy'
+      - item.HostConfig.NetworkMode == 'host'
+      - item.HostConfig.ReadonlyRootfs
+      - not item.HostConfig.Privileged
+      - (item.HostConfig.CapDrop | default([], true) | map('regex_replace', '^CAP_', '') | list) == ['ALL']
+      - item.HostConfig.SecurityOpt | default([], true) in [['no-new-privileges'], ['no-new-privileges:true']]
+      - item.HostConfig.RestartPolicy.Name == 'unless-stopped'
+      - item.HostConfig.LogConfig.Type == 'local'
+      - item.HostConfig.LogConfig.Config['max-size'] == '10m'
+      - item.HostConfig.LogConfig.Config['max-file'] == '3'
+    quiet: true
+  loop: >-
+    {{ veilway_containers |
+    rejectattr('Name', 'equalto', '/veilway-openvpn') |
+    rejectattr('Name', 'equalto', '/veilway-unbound') | list }}
+  loop_control:
+    label: "{{ item.Name | regex_replace('^/', '') }}"
+  no_log: true
+  when: veilway_multihop_enabled
+
+- name: Build the non-sensitive additional capability checks
+  ansible.builtin.set_fact:
+    veilway_additional_capability_checks:
+      - name: Yandex multi-hop ingress server capabilities
+        enabled: "{{ veilway_mode == 'yc-direct' }}"
+        container: veilway-openvpn-multihop
+        capabilities: [KILL, NET_ADMIN, SETGID, SETUID]
+        tun_device: true
+      - name: Yandex transit client capabilities
+        enabled: "{{ veilway_mode == 'yc-direct' }}"
+        container: veilway-openvpn-transit
+        capabilities: [NET_ADMIN]
+        tun_device: true
+      - name: AWS transit server capabilities
+        enabled: "{{ veilway_mode == 'aws-direct' }}"
+        container: veilway-openvpn-transit
+        capabilities: [KILL, NET_ADMIN, SETGID, SETUID]
+        tun_device: true
+      - name: AWS transit resolver capabilities
+        enabled: "{{ veilway_mode == 'aws-direct' }}"
+        container: veilway-unbound-transit
+        capabilities: [NET_BIND_SERVICE, SETGID, SETUID]
+        tun_device: false
+  when: veilway_multihop_enabled
+
+- name: Select and validate each additional capability allowlist
+  ansible.builtin.assert:
+    that:
+      - matched | length == 1
+      - >-
+        (matched[0].HostConfig.CapAdd | default([], true) |
+        map('regex_replace', '^CAP_', '') | sort | list) ==
+        (item.capabilities | sort)
+      - >-
+        (matched[0].HostConfig.Devices | default([], true) | length) ==
+        (1 if item.tun_device else 0)
+      - >-
+        not item.tun_device or
+        (matched[0].HostConfig.Devices[0].PathOnHost == '/dev/net/tun' and
+        matched[0].HostConfig.Devices[0].PathInContainer == '/dev/net/tun'
+        and matched[0].HostConfig.Devices[0].CgroupPermissions == 'rwm')
+    quiet: true
+  vars:
+    matched: >-
+      {{ veilway_containers |
+      selectattr('Name', 'equalto', '/' ~ item.container) | list }}
+  loop: >-
+    {{ veilway_additional_capability_checks |
+    selectattr('enabled', 'equalto', true) | list }}
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  when: veilway_multihop_enabled
+
+- name: Check that Compose created no project bridge network
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - network
+      - ls
+      - --filter
+      - label=com.docker.compose.project=veilway
+      - --quiet
+  register: veilway_project_networks
+  changed_when: false
+
+- name: Require no Veilway Docker bridge network
+  ansible.builtin.assert:
+    that:
+      - veilway_project_networks.stdout | trim == ''
+

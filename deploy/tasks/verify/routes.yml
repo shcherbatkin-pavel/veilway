@@ -1,0 +1,105 @@
+---
+- name: Read Yandex multi-hop source policy routes
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop:
+    - [/usr/sbin/ip, rule, show]
+    - [/usr/sbin/ip, route, show, table, "{{ veilway_multihop_route_table_ipv4 }}"]
+    - [/usr/sbin/ip, -6, rule, show]
+    - [/usr/sbin/ip, -6, route, show, table, "{{ veilway_multihop_route_table_ipv6 }}"]
+  register: veilway_multihop_policy_routes
+  changed_when: false
+  no_log: true
+  when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+- name: Build non-sensitive Yandex source policy route checks
+  ansible.builtin.set_fact:
+    veilway_yc_policy_route_checks:
+      - name: IPv4 source policy rule
+        passed: >-
+          {{ 'from ' ~ veilway_multihop_ipv4_cidr ~ ' lookup ' ~
+          veilway_multihop_route_table_ipv4 in
+          veilway_multihop_policy_routes.results[0].stdout }}
+      - name: IPv4 transit default
+        passed: >-
+          {{ 'default dev ' ~ veilway_transit_tunnel_interface in
+          veilway_multihop_policy_routes.results[1].stdout }}
+      - name: IPv4 fail-closed fallback
+        passed: >-
+          {{ 'unreachable default' in
+          veilway_multihop_policy_routes.results[1].stdout }}
+      - name: IPv6 source policy rule
+        passed: >-
+          {{ 'from ' ~ veilway_multihop_ipv6_cidr ~ ' lookup ' ~
+          veilway_multihop_route_table_ipv6 in
+          veilway_multihop_policy_routes.results[2].stdout }}
+      - name: IPv6 transit default
+        passed: >-
+          {{ 'default dev ' ~ veilway_transit_tunnel_interface in
+          veilway_multihop_policy_routes.results[3].stdout }}
+      - name: IPv6 fail-closed fallback
+        passed: >-
+          {{ 'unreachable default' in
+          veilway_multihop_policy_routes.results[3].stdout }}
+  no_log: true
+  when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+- name: Require active and fail-closed Yandex source policy routes
+  ansible.builtin.assert:
+    that:
+      - item.passed | bool
+    quiet: true
+  loop: "{{ veilway_yc_policy_route_checks }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: veilway_multihop_enabled and veilway_mode == 'yc-direct'
+
+- name: Read AWS routes owned by the exclusive Yandex transit identity
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop:
+    - [/usr/sbin/ip, -4, route, show, "{{ veilway_multihop_ipv4_cidr }}"]
+    - [/usr/sbin/ip, -6, route, show, "{{ veilway_multihop_ipv6_cidr }}"]
+  register: veilway_aws_multihop_routes
+  changed_when: false
+  no_log: true
+  when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+
+- name: Require AWS multi-hop routes to use only the transit tunnel
+  ansible.builtin.assert:
+    that:
+      - veilway_aws_multihop_routes.results[0].stdout | trim | length > 0
+      - veilway_aws_multihop_routes.results[1].stdout | trim | length > 0
+      - "'dev ' ~ veilway_transit_tunnel_interface in veilway_aws_multihop_routes.results[0].stdout"
+      - "'dev ' ~ veilway_transit_tunnel_interface in veilway_aws_multihop_routes.results[1].stdout"
+    quiet: true
+  no_log: true
+  when: veilway_multihop_enabled and veilway_mode == 'aws-direct'
+
+- name: Read the IPv4 route used to identify the cloud interface
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/ip
+      - -4
+      - -json
+      - route
+      - get
+      - 1.1.1.1
+  register: veilway_cloud_interface_route
+  changed_when: false
+  no_log: true
+
+- name: Require exactly one cloud-interface route
+  ansible.builtin.assert:
+    that:
+      - veilway_cloud_interface_route.stdout | from_json | length == 1
+      - (veilway_cloud_interface_route.stdout | from_json)[0].dev | length > 0
+    quiet: true
+  no_log: true
+
+- name: Select the cloud interface without displaying it
+  ansible.builtin.set_fact:
+    veilway_cloud_interface: >-
+      {{ (veilway_cloud_interface_route.stdout | from_json)[0].dev }}
+  no_log: true
+
