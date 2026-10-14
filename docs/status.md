@@ -14,7 +14,7 @@
 | 2026-10-13–14 | P1 завершён и слит; опубликована история ревью | [#19](https://github.com/shcherbatkin-pavel/veilway/pull/19), [#20](https://github.com/shcherbatkin-pavel/veilway/pull/20), [#21](https://github.com/shcherbatkin-pavel/veilway/pull/21), [#22](https://github.com/shcherbatkin-pavel/veilway/pull/22), [#23](https://github.com/shcherbatkin-pavel/veilway/pull/23) |
 | 2026-10-14 | Android-зависимости и инструментальная сборка 0.1.3-pilot слиты | [#24](https://github.com/shcherbatkin-pavel/veilway/pull/24), `749d25d` |
 | 2026-10-14 | P2 №6–11, включая весь frontend №9, завершён и слит | [#25](https://github.com/shcherbatkin-pavel/veilway/pull/25), `409a2ff` |
-| 2026-10-14 | №12: ORM, контрактные проверки и документация подготовлены; слияние ещё не выполнено | Ветка `refactor/final` от `409a2ff`; [ADR 0006](adr/0006-domain-models-and-refactoring-boundaries.md) |
+| 2026-10-14 | №12: ORM, контрактные проверки и документация слиты | [PR #26](https://github.com/shcherbatkin-pavel/veilway/pull/26), `7ba2c2e`; [ADR 0006](adr/0006-domain-models-and-refactoring-boundaries.md) |
 
 Схема БД в этой ветке сохраняет head `0009_mobile_client`; новых миграций нет.
 HTTP/OpenAPI, PKI-хранилище и поведение клиентов сохраняются. Публичные
@@ -65,7 +65,9 @@ PR #6 позднее слит; это обновляет состояние ис
 в прежней дорожной карте не указана.
 
 Манифест Android-раздачи `web/frontend/android-release.json` на 2026-10-14
-указывает **0.1.2-pilot**. Исходники приложения — **0.1.3-pilot**, versionCode 4.
+в подготовленном выпуске указывает **0.1.3-pilot**; публикация согласована
+оператором. Прежде манифест указывал 0.1.2. Исходники приложения —
+**0.1.3-pilot**, versionCode 4. Фактическая раздача проверяется после обновления панели.
 Локальная сборка нового APK не подтверждает его публикацию в панели.
 [Кандидат M4.1](panel-release-candidate.md) и
 [пример API/web PR #9](api-web-rollout.md) сохраняют свои даты, ревизии и хеши;

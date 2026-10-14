@@ -467,7 +467,7 @@ def storage_and_logout(browser, viewport):
 
 def connection_guide(browser, viewport):
     links = {
-        'Android': ('Скачать Veilway для Android', '/downloads/android/veilway-0.1.2-pilot.apk'),
+        'Android': ('Скачать Veilway для Android', '/downloads/android/veilway-0.1.3-pilot.apk'),
         'iPhone': ('App Store', 'https://apps.apple.com/app/openvpn-connect/id590379981'),
         'Windows': ('официальной страницы', 'https://openvpn.net/client/'),
         'Linux': ('официальных репозиториях OpenVPN', 'https://community.openvpn.net/Pages/OpenVPN%20software%20repos'),
@@ -496,7 +496,7 @@ def connection_guide(browser, viewport):
                 expect(region).to_contain_text('Google')
                 expect(region).to_contain_text('OZON и ВКонтакте без отметки')
                 expect(region).not_to_contain_text('.ovpn')
-                expect(region.get_by_role('link', name='Исходники приложения и библиотек')).to_have_attribute('href', '/downloads/android/veilway-0.1.2-pilot-sources.tar.gz')
+                expect(region.get_by_role('link', name='Исходники приложения и библиотек')).to_have_attribute('href', '/downloads/android/veilway-0.1.3-pilot-sources.tar.gz')
                 expect(region.get_by_role('link', name='SHA-256')).to_have_attribute('href', '/downloads/android/SHA256SUMS')
             else:
                 expect(link).to_have_attribute('target', '_blank')
