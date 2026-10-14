@@ -7,6 +7,9 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
+import shutil
 import unittest
 from unittest.mock import patch
 
@@ -38,6 +41,26 @@ def restrictive_umask():
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_inspector_is_autonomous_and_contract_is_shared(self):
+        self.assertEqual(prepare.INPUTS, inspect.INPUTS)
+        with tempfile.TemporaryDirectory() as directory:
+            checker = Path(directory) / "inspect-api-web-release.py"
+            shutil.copyfile(Path(__file__).with_name(checker.name), checker)
+            result = subprocess.run([sys.executable, "-I", str(checker), "--help"],
+                                    cwd=directory, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("--release", result.stdout)
+
+    def test_shared_contract_rejects_missing_or_symlink_checker_before_import(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "prepare-api-web-release.py"
+            with patch.object(prepare, "__file__", str(source)):
+                with self.assertRaises(ValueError): prepare.checker_inputs()
+                (root / "target.py").write_text("raise AssertionError('must not execute')")
+                (root / "inspect-api-web-release.py").symlink_to(root / "target.py")
+                with self.assertRaises(ValueError): prepare.checker_inputs()
+
     def test_compatibility_rejects_migrations_dependencies_manifest_and_configuration(self):
         for name in ('backend/migrations/versions/new.py', 'backend/pyproject.toml', 'backend/Dockerfile',
                      'backend/container-entrypoint.py', 'frontend/package-lock.json', 'frontend/Caddyfile', 'compose.yaml'):
