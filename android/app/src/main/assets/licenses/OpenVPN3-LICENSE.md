@@ -1,6 +1,6 @@
 OpenVPN 3 is distributed under
-[GNU Affero General Public License version 3](LICENSES/AGPL-3.0-only.txt)
-or [Mozilla Public License Version 2.0](LICENSES/MPL-2.0.txt).
+[GNU Affero General Public License version 3](https://github.com/OpenVPN/openvpn3/blob/18edfae7e7fd8051c93bd4746ec69be91eb02dbb/LICENSES/AGPL-3.0-only.txt)
+or [Mozilla Public License Version 2.0](MPL-2.0.txt).
 
 with a special permission to link against OpenSSL when using AGPLv3:
 
