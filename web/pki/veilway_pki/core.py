@@ -11,9 +11,14 @@ import os
 from pathlib import Path
 import re
 import shutil
-import stat
-import subprocess
 import uuid
+
+
+from .commands import run_command
+from .errors import PkiError
+# Compatibility exports: callers and benchmarks retain the core API.
+from .filesystem import (MAX_FILE, read_file, write_file, write_json, load_json, mkdir,
+                         check_tree, sync_tree, sync_directory)
 
 
 MODES = {
@@ -21,7 +26,6 @@ MODES = {
     "aws-direct": ("aws-direct", 1194),
     "yc-aws-multihop": ("yc-multihop-ingress", 1195),
 }
-MAX_FILE = 16 * 1024 * 1024
 CONFIG = """[ca]
 default_ca = CA_default
 [CA_default]
@@ -55,17 +59,6 @@ extendedKeyUsage = clientAuth
 """
 
 
-class PkiError(Exception):
-    """Only fixed codes may cross the socket or reach an operator log."""
-
-    CODES = {"invalid_request", "conflict", "not_found", "unavailable", "expired",
-             "revoked", "invalid_import", "storage_error", "operation_failed"}
-
-    def __init__(self, code: str):
-        self.code = code if code in self.CODES else "operation_failed"
-        super().__init__(self.code)
-
-
 def canonical_uuid(value: object) -> str:
     if not isinstance(value, str):
         raise PkiError("invalid_request")
@@ -85,77 +78,6 @@ def expiry(value: object) -> datetime:
         return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     except ValueError:
         raise PkiError("invalid_request") from None
-
-
-def read_file(path: Path) -> bytes:
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > MAX_FILE:
-            raise PkiError("storage_error")
-        with os.fdopen(fd, "rb", closefd=False) as stream:
-            return stream.read(MAX_FILE + 1)
-    finally:
-        os.close(fd)
-
-
-def write_file(path: Path, data: bytes) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "wb", closefd=False) as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-def write_json(path: Path, data: object) -> None:
-    write_file(path, json.dumps(data, sort_keys=True, separators=(",", ":")).encode())
-
-
-def load_json(path: Path):
-    return json.loads(read_file(path))
-
-
-def mkdir(path: Path) -> None:
-    path.mkdir(mode=0o700, exist_ok=True)
-    if path.is_symlink() or not path.is_dir():
-        raise PkiError("storage_error")
-    os.chmod(path, 0o700)
-
-
-def check_tree(path: Path, *, protected: bool = True) -> None:
-    info = path.lstat()
-    if not stat.S_ISDIR(info.st_mode) or (protected and stat.S_IMODE(info.st_mode) != 0o700):
-        raise PkiError("storage_error")
-    for child in path.iterdir():
-        info = child.lstat()
-        if stat.S_ISDIR(info.st_mode):
-            check_tree(child, protected=protected)
-        elif not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > MAX_FILE:
-            raise PkiError("storage_error")
-        elif protected and stat.S_IMODE(info.st_mode) != 0o600:
-            raise PkiError("storage_error")
-
-
-def sync_tree(path: Path) -> None:
-    for child in path.iterdir():
-        if child.is_dir():
-            sync_tree(child)
-        else:
-            with child.open("rb") as stream:
-                os.fsync(stream.fileno())
-    sync_directory(path)
-
-
-def sync_directory(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
 
 
 class Store:
@@ -236,33 +158,7 @@ class Store:
         self.recover()
 
     def run(self, args: list[str], cwd: Path, *, password: bool = False) -> bytes:
-        # Call sites use fixed executable/subcommands and validated identifiers.
-        # Never accept executable names, config text or shell fragments via RPC.
-        if args[0] not in {"/usr/bin/openssl", "/usr/sbin/openvpn"}:
-            raise PkiError("operation_failed")
-        descriptor = None
-        try:
-            if password:
-                descriptor = os.memfd_create("pki-passphrase", flags=os.MFD_ALLOW_SEALING)
-                os.fchmod(descriptor, 0o600)
-                os.write(descriptor, self.passphrase + b"\n")
-                os.lseek(descriptor, 0, os.SEEK_SET)
-                fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS,
-                            fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)
-                args = [*args, "-passin", f"fd:{descriptor}"]
-            result = subprocess.run(args, cwd=cwd, stdin=subprocess.DEVNULL,
-                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                    timeout=30, check=False, shell=False, umask=0o077,
-                                    env={"PATH": "/usr/bin:/usr/sbin", "LANG": "C", "TZ": "UTC"},
-                                    pass_fds=() if descriptor is None else (descriptor,))
-            if result.returncode != 0:
-                raise PkiError("operation_failed")
-            return result.stdout
-        except (OSError, subprocess.TimeoutExpired):
-            raise PkiError("operation_failed") from None
-        finally:
-            if descriptor is not None:
-                os.close(descriptor)
+        return run_command(args, cwd, passphrase=self.passphrase if password else None)
 
     def ca(self, path: Path, *args: str) -> bytes:
         return self.run(["/usr/bin/openssl", "ca", "-batch", "-config", "openssl.cnf", *args], path, password=True)
